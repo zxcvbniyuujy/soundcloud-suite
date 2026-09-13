@@ -55,6 +55,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await shot('01-page');
   await page.keyboard.press('Alt+L'); await sleep(8000);
   await shot('02-hub-lyrics');
+  await step('floating card', async () => { await page.keyboard.press('d'); await sleep(500); }); await shot('02b-floating-card');
+  await step('dock', async () => { await page.keyboard.press('d'); await sleep(500); });
+  await step('wider drawer', async () => {
+    const r = await hub(`const b=root.querySelector('#edge').getBoundingClientRect(); return {x:b.x+3, y:b.y+b.height/2};`);
+    await page.mouse.move(r.x, r.y); await page.mouse.down();
+    for (let i = 1; i <= 10; i++) { await page.mouse.move(r.x - i * 12, r.y); await sleep(16); }
+    await page.mouse.up(); await sleep(300);
+  }); await shot('02c-wide-drawer');
+  await step('drawer width reset', () => hub(`root.querySelector('#edge').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}));`));
   for (const t of ['queue', 'stats', 'audio', 'tweaks']) {
     await step('tab ' + t, async () => { await hub(`root.querySelector('.tab[data-tab="${t}"]').click();`); await sleep(700); });
     await shot('03-hub-' + t);
@@ -74,6 +83,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.keyboard.press('Alt+L'); await sleep(300);
   await step('track info', async () => { await page.evaluate(() => { const b = document.querySelector('.playControls .sce-info'); if (b) b.click(); }); await sleep(3000); }); await shot('11-track-info');
   await page.keyboard.press('Escape'); await sleep(300);
+  await step('light theme', async () => { await page.keyboard.press('Alt+L'); await sleep(600); await page.keyboard.press('t'); await sleep(150); await page.keyboard.press('t'); await sleep(400); }); await shot('12-light-lyrics');
+  await step('light tweaks', async () => { await hub(`root.querySelector('.tab[data-tab="tweaks"]').click();`); await sleep(500); }); await shot('13-light-tweaks');
+  await step('theme back to auto', async () => { await page.keyboard.press('t'); await sleep(150); });
   if (problems.length) { console.log('problems:'); problems.forEach((p) => console.log('  ' + p)); }
   else console.log('no page errors from the suite');
   await ctx.close();

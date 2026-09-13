@@ -49,6 +49,13 @@ data-driven values such as artwork URLs, slider positions and drag offsets.
 `SUITE.toast(message, secondLine, { label, fn })` is the single notification
 for all three modules.
 
+The hub itself is a Now Playing drawer: full height, docked to the right
+edge between SoundCloud's header and player bar, with icon tabs and large
+lyrics. Dragging its left edge changes the width (double-click resets).
+Press **D**, use ⋯ → Layout, or pull the header away from the edge to turn
+it into the compact floating card, which remembers its own position and
+size; **D** docks it again. Immersive mode (**F**) works from either.
+
 ## Previewing changes
 
 `tools/preview.js` loads the unpacked extension into Playwright's Chromium,
@@ -84,6 +91,7 @@ build, never into the tracked source.
 
 - **Alt+L** lyrics hub · **Alt+S** shuffle · **Alt+B** block the current track
 - **Ctrl/⌘+K** command palette · **?** the full cheat-sheet (inside the hub)
+- **D** docked drawer ↔ floating card · **F** immersive · **T** theme (inside the hub)
 
 ## Troubleshooting
 
