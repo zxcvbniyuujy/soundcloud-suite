@@ -5,7 +5,6 @@
   "description": "All-in-one SoundCloud enhancer — themes & declutter, player upgrades, a powerful synced-lyrics hub, and full-library shuffle with stats.",
   "author": "you + bhackel",
   "minimum_chrome_version": "111",
-  "permissions": ["unlimitedStorage"],
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -27,14 +26,14 @@
   "content_scripts": [
     {
       "matches": ["https://soundcloud.com/*"],
-      "js": ["js/gm-shim.js", "js/suite.js"],
-      "run_at": "document_start",
-      "world": "MAIN"
+      "js": ["js/bridge.js"],
+      "run_at": "document_start"
     },
     {
       "matches": ["https://soundcloud.com/*"],
-      "js": ["js/bridge.js"],
-      "run_at": "document_start"
+      "js": ["js/gm-shim.js", "js/suite.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "host_permissions": [
@@ -53,9 +52,7 @@
     "https://www.mojeek.com/*",
     "https://api.codetabs.com/*",
     "https://krcs.kugou.com/*",
-    "http://krcs.kugou.com/*",
     "https://lyrics.kugou.com/*",
-    "http://lyrics.kugou.com/*",
     "https://music.163.com/*",
     "https://api.listenbrainz.org/*",
     "https://translate.googleapis.com/*"

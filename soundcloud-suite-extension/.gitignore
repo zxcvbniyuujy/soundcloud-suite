@@ -1,0 +1,8 @@
+# personal Genius API token for local dev builds — injected by build.sh, never committed
+tools/dev-token.txt
+# store packages
+*.zip
+# OS / editor noise
+.DS_Store
+Thumbs.db
+node_modules/

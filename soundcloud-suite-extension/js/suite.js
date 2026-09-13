@@ -83,12 +83,26 @@
         clientId: null, nextUp: null, libByUrl: null,
     };
     try { if (SUITE.W.__SCSUITE__) return; SUITE.W.__SCSUITE__ = true; } catch (e) {}
+    // shared "is the page dark?" sniff. A transparent body (rgba(…,0)) used to
+    // read as black → dark; walk up to <html>, then fall back to the OS scheme.
+    SUITE.pageIsDark = () => {
+        try {
+            const rgb = (el) => {
+                const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
+                if (!m || m.length < 3 || (m.length >= 4 && +m[3] === 0)) return null;
+                return m;
+            };
+            const m = rgb(document.body) || rgb(document.documentElement);
+            if (m) return (+m[0] + +m[1] + +m[2]) / 3 < 110;
+            return !!(matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+        } catch (e) { return false; }
+    };
 
     // single source of truth for the displayed version — no more drift across the
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.46.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.51.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -108,7 +122,7 @@
         // immediately following "Authorization: Bearer" survives — the
         // Authorization rule stops at whitespace and the now-tokenless Bearer
         // rule can't recover).
-        .replace(/(?:Bearer|Basic)\s+[A-Za-z0-9._\-+/=_]{8,}/gi, (m) => m.split(/\s+/)[0] + ' ‹REDACTED›')
+        .replace(/(?:Bearer|Basic|OAuth|Token)\s+[A-Za-z0-9._\-+/=]{8,}/gi, (m) => m.split(/\s+/)[0] + ' ‹REDACTED›')
         // Authorization header value (anything not whitespace/punct) — the
         // Bearer rule above will have already neutralized any token; this
         // catches schemes we don't enumerate (Digest, OAuth1 header form, etc.).
@@ -328,6 +342,7 @@
         CFG.cacheHours = Math.min(168, Math.max(0, CFG.cacheHours | 0));
         if (CFG.orderMode !== 'rediscover') CFG.orderMode = 'random';
         if (CFG.filterMode !== 'songs' && CFG.filterMode !== 'mixes') CFG.filterMode = 'all';
+        CFG.filterMinutes = Math.min(600, Math.max(1, (CFG.filterMinutes | 0) || 20));
         if (!Array.isArray(CFG.genreFilter)) CFG.genreFilter = [];
         CFG.genreFilter = CFG.genreFilter.filter(g => typeof g === 'string' && g).slice(0, 30);
         CFG.likedDays = Math.min(3650, Math.max(0, CFG.likedDays | 0));
@@ -513,7 +528,8 @@
     /* ───────────── ListenBrainz scrobbler (off until a token is set) ─────────────
      * Fires at the same moment a track "counts as played"; queued in LS and
      * retried so flaky connections never lose listens. Token lives in GM
-     * storage (not page-visible localStorage). */
+     * storage (Tampermonkey: private; extension build: soundcloud.com
+     * localStorage under the scssgm: prefix). */
     const LB_QKEY = 'bh_sc_lbq';
     const lbToken = () => { try { return GM_getValue('bh:lbtok', '') || ''; } catch (e) { return ''; } };
     function lbSubmit(listens) {
@@ -748,7 +764,7 @@
             const isReq = !!(input && typeof input === 'object' && typeof input.url === 'string');
             rawUrl = isReq ? input.url : String(input);
             sniffUrl(rawUrl);
-            sniffHeaders(isReq ? input.headers : (init && init.headers));
+            if (API_RE.test(rawUrl)) sniffHeaders(isReq ? input.headers : (init && init.headers));
 
             const page = resolveFeed(rawUrl);
             if (page !== null) {
@@ -763,7 +779,7 @@
             const boosted = boostUrl(rawUrl);
             if (boosted !== rawUrl) {
                 const fallback = () => origFetch(input, init);
-                const p = isReq ? origFetch(new PRequest(boosted, input))
+                const p = isReq ? origFetch(new PRequest(boosted, input), init)
                                 : origFetch(boosted, init);
                 return p.then(res => {
                     if (res && res.status >= 400) { S.boostFails++; return fallback(); }
@@ -796,6 +812,7 @@
     XP.open = function (method, url, ...rest) {
         let u = url;
         try {
+            this.__bhFeedPage = null;   // a re-open()ed XHR must never answer with a stale feed page
             const raw = String(url);
             sniffUrl(raw);
             this.__bhApi = API_RE.test(raw);
@@ -883,7 +900,9 @@
             if (!m.muted) { m.muted = true; S.mutedByUs.push(m); }
         });
         grab();
-        S.muteWatch = makeTicker(grab, 100);
+        // never stack a second watcher: an orphaned one would re-mute every
+        // <audio> 100 ms after any unmute for the rest of the session
+        if (!S.muteWatch) S.muteWatch = makeTicker(grab, 100);
     }
     function unmuteAll() {
         if (S.muteWatch) { S.muteWatch.stop(); S.muteWatch = null; }
@@ -1087,8 +1106,7 @@
     function applyTheme() {
         let dark = false;
         try {
-            const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g) || [255, 255, 255];
-            dark = (+m[0] + +m[1] + +m[2]) / 3 < 110;
+            dark = SUITE.pageIsDark();
         } catch (e) {}
         const r = document.documentElement.style;
         r.setProperty('--bhx-bg', dark ? 'rgba(24,24,28,.88)' : 'rgba(255,255,255,.92)');
@@ -1466,7 +1484,14 @@
                 throw fail('api ' + r.status);
             }
             retries = 0; firstTry = false;
-            const j = await r.json();
+            let j;
+            try { j = await r.json(); }
+            catch (e) {
+                // a 200 with a truncated/non-JSON body must not throw away
+                // everything fetched so far — retry, then fail with .partial
+                if (retries++ < T.fetchRetries) { await backoff(retries, null); continue; }
+                throw fail('bad json');
+            }
             for (const it of (j.collection || [])) if (it && it.track) items.push(it);
             if (onProgress) onProgress(items.length);
             url = j.next_href || null;
@@ -1537,7 +1562,7 @@
     function idbSaveLib(libKey, items, t) {
         LibCache.set(libKey, { t: t || Date.now(), items }).catch(e => swallow(e, 'idbSaveLib'));
     }
-    function idbClearLib() { LibCache.clear().catch(e => swallow(e, 'idbClearLib')); }
+    function idbClearLib() { libGen++; LibCache.clear().catch(e => swallow(e, 'idbClearLib')); }
 
     /* Background delta-sync: walk the newest pages and merge anything you
      * liked since the cache was written. Never blocks playback; new likes
@@ -1545,9 +1570,11 @@
      * overlaps the cache (up to 5 pages ≈ 1000 likes), so heavy likers
      * aren't capped at one page anymore. */
     const lastTopUpAt = new Map();   // per-library; cleared on failure so a flaky sync can retry
+    let libGen = 0;   // bumped whenever the cache is forgotten or fully refreshed — a top-up started before that must not write
     async function topUpCache(pageType, libKey, lib, fullFetchT) {
         try {
             if (bgRefreshing) return;   // a full refresh is in flight — don't race it with stale merges
+            const gen0 = libGen;
             if (Date.now() - (lastTopUpAt.get(libKey) || 0) < 5 * 60000) return;   // a reshuffle burst needs one sync, not five
             lastTopUpAt.set(libKey, Date.now());
             await waitFor(() => (S.tpl || S.clientId) && (S.auth || cookieAuth() || pageType === 'GenericLikes'), T.authWait, 200);
@@ -1571,6 +1598,7 @@
                 url = j.next_href;
             }
             if (!fresh.length) return;
+            if (gen0 !== libGen) return;   // Forget / full refresh landed meanwhile — our merge is stale
             const merged = fresh.concat(lib);   // likes arrive newest-first
             if (S.sessionLibKey === libKey) { S.sessionLib = merged; S.sessionLibAt = Date.now(); }
             if (pageType !== 'GenericLikes') saveCompactCache(merged);   // never poison YOUR library with someone else's
@@ -1592,6 +1620,7 @@
             if (S.sessionLibKey === libKey) { S.sessionLib = fresh; S.sessionLibAt = Date.now(); }
             if (pageType !== 'GenericLikes') saveCompactCache(fresh);
             idbSaveLib(libKey, fresh);
+            libGen++;
             showToast('Library refreshed', fresh.length.toLocaleString() + ' likes ready for the next shuffle.');
         } catch (e) { swallow(e, 'bg refresh'); }
         finally { bgRefreshing = false; }
@@ -2192,7 +2221,14 @@
             cancel('Shuffle Play');
             return;
         }
-
+        // a cancelled run can still be parked in an await (auth wait, cache
+        // load, queue seed). Let it unwind before starting another, or two
+        // loaders fight over the same queue and the first one's observer and
+        // ticker leak for the rest of the session.
+        if (S.runInFlight) { showToast('Still stopping the last shuffle — try again in a moment.'); return; }
+        S.runInFlight = runOnce(btn).catch(e => swallow(e, 'run')).then(() => { S.runInFlight = null; });
+    }
+    async function runOnce(btn) {
         S.btn = btn;
         const pageType = btn.dataset.pageType;
         const list = q(LIST_KEY[pageType]);
@@ -2233,6 +2269,7 @@
                     // pool, and don't let a later cancel() "restore" one either
                     S.poolList = null; S.poolIdx = null;
                     S.prevPoolList = null; S.prevPoolIdx = null;
+                    S.total = findTotal(pageType);   // progress must count the native queue, not the failed run's pool
                     showToast('Compatibility mode for this one (a bit slower).');
                     setBtn('Loading…');
                 }
@@ -2416,8 +2453,8 @@
                 if (!items || !items.length) { showToast('No library cached — run a shuffle first.'); return; }
                 const esc2 = v => {
                     v = String(v == null ? '' : v);
-                    if (/^[=+\-@]/.test(v)) v = "'" + v;   // spreadsheet formula-injection guard
-                    return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+                    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;   // spreadsheet formula-injection guard (OWASP set)
+                    return /[",\r\n\t]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
                 };
                 const rows = ['id,url,artist,title,duration_ms,genre,liked_at,playback_count'];
                 for (const it of items) {
@@ -2451,7 +2488,7 @@
 
     function exportData() {
         try {
-            const data = { v: 8, cfg: CFG, history: loadHistory(), alltime: allTime, block: loadBlock(), plays: LS.get(PLAYS_KEY, {}), daily, broken: LS.get(BROKEN_KEY, []) };
+            const data = { v: 8, cfg: CFG, history: loadHistory(), alltime: allTime, block: loadBlock(), plays: LS.get(PLAYS_KEY, {}), daily, hours: hourly, broken: LS.get(BROKEN_KEY, []) };
             try { if (SUITE.lyricsDump) { const ld = SUITE.lyricsDump(); if (ld) data.lyrics = ld; } } catch (e) {}
             try { if (SUITE.enhancerDump) { const ed = SUITE.enhancerDump(); if (ed) data.enhancer = ed; } } catch (e) {}   // whole-suite backup
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -2480,13 +2517,28 @@
                     clampCfg();
                     saveCfg();
                 }
-                if (d.history && typeof d.history === 'object') LS.set(HIST_KEY, { ids: d.history.ids || [], urls: d.history.urls || [], ts: d.history.ts || [] });
+                // every list below is untrusted JSON: coerce shapes and cap sizes so a
+                // hand-edited or oversized backup can't wedge the stats card or the quota
+                const arr = x => Array.isArray(x) ? x.slice(-2000) : [];
+                if (d.history && typeof d.history === 'object') LS.set(HIST_KEY, { ids: arr(d.history.ids), urls: arr(d.history.urls), ts: arr(d.history.ts) });
                 if (Array.isArray(d.broken)) LS.set(BROKEN_KEY, d.broken.filter(x => x && typeof x.u === 'string' && x.u).slice(-200));
                 try { if (d.lyrics && SUITE.lyricsRestore) SUITE.lyricsRestore(d.lyrics); } catch (e) {}
                 try { if (d.enhancer && SUITE.enhancerRestore) SUITE.enhancerRestore(d.enhancer); } catch (e) {}
-                if (d.alltime && typeof d.alltime === 'object') { Object.assign(allTime, d.alltime); LS.set('bh_sc_alltime', allTime); }
+                if (d.alltime && typeof d.alltime === 'object') {
+                    allTime.listenMs = Math.max(0, +d.alltime.listenMs || 0);
+                    allTime.played = Math.max(0, d.alltime.played | 0);
+                    LS.set('bh_sc_alltime', allTime);
+                }
                 if (d.block && typeof d.block === 'object') saveBlock(Object.assign({ tracks: [], urls: [], artists: [] }, d.block));
-                if (d.plays && typeof d.plays === 'object') LS.set(PLAYS_KEY, d.plays);
+                if (d.plays && typeof d.plays === 'object') {
+                    const plays = {};
+                    for (const k2 of Object.keys(d.plays)) if (Array.isArray(d.plays[k2])) plays[k2] = d.plays[k2];
+                    LS.set(PLAYS_KEY, plays);
+                }
+                if (d.hours && typeof d.hours === 'object') {
+                    for (let h2 = 0; h2 < 24; h2++) { const v = +d.hours[h2]; if (isFinite(v) && v >= 0) hourly[h2] = v; }
+                    LS.set('bh_sc_hours', hourly);
+                }
                 if (d.daily && typeof d.daily === 'object') {
                     Object.keys(daily).forEach(k2 => delete daily[k2]);
                     Object.assign(daily, d.daily);
@@ -2496,6 +2548,7 @@
                 closeCard();
             } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a shuffle backup.'); }
         };
+        r.onerror = () => showToast('Couldn’t read that file.');
         r.readAsText(file);
     }
 
@@ -2567,7 +2620,7 @@
                 foot.appendChild(allB);
                 const backB = el('button', 'bhx-btn', 'Back');
                 backB.type = 'button';
-                backB.addEventListener('click', () => openSettings(anchor));
+                backB.addEventListener('click', () => { closeCard(); if (SUITE.openLyricsTweaks) { try { SUITE.openLyricsTweaks(); return; } catch (e) {} } openSettings(anchor); });
                 foot.appendChild(backB);
                 b.appendChild(foot);
                 b.appendChild(el('div', 'bhx-hint', 'Applies from the next shuffle · genre comes from each track’s tag'));
@@ -2777,7 +2830,7 @@
             fileInp.type = 'file';
             fileInp.accept = 'application/json,.json';
             fileInp.style.display = 'none';
-            fileInp.addEventListener('change', () => { if (fileInp.files && fileInp.files[0]) importData(fileInp.files[0]); });
+            fileInp.addEventListener('change', () => { if (fileInp.files && fileInp.files[0]) importData(fileInp.files[0]); fileInp.value = ''; });   // same file twice must fire again
             mkFoot('Import', () => fileInp.click(), 'Restore from a backup file');
             b.appendChild(foot);
             b.appendChild(fileInp);
@@ -3183,10 +3236,16 @@
 
     /* ───────────────────────── PLAYER-BAR BUTTONS ───────────────────────── */
     function barShuffleClick() {
-        if (S.active) { cancel('Shuffle Play'); return; }
+        if (S.active) {
+            if (Date.now() - S.startedAt < 800) return;   // same double-fire guard as run()
+            cancel('Shuffle Play');
+            return;
+        }
         const onLikes = /^\/you\/likes\/?$/.test(location.pathname);
         const btn = document.querySelector('.bhx-shufbtn');
-        if (onLikes && btn) { run(btn); return; }
+        // the button can still be the previous page's (SPA nav re-renders it
+        // ~400 ms later) — only run it when it really belongs to /you/likes
+        if (onLikes && btn && btn.dataset.pageType === 'Likes') { run(btn); return; }
         SS.set('bh_sc_autorun', 1);
         if (!onLikes) {
             // SPA-navigate via a real link so SoundCloud's router handles it;
@@ -3301,7 +3360,7 @@
     } catch (e) { swallow(e, 'history patch'); }
 
     window.addEventListener('keydown', e => {
-        if (!e.altKey || e.ctrlKey || e.metaKey) return;
+        if (!e.altKey || e.ctrlKey || e.metaKey || e.repeat) return;   // key auto-repeat must not start/cancel/start…
         // e.code, not e.key: on macOS Option+S types 'ß' and Option+B types '∫',
         // which silently killed both hotkeys for Mac users
         if (e.code !== 'KeyS' && e.code !== 'KeyB') return;
@@ -3333,7 +3392,7 @@
             return hit ? { id: hit[0], url: hit[1], durMs: hit[2] || 0, artistId: hit[3], artist: hit[4] || '', title: hit[5] || '' } : null;
         } catch (e) { return null; }
     };
-    SUITE.shuffleNow = () => { try { barShuffleClick(); } catch (e) {} };
+    SUITE.shuffleNow = () => { try { if (S.active) return 'Shuffle is still loading — give it a moment'; barShuffleClick(); return ''; } catch (e) { return 'Couldn’t start the shuffle'; } };
     SUITE.shuffleRender = (c) => { try { shuffleRender(c); } catch (e) {} };   // inline shuffle settings for the hub
     // shuffle settings now live in the all-in-one hub (Tweaks tab); fall back to
     // the standalone card only if the lyrics module isn't present
@@ -3410,6 +3469,7 @@
                 g = (hit && hit.track && hit.track.genre ? String(hit.track.genre) : '').trim();
             }
             if (!g) return 'No genre tag here — run one shuffle first so the library is in memory';
+            if (S.active) return 'Shuffle is still loading — try again in a moment';
             CFG.genreFilter = [g];
             saveCfg();
             barShuffleClick();
@@ -3494,7 +3554,7 @@
  *  that finds pages the way a browser does, spelling variants included.
  *  Pages: direct first, then mirrors (Wayback Machine, codetabs,
  *  allorigins) that fetch genius.com from other servers, so Cloudflare
- *  never sees this device. A global request gate (max 6 in flight) and
+ *  never sees this device. A global request gate (max 10 in flight) and
  *  staggered search waves keep slow VPN tunnels from queueing up, and the
  *  resolver waits up to ~30s while anything useful is still in flight —
  *  results landing even later are delivered live instead of dropped.
@@ -3918,8 +3978,13 @@
       title = dash[2].trim();
       src = 'dash';
     } else {
-      const by = s.match(/^(.{2,80}?)\s+by\s+(.{2,50})$/i);
-      if (by) { title = by[1].trim(); artist = by[2].trim(); src = 'by'; }
+      // lowercase "by" only: Title-Case song titles ("Stand By Me", "Blinded By
+      // The Light") must not be split into a bogus artist; uploads that mean it
+      // write "track by artist". A pronoun/article tail is a title, not a name.
+      const by = s.match(/^(.{2,80}?)\s+by\s+(.{2,50})$/);
+      if (by && !/^(?:me|you|us|now|myself|yourself|(?:the|a|an|my|your|his|her|their)\s+\S+|night|day|default|design|chance|force|heart|hand|nature|law|name)$/i.test(by[2].trim())) {
+        title = by[1].trim(); artist = by[2].trim(); src = 'by';
+      }
     }
     if (!artist) {
       // archive style: `Knzck x Hi-c (Drown)` → artists + (song)
@@ -4071,7 +4136,7 @@
           let freed = false;
           const free = () => { if (!freed) { freed = true; active--; pump(); } };
           // a GM request that never fires ANY callback (unanswered @connect
-          // prompt, extension bug) must not leak the slot — six leaks would
+          // prompt, extension bug) must not leak the slot — ten leaks would
           // silently deadlock all lyric networking until reload
           const guard = setTimeout(free, (deadlineMs || 5000) + 8000);
           fn().then(
@@ -4125,7 +4190,7 @@
     _lrcCooldownUntil = Date.now() + 60000;
     if (Date.now() - _lrcCooldownToldAt > 300000) {   // one toast per 5 min, not on every retry
       _lrcCooldownToldAt = Date.now();
-      try { toast && toast('LRCLIB rate-limited — paused for 60s'); } catch (e) {}
+      try { UI.toast('LRCLIB rate-limited — paused for 60s'); } catch (e) {}
     }
   }
   function lrcHandleErr(e) {
@@ -4333,7 +4398,7 @@
   // inject the owner's personal token from tools/dev-token.txt via build.sh —
   // see that file's `--public` flag which enforces blank-and-fail for releases.
   // A user-set token via the ⋯ menu always overrides whatever's here.
-  const GTOK_DEFAULT = 'PaZgSPKqgsentzVKfUPcODVl3tQoTRwYClcgpHLNO2ZV5LN8I8GIOIlDNnhr393q';
+  const GTOK_DEFAULT = '';
   const Gtok = (() => {
     let t = '';
     try { t = GM_getValue('sl:gtok', '') || ''; } catch (e) {}
@@ -4354,7 +4419,7 @@
       add(name, artist) {
         const k = normKey(name || ''); artist = String(artist || '').trim();
         if (!k || !artist) return;
-        const a = m[k] || [];
+        const a = (Object.prototype.hasOwnProperty.call(m, k) && Array.isArray(m[k])) ? m[k] : [];   // "constructor" etc. must not hit the prototype
         if (!a.some((x) => normKey(x) === normKey(artist))) a.push(artist);
         m[k] = a.slice(0, 6);
         const keys = Object.keys(m);
@@ -4380,9 +4445,15 @@
   // shared parser for web-search results that point at genius.com lyric pages
   function webGeniusHit(out, hrefRaw, innerHtml) {
     if (out.length >= 6) return;
-    let href = String(hrefRaw || '');
+    let href = String(hrefRaw || '').replace(/&amp;/g, '&');
     const ud = href.match(/[?&](?:uddg|u)=([^&]+)/);
-    if (ud) { try { href = decodeURIComponent(ud[1]); } catch (e) {} }
+    if (ud) {
+      let v = ud[1];
+      try { v = decodeURIComponent(v); } catch (e) {}
+      // Bing wraps every organic result as /ck/a?…&u=a1<base64url of the real URL>
+      if (/^a1[A-Za-z0-9_-]+$/.test(v)) { try { v = atob(v.slice(2).replace(/-/g, '+').replace(/_/g, '/')); } catch (e) {} }
+      href = v;
+    }
     if (!/^https?:\/\/(?:www\.)?genius\.com\/(?!api|albums|artists|search)[^\s"']+/i.test(href)) return;
     if (!/-lyrics(?:$|[/?#])/i.test(href)) return;
     // translation/romanization pages match the title perfectly but carry the
@@ -4491,7 +4562,7 @@
     const launch = (e) => {
       inflight++;
       e.fn(q).then(
-        (r) => { inflight--; if (r && r.songs && r.songs.length) WebRoutes.ok(e.k); else WebRoutes.fail(e.k); ok(r); settle(); },
+        (r) => { inflight--; if (r && r.songs && r.songs.length) WebRoutes.ok(e.k); ok(r); settle(); },   // an empty (but successful) search is not an outage
         () => { inflight--; WebRoutes.fail(e.k); settle(); });
     };
     const launchNext = () => { if (idx < engines.length && !done) launch(engines[idx++]); };
@@ -4554,7 +4625,9 @@
       return p0;
     }
     const p = fn();
-    p.then((v) => pbRemember(key, v)).catch(() => BodyCache.delete(key));
+    // a null body (every route failed) must not be remembered for the session —
+    // the next search for this track should get another go at it
+    p.then((v) => { if (v == null) BodyCache.delete(key); else pbRemember(key, v); }).catch(() => BodyCache.delete(key));
     if (BodyCache.size >= 40) { const k = BodyCache.keys().next().value; BodyCache.delete(k); }
     BodyCache.set(key, p);
     return p;
@@ -4617,10 +4690,8 @@
   async function kugouSearch(q, durSec) {
     const path = 'krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=' + encodeURIComponent(q)
       + '&duration=' + (durSec > 0 ? Math.round(durSec * 1000) : '') + '&hash=';
-    let j;
-    // https first (no more cleartext titles on the wire); http stays as fallback
-    try { j = await gmJSON('https://' + path, { timeout: 8000 }); }
-    catch (e) { j = await gmJSON('http://' + path, { timeout: 8000 }); }
+    // https only — a cleartext fallback would put song titles on the wire
+    const j = await gmJSON('https://' + path, { timeout: 8000 });
     const cands = (j && j.candidates) || [];
     return {
       songs: cands.slice(0, 6).map((c, i) => ({
@@ -4635,9 +4706,7 @@
     return cachedBody('k:' + kid, async () => {
       const path = 'lyrics.kugou.com/download?ver=1&client=pc&id=' + kid
         + '&accesskey=' + encodeURIComponent(kkey || '') + '&fmt=lrc&charset=utf8';
-      let j;
-      try { j = await gmJSON('https://' + path, { timeout: 8000 }); }
-      catch (e) { j = await gmJSON('http://' + path, { timeout: 8000 }); }
+      const j = await gmJSON('https://' + path, { timeout: 8000 });
       if (!j || !j.content) return null;
       let raw = '';
       try { raw = atob(j.content); } catch (e) { return null; }
@@ -4865,6 +4934,9 @@
         }],
       };
     } catch (e) {
+      // lyrics.ovh answers a plain "no lyrics" with HTTP 404 — that's a miss,
+      // not an outage, and must not count toward parking the provider
+      if (/HTTP 404/.test(String(e && e.message))) return { songs: [] };
       _ovhFails++; if (_ovhFails >= 4) ovhMarkDead();
       try { Log.err('ovhFind', e); } catch (x) {}
       return { songs: [] };
@@ -4914,7 +4986,7 @@
     const avg = real.reduce((s, x) => s + x.length, 0) / real.length;
     if (avg < 6 || avg > 90) return null;              // paragraphs / single words ≠ lyrics
     // most lines must read like sung text (majority letters)
-    const wordy = real.filter((x) => (x.match(/[a-z]/gi) || []).length >= x.length * 0.5).length;
+    const wordy = real.filter((x) => (x.match(/\p{L}/gu) || []).length >= x.length * 0.5).length;   // any script, not just ASCII
     if (wordy < real.length * 0.7) return null;
     return body.split('\n').map((x) => x.trim());
   }
@@ -5315,6 +5387,8 @@
       let done = false, left = 0, total = 0, fails = 0;
       let wave2Fired = false, finalScheduled = false, drained = false;
       let extensions = 0, lateFired = false, stageFired = false, artistLoopFired = false, pivotFired = false;
+      let resolved = null;   // what finish() delivered — a late result may only replace it when clearly better
+      const lateOk = (score, synced) => !resolved || ((score || 0) > (resolved.score || 0) + 0.1 && (!resolved.synced || !!synced));
       let partialFired = false;   // provisional render: best-ready result shown while verification continues
       const pool = [], lyricPool = [], reserve = [];
       const bodies = new Map(); // cand.id → { state:'p'|'ok'|'bad', synced, lines }
@@ -5359,7 +5433,7 @@
       const finish = (v) => {
         if (v && !xcheck(v)) { pool.sort((a, b) => b.score - a.score); judge(); return; }
         if (!done) {
-          done = true; stop();
+          done = true; resolved = v || null; stop();
           Trail.add(v ? `→ ${v.src}${v.synced ? '/synced' : '/text'} "${v.t}" (${(v.score || 0).toFixed(2)}${v.low ? ' low' : ''})` : '→ no match');
           resolve(v);
         }
@@ -5408,13 +5482,19 @@
           bodies.set(c.id, body ? { state: 'ok', synced: body.synced, lines: body.lines } : { state: 'bad' });
           Trail.add(`body ${c.src} "${c.t}" (${(c.score || 0).toFixed(2)}) → ${body ? 'ok' : 'FAILED on every route'}`);
           if (!body) pivot();
-          if (done && body && !lateFired && c.score >= 0.55 && typeof onLate === 'function') {
+          if (done && body && !lateFired && c.score >= 0.55 && typeof onLate === 'function' && lateOk(c.score, body.synced)) {
             lateFired = true;
             Trail.add('late delivery → rendering now');
-            onLate(mkBody(c, { state: 'ok', synced: body.synced, lines: body.lines }));
+            try { onLate(mkBody(c, { state: 'ok', synced: body.synced, lines: body.lines })); } catch (e) {}
           }
           judge();
-        }).catch(() => { bodies.set(c.id, { state: 'bad' }); pivot(); judge(); });
+        }).catch(() => {
+          // only a body that never landed is 'bad' — a throw inside judge() must
+          // not re-label a good body and pivot the search away from it
+          const st = bodies.get(c.id);
+          if (!st || st.state === 'p') { bodies.set(c.id, { state: 'bad' }); pivot(); }
+          judge();
+        });
       }
 
       function readyResult(c, lowOverride) {
@@ -5435,13 +5515,15 @@
         const floor = Math.max(minScore, top.score - (slack == null ? 0.04 : slack));
         for (const c of pool) {
           if (c.score < floor) break;
+          // readyResult (not fromInline/mkBody directly) so the hard title
+          // floor applies on the fast tiers too
           if (!needsBody(c)) {
-            const r = fromInline(c, meta.dur, FLAGS);
+            const r = readyResult(c);
             if (r) { finish(r); return true; }
             continue;
           }
           const b = bodies.get(c.id);
-          if (b && b.state === 'ok') { const r = mkBody(c, b); if (r) { finish(r); return true; } continue; }
+          if (b && b.state === 'ok') { const r = readyResult(c); if (r) { finish(r); return true; } continue; }
           if (!b) { fetchBody(c); return 'wait'; }
           if (b.state === 'p') return 'wait';
         }
@@ -5475,6 +5557,7 @@
         // without a body fetch must never be the reason we conclude "no match"
         pool.filter((c) => (c.score || 0) >= 0.6 && needsBody(c) && !bodies.has(c.id)).slice(0, 3).forEach(fetchBody);
         for (const c of pool) {
+          if ((c.score || 0) < 0.48 && !c.agreeBonus && !c.picked) continue;   // same floor as the reserve — POOL_MIN alone is "maybe", not "render"
           const r = readyResult(c);
           if (r) { finish(r); return; }
         }
@@ -5603,7 +5686,7 @@
             if (it.score < 0.7 || (it.ts || 0) < 0.5) continue;
             if (!needsBody(it)) {
               const r = fromInline(it, meta.dur, FLAGS);
-              if (r && !r.instr) { lateFired = true; Trail.add(`late rescue inline → ${it.src} "${it.t}"`); try { onLate(r); } catch (e) {} return; }
+              if (r && !r.instr && lateOk(it.score, r.synced)) { lateFired = true; Trail.add(`late rescue inline → ${it.src} "${it.t}"`); try { onLate(r); } catch (e) {} return; }
             } else if (!bodies.has(it.id)) {
               Trail.add(`late rescue → fetching "${it.t}" (${it.score.toFixed(2)}) ${it.src}`);
               fetchBody(it);   // fetchBody's done-branch fires onLate when it lands
@@ -5759,9 +5842,6 @@
           if (d.duration && (!(meta.dur > 0) || Math.abs(meta.dur - d.duration / 1000) > 2)) {
             meta.dur = Math.round(d.duration / 1000);
           }
-          // SoundCloud's amplitude waveform → anchor ESTIMATED lyrics to where the
-          // audio actually is (real onset + energy spread), since text-only sources
-          // (Genius) have no timestamps. Best-effort, async, never blocks lyrics.
           // free instrumental signal in data we already fetched: a beats/
           // type-beat genre or tag means "stop hunting for words"
           try {
@@ -5974,6 +6054,9 @@
           keySet().add(key);
         } catch (e) {}
       },
+      del(key) {
+        try { GM_deleteValue(PFX + key); setIdx(idx().filter((k) => k !== key)); keySet().delete(key); } catch (e) {}
+      },
       clear() {
         try { idx().forEach((k) => GM_deleteValue(PFX + k)); setIdx([]); keys = new Set(); } catch (e) {}
       },
@@ -6088,7 +6171,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .hbtn:hover { background: rgba(255,255,255,0.07); color: #f3f3f5; }
 .hbtn:active { transform: scale(0.9); }
 .hbtn svg { width: 14.5px; height: 14.5px; display: block; }
-#bShuf.busy { color: #ff8a3d; animation: slpulse 1.1s ease-in-out infinite; }
 @keyframes slpulse { 50% { opacity: 0.4; } }
 
 .body { position: relative; z-index: 1; overflow-y: auto; overscroll-behavior: contain; padding: 14px 10px 26px; scrollbar-width: none; flex: 1; min-height: 96px;
@@ -6575,7 +6657,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let miniOn = true;
     try { miniOn = !!GM_getValue('sl:mini', 1); } catch (e) {}
     let lastDragEnd = 0;         // suppress the click that follows a header drag
-    try { const st = GM_getValue('sl:tab', 'lyrics'); if (st === 'queue' || st === 'stats' || st === 'tweaks') tab = st; } catch (e) {}
+    try { const st = GM_getValue('sl:tab', 'lyrics'); if (st === 'queue' || st === 'stats' || st === 'tweaks' || st === 'audio') tab = st; } catch (e) {}
     let wizEl = null, wizT = null;
     let wizOn = true;
     try { wizOn = !!GM_getValue('sl:wiz', 1); } catch (e) {}
@@ -6649,7 +6731,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function toggleComfy() {
       comfyOn = !comfyOn;
       try { GM_setValue('sl:comfy', comfyOn ? 1 : 0); } catch (e) {}
-      applyChrome(); activeI = -1; toast('Comfort spacing ' + (comfyOn ? 'on' : 'off'));
+      applyChrome(); activeI = -1; lastFrameNow = -1; toast('Comfort spacing ' + (comfyOn ? 'on' : 'off'));
     }
     function toggleAutoOpen() {
       autoOpenFound = !autoOpenFound;
@@ -6765,7 +6847,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (b) setTab(b.dataset.tab);
       });
       nxtEl.addEventListener('click', () => setTab('queue'));
-      chipEl.addEventListener('click', () => { pauseScrollUntil = 0; activeI = -1; });
+      chipEl.addEventListener('click', () => { pauseScrollUntil = 0; activeI = -1; lastFrameNow = -1; });
       wizEl.addEventListener('click', () => {
         hideWizard();
         startTapAlign();   // estimated → the accurate per-line calibration (tap ⎵ / click per line)
@@ -7218,10 +7300,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function panelThemeIsDark() {
       if (themeMode === 'dark') return true;
       if (themeMode === 'light') return false;
-      try {
-        const m2 = getComputedStyle(document.body).backgroundColor.match(/\d+/g) || [255, 255, 255];
-        return (+m2[0] + +m2[1] + +m2[2]) / 3 < 110;
-      } catch (e) { return true; }
+      try { return SUITE.pageIsDark(); } catch (e) { return true; }
     }
     function applyPanelTheme() { if (panel) panel.classList.toggle('lite', !panelThemeIsDark()); }
     function cycleTheme() {
@@ -7273,7 +7352,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function setTab(t) {
       if (t !== 'lyrics' && t !== 'queue' && t !== 'stats' && t !== 'tweaks' && t !== 'audio') return;
       tab = t;
-      if (t !== 'lyrics') closeFind();   // the find bar must not float over other tabs
+      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(true); }   // find bar / manual search must not float over other tabs
       try { GM_setValue('sl:tab', t); } catch (e) {}
       tabsEl.querySelectorAll('.tab').forEach((b) => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
       body.style.display = t === 'lyrics' ? '' : 'none';
@@ -7595,7 +7674,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       sbody.appendChild(qh('More'));
       const btns2 = document.createElement('div'); btns2.className = 'sbtns';
       const mk = (lbl, fn) => { const b3 = document.createElement('button'); b3.className = 'sbtn'; b3.textContent = lbl; b3.addEventListener('click', fn); btns2.appendChild(b3); };
-      mk('Shuffle now', () => { if (SUITE.shuffleNow) SUITE.shuffleNow(); toast('Shuffling…'); });
+      mk('Shuffle now', () => { const msg = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; toast(msg || 'Shuffling…'); });
       mk('More like this', () => {
         const msg = SUITE.moreLikeThis ? SUITE.moreLikeThis() : 'Shuffle module not loaded';
         toast(msg || 'Shuffling this genre…');
@@ -7684,7 +7763,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const b = document.createElement('button'); b.className = 'mi'; b.textContent = lbl;
           b.addEventListener('click', () => { setMenu(false); pick(c); }); m2.appendChild(b);
         });
-        setMenu(true);
+        setMenu(true, true);   // keep the picker — a rebuild would put the full menu back
       });
       sep();
       mi('Mini lyric bar: ' + (miniOn ? 'on' : 'off'), () => toggleMini(), 'N');
@@ -7813,9 +7892,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const path = e.composedPath ? e.composedPath() : [];
       if (!path.includes(menuEl) && !path.includes(bMenuEl)) setMenu(false);
     }
-    function setMenu(v) {
+    function setMenu(v, keep) {
       menuOn = !!v;
-      if (menuOn) buildMenu();
+      if (menuOn && !keep) buildMenu();
       menuEl.classList.toggle('on', menuOn);
       // keep the bMenu button's aria-expanded in sync so screen readers
       // announce the open/closed state correctly (was declared but never wired
@@ -7852,8 +7931,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (maxOn && !open) setOpen(true);
       if (maxOn) wakeChrome();
       else { panel.classList.remove('idle'); clearTimeout(idleT); }
-      // recenter the active line after the reflow
-      activeI = -1;
+      // recenter the active line after the reflow (and wake one frame even while paused)
+      activeI = -1; lastFrameNow = -1;
       pauseScrollUntil = 0;
     }
 
@@ -7872,7 +7951,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
          ['[ / ]', 'Nudge sync ±100 ms'], ['{ / }', 'Fine nudge ±25 ms'], ['< / >', 'Coarse nudge ±500 ms'],
          ['0', 'Reset sync & anchors'], ['− / =', 'Lyrics text size'], ['T', 'Cycle theme'],
          ['M', 'Accent mood'], ['G', 'Backdrop density'], ['N', 'Mini lyric bar'],
-         ['2× click a line', 'Sync to that line'], ['⌥ click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
+         ['2× click a line', 'Seek to that line'], ['⌥ click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
          ['2× click artwork', 'Immersive fullscreen'], ['Click title', 'Copy track link'], ['Click the clock', 'Time left ↔ elapsed'],
          ['Esc', 'Back out (sheet → menu → find → fullscreen → search → close)'], ['?', 'This sheet']]
           .forEach(([k, d]) => {
@@ -7891,7 +7970,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     // Esc backs out one layer at a time; returns true when it consumed the key
     function escStep() {
-      if (tapOn) { endTapAlign(true); return true; }                          // finish calibration
+      if (tapOn) { endTapAlign(tapIdx > 0); return true; }                    // finish calibration (no "saved" toast when nothing was tapped)
       const ps = panel.querySelector('.keys.on');
       if (ps && ps !== keysEl && ps !== wnEl) { ps.remove(); return true; }   // paste sheet
       if (wnEl && wnEl.classList.contains('on')) { wnEl.classList.remove('on'); return true; }
@@ -7906,13 +7985,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function copyLine(text) {
       const m2 = App.meta();
       const quote = '“' + text + '”' + (m2 && m2.title ? ' — ' + m2.title : '');
-      try { GM_setClipboard(quote); toast('Line copied'); return; } catch (e) {}
+      try { if (GM_setClipboard(quote) !== false) { toast('Line copied'); return; } } catch (e) {}
       try { navigator.clipboard.writeText(quote).then(() => toast('Line copied'), () => toast('Copy failed')); } catch (e) { toast('Copy failed'); }
     }
 
     const fmtClock = (t) => { t = Math.max(0, Math.floor(t)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
 
+    let hdrGen = 0;   // a slow artwork error/load from the previous track must not repaint the next one's header
     function setHeader(meta) {
+      const gen = ++hdrGen;
       tt.textContent = meta && meta.title ? meta.title : 'SuperLyrics';
       tt.title = tt.textContent;
       const eqHtml = '<div class="eq"><i></i><i></i><i></i></div>';
@@ -7925,6 +8006,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const img = new Image();
         img.alt = '';
         img.onerror = () => {
+          if (gen !== hdrGen) return;
           if (img.src !== orig) { img.src = orig; glowEl.style.backgroundImage = `url("${cssSafe(orig)}")`; }
           else { art.innerHTML = ICONS.note + eqHtml; glowEl.style.backgroundImage = ''; panel.classList.remove('haz'); }
         };
@@ -7938,8 +8020,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try {
           const tImg = new Image();
           tImg.crossOrigin = 'anonymous';
-          tImg.onload = () => applyArtAccent(tintFrom(tImg));
-          tImg.onerror = () => applyArtAccent(null);
+          tImg.onload = () => { if (gen === hdrGen) applyArtAccent(tintFrom(tImg)); };
+          tImg.onerror = () => { if (gen === hdrGen) applyArtAccent(null); };
           tImg.src = hi;
         } catch (e) { applyArtAccent(null); }
       } else {
@@ -8061,7 +8143,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * than scattered double-taps, and the result persists per track. */
     function startTapAlign() {
       if (!lineEls.length) { toast('Play a track with lyrics first'); return; }
-      if (!estMode) { toast(isSynced ? 'Synced — double-tap a line early + late as you hear them to fix any drift' : 'Needs timed lyrics to calibrate'); return; }
+      if (!estMode) { toast(isSynced ? 'Already synced — nudge with [ and ] if it drifts' : 'Needs timed lyrics to calibrate'); return; }
       if (tab !== 'lyrics') setTab('lyrics');
       tapOn = true; tapIdx = 0;
       pauseScrollUntil = 0; activeI = -1;
@@ -8093,7 +8175,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       lineEls.forEach((el) => el.classList && el.classList.remove('tapnext'));
       try { if (curLyr) { const sl = srcFor(curLyr); setSrcLine(sl[0], sl[1]); } } catch (e) {}
       if (done) toast('Sync calibrated — saved for this track');
-      activeI = -1; pauseScrollUntil = 0;
+      activeI = -1; lastFrameNow = -1; pauseScrollUntil = 0;
     }
 
     function renderLyrics(lyr) {
@@ -8279,7 +8361,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (cur.length) chunks.push(cur);
         const out = [];
         for (const ch of chunks) {
-          const key = transLang + ' ' + ch.join('\n');
+          const key = transLang + '\u0000' + ch.join('\n');
           let tr;
           if (transCache.has(key)) tr = transCache.get(key);
           else {
@@ -8326,6 +8408,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const playing = Media.playing();
       // IDLE PARK: when paused and the clock isn't advancing, nothing on screen
       // changes — skip ALL per-frame work (bisect / karaoke fill / scroll / writes).
+      // Anything that resets activeI also sets lastFrameNow = -1 so the reset paints once.
       // Keep the rAF alive so playback resumes instantly. Guards: only when the
       // play→pause transition has already settled (playing === lastPlaying) and the
       // "back to live" chip isn't mid-display (so it can still hide on its own).
@@ -8519,7 +8602,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         // version" signal a human can read at a glance — color it
         let dur = '';
         if (it.dur) {
-          const dtxt = `${Math.floor(it.dur / 60)}:${String(Math.round(it.dur % 60)).padStart(2, '0')}`;
+          const ds = Math.round(it.dur);   // round first: 239.6 s is 4:00, not 3:60
+          const dtxt = `${Math.floor(ds / 60)}:${String(ds % 60).padStart(2, '0')}`;
           const diff = lastSearchDur > 0 ? Math.abs(it.dur - lastSearchDur) : -1;
           const cls = diff < 0 ? '' : diff <= 3 ? ' class="dgood"' : diff <= 10 ? ' class="dok"' : ' class="dbad"';
           dur = ` · <span${cls}>${dtxt}</span>`;
@@ -8603,7 +8687,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
 
     /* ---------- diagnostics view ---------- */
+    let diagGen = 0;
     async function showDiag() {
+      const gen = ++diagGen;
       exitSearch(true);
       clearLyrics();
       body.innerHTML = '<div class="dghead">Checking every route…</div>';
@@ -8623,6 +8709,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let results;
       try { results = await App.diagnose(paint); }
       catch (e) { results = []; }
+      if (gen !== diagGen || !list.isConnected) return;   // a track change re-rendered lyrics meanwhile
       paint(results);
       const okCount = results.filter((r) => r.ok).length;
       const row = document.createElement('div');
@@ -8686,7 +8773,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (v) {
         applyPanelTheme();
         pauseScrollUntil = 0;
-        activeI = -1;   // jump straight to the sung line on every open
+        activeI = -1; lastFrameNow = -1;   // jump straight to the sung line on every open — even while paused
         try { if (!maxOn && GM_getValue('sl:max', 0)) toggleMax(true); } catch (e) {}
         requestAnimationFrame(clampPanel);   // never reveal an off-screen panel
         App.onOpen();
@@ -8774,8 +8861,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('⟳', 'Re-search this track', 'Lyrics', () => { setOpen(true); setTab('lyrics'); App.retry(); });
       add('⌕', 'Pick a different match', 'Lyrics', () => { setOpen(true); setTab('lyrics'); enterSearch(); });
       add('/', 'Find in lyrics', 'Lyrics', () => { setOpen(true); setTab('lyrics'); openFind(); });
-      add('⤓', 'Jump to chorus', 'Lyrics', () => { setOpen(true); jumpChorus(); });
-      add('◎', 'Calibrate sync (tap along)', 'Lyrics', () => { setOpen(true); startTapAlign(); });
+      add('⤓', 'Jump to chorus', 'Lyrics', () => { setOpen(true); if (searchMode) exitSearch(); jumpChorus(); });
+      add('◎', 'Calibrate sync (tap along)', 'Lyrics', () => { setOpen(true); if (searchMode) exitSearch(); startTapAlign(); });
       add('⧉', 'Copy lyrics', 'Lyrics', () => { try { App.copyLyrics(); } catch (e) {} });
       add('⭳', 'Export .lrc file', 'Lyrics', () => { try { App.exportLrc(); } catch (e) {} });
       add('📄', 'Load .lrc / .txt file', 'Lyrics', () => { try { App.importLrc(); } catch (e) {} });
@@ -9151,10 +9238,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } catch (e) {}
     }
 
+    const keyGen = new Map();   // per-track search generation: a forced re-search (ban / retry) outranks older runs' cache writes
     function ensure(force) {
       if (!meta) { if (UI.isOpen()) UI.showIdle(); return; }
       const key = meta.key;
+      if (force) { token++; keyGen.set(key, (keyGen.get(key) || 0) + 1); }   // stale results from the superseded run must neither paint nor cache
       const myToken = token;
+      const myGen = keyGen.get(key) || 0;
 
       if (!force) {
         const entry = Cache.get(key);
@@ -9190,8 +9280,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let partial = null;   // best-ready candidate rendered while verification continues
       const p = findLyrics(meta, (late) => {
         if (!late) return;
-        Cache.set(key, toCache(late));
-        Miss.del(key);
+        if ((keyGen.get(key) || 0) === myGen) {
+          const e2 = toCache(late);
+          if (token !== myToken) e2.off = 0;   // never bake the NOW-playing track's offset into another track's entry
+          Cache.set(key, e2);
+          Miss.del(key);
+        }
         if (token === myToken) {
           apply(late, myToken);
           if (UI.isOpen()) UI.toast('Found it');
@@ -9214,18 +9308,23 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
         },
       }).then((r) => {
-        Inflight.delete(key);
+        if (Inflight.get(key) === p) Inflight.delete(key);
         // a decent provisional that survived the whole search beats "nothing"
         const fin = r || partial;
         if (fin && fin.synced && !fin.instr && !off && myToken === token) {
           const ao = autoOff(fin.src);   // smart sync memory pre-correction
           if (ao) off = ao;
         }
-        if (fin) Cache.set(key, toCache(fin));
-        else Miss.add(key);
+        if ((keyGen.get(key) || 0) === myGen) {
+          if (fin) {
+            const e2 = toCache(fin);
+            if (myToken !== token) e2.off = 0;   // finished after a track change: cache it, but not with the new track's offset
+            Cache.set(key, e2);
+          } else Miss.add(key);
+        }
         return fin;
       }, (err) => {
-        Inflight.delete(key);
+        if (Inflight.get(key) === p) Inflight.delete(key);
         throw err;
       });
       Inflight.set(key, p);
@@ -9280,6 +9379,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (sig && sig !== lastSig) {
           lastSig = sig;
           onTrackChange(m);
+        } else if (m && meta && meta.href && m.href && m.href !== meta.href) {
+          onTrackChange(m);   // same title + uploader, different permalink (archive accounts' "untitled" uploads)
         } else if (m && meta) {
           if (m.dur > 0 && !(meta.dur > 0)) meta.dur = m.dur;
           if (m.art && !meta.art) { meta.art = m.art; UI.setHeader(meta); }
@@ -9356,6 +9457,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         while (ks.length > 120) delete bm[ks.shift()];
         GM_setValue('sl:ban', bm);
       } catch (e) {}
+      try { Cache.del(meta.key); } catch (e) {}   // or the banned lyrics come straight back from cache on the next play
       UI.toast('Banned that match — searching again');
       ensure(true);
     }
@@ -9377,9 +9479,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         inp.type = 'file';
         inp.accept = '.lrc,.txt,text/plain';
         inp.style.display = 'none';
+        inp.addEventListener('cancel', () => inp.remove(), { once: true });   // dismissed picker: don't leave an orphan input behind
         inp.addEventListener('change', () => {
           const f = inp.files && inp.files[0];
           if (!f) { inp.remove(); return; }
+          if (f.size > 512 * 1024) { UI.toast('That file is too big — lyrics files are a few KB'); inp.remove(); return; }
           const myToken = token, a = (meta && meta.uploader) || '', t = (meta && meta.title) || '';   // pin to the track the file was chosen FOR
           const rd = new FileReader();
           rd.onload = () => {
@@ -9653,7 +9757,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function copyLyrics() {
       const txt = lyricsText();
       if (!txt) { UI.toast(lyr && lyr.instr ? 'Instrumental — nothing to copy' : 'No lyrics to copy'); return; }
-      try { GM_setClipboard(txt); UI.toast('Lyrics copied'); return; } catch (e) {}
+      try { if (GM_setClipboard(txt) !== false) { UI.toast('Lyrics copied'); return; } } catch (e) {}
       // async fallback: only report success when the write actually lands
       try {
         navigator.clipboard.writeText(txt).then(() => UI.toast('Lyrics copied'), () => UI.toast('Copy failed'));
@@ -10057,14 +10161,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mrReduceTransparency', 'Reading', 'Reduce transparency', 'css', '.l-container [style*="rgba"],.modal__modal{backdrop-filter:none !important}'],
     // ── Hide more (wave 3) ──
     ['mhHeaderMore', 'Hide more', 'Header “⋯” menu', 'hide', '.header__moreActions,.header__moreMenu'],
-    ['mhArtistStudio', 'Hide more', 'Artist Studio link', 'hide', 'a[href*="artist"],.header__link--studio,.creatorSubscriptionUpsell'],
+    ['mhArtistStudio', 'Hide more', 'Artist Studio link', 'hide', 'a[href*="artists.soundcloud.com"],a[href^="/artist-studio"],.header__link--studio,.creatorSubscriptionUpsell'],
     ['mhProfileBanner', 'Hide more', 'Profile header banner', 'hide', '.profileHeaderBackground,.userHeader__background,.fullHero__background'],
     ['mhTrackNums', 'Hide more', 'Track numbers in lists', 'hide', '.trackItem__number,.trackList__item .trackItem__number'],
     ['mhRepostOverlay', 'Hide more', 'Repost overlay on tiles', 'hide', '.sound__artwork .sc-button-repost,.audibleTile .sc-button-repost'],
     ['mhCommentTimes', 'Hide more', 'Comment timestamps', 'hide', '.commentItem__timestamp,.comment__timestamp,.commentNode__timestamp'],
     ['mhSocialFooter', 'Hide more', 'Footer social links', 'hide', '.footer__socialLinks,.l-footer__social,.footer__columns'],
     ['mhReport', 'Hide more', '“Report” links', 'hide', '.sc-button-report,a[href*="/report"],.reportLink'],
-    ['mhPartnerOffers', 'Hide more', 'Partner offers', 'hide', '[class*="partnerOffer" i],a[href*="partner"]'],
+    ['mhPartnerOffers', 'Hide more', 'Partner offers', 'hide', '[class*="partnerOffer" i],a[href*="partner-offers"],a[href$="/partners"]'],
     ['mhInsightsNag', 'Hide more', 'Insights / studio nags', 'hide', '.insightsUpsell,[class*="insights" i].upsell,.creatorUpsell'],
     ['mhFollowProfile', 'Hide more', 'Follow button on profiles', 'hide', '.profileHeaderInfo .sc-button-follow,.userInfoBar .sc-button-follow'],
     ['mhWaveNumbers', 'Hide more', 'Waveform time labels', 'hide', '.playbackTimeline__duration,.waveform__layer .timecode'],
@@ -10095,7 +10199,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mdRainbowWave', 'Delight', 'Rainbow waveform sheen', 'css', '@keyframes sceHue{to{filter:hue-rotate(360deg)}}.waveform__layer{animation:sceHue 8s linear infinite}'],
     ['mdTiltHover', 'Delight', 'Tilt tiles on hover', 'css', '.audibleTile{transition:transform .18s}.audibleTile:hover{transform:perspective(600px) rotateX(3deg) scale(1.02)}'],
     ['mdShimmerTitle', 'Delight', 'Shimmer the page title', 'css', '.contentTitle,.profileHeaderInfo__userName{background:linear-gradient(90deg,#ff5500,#ff8a3d,#ff5500);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}'],
-    ['mdBounceLike', 'Delight', 'Bounce on like', 'css', '.sc-button-like.sc-button-selected{animation:scePulse .4s ease}'],
+    ['mdBounceLike', 'Delight', 'Bounce on like', 'css', '@keyframes scePulse{50%{transform:scale(1.08)}}.sc-button-like.sc-button-selected{animation:scePulse .4s ease}'],
     // ── Reading (wave 3) ──
     ['mrMinimal', 'Reading', 'Minimal player (waveform only)', 'css', '.listenEngagement,.soundActions,.commentsList,.l-related,.relatedTracks{display:none !important}'],
     ['mrHideChrome', 'Reading', 'Hide nav, sidebar & footer', 'hide', '.header,.l-sidebar-right,.sidebar,#app__footer,.footer__inner'],
@@ -10107,19 +10211,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const save = () => SET('enh:cfg', CFG);
 
   const activeMedia = () => {
-    let m = null;
-    try { D.querySelectorAll('audio,video').forEach((a) => { if (!a.paused && a.readyState > 0) m = a; else if (!m) m = a; }); } catch (e) {}
     // SoundCloud plays through the Web Audio API with a DETACHED media element
-    // that never enters the DOM (so the query above finds nothing). We capture
-    // that real element via createMediaElementSource into `sceMediaEls`; fall back
-    // to it so loop / volume memory / A–B / restart / seek work — not just speed.
-    if (!m) {
-      try {
-        let playing = null, any = null;
-        sceMediaEls.forEach((a) => { if (!a) return; any = a; if (!a.paused && a.readyState > 0) playing = a; });
-        m = playing || any;   // prefer the currently-playing element, else the freshest captured one
-      } catch (e) {}
-    }
+    // that never enters the DOM. We capture that real element via
+    // createMediaElementSource into `sceMediaEls`. Whichever set it lives in,
+    // the PLAYING element wins; otherwise the freshest captured one, then any
+    // in-DOM one — a paused promo <video> must never outrank the real player.
+    let playing = null, captured = null, inDom = null;
+    try { sceMediaEls.forEach((a) => { if (!a) return; captured = a; if (!playing && !a.paused && a.readyState > 0) playing = a; }); } catch (e) {}
+    try { D.querySelectorAll('audio,video').forEach((a) => { if (!inDom) inDom = a; if (!playing && !a.paused && a.readyState > 0) playing = a; }); } catch (e) {}
+    let m = playing || captured || inDom;
     return m;
   };
 
@@ -10320,9 +10420,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     css += '.playbackSoundBadge__titleContextContainer{margin-right:10px !important}'
       + '.playbackSoundBadge__actions{margin-left:2px !important}'
       + '.playbackSoundBadge__actions .sc-button{margin-right:3px !important}';
-    // dark theme re-inverts SC artwork so it isn't shown as a negative: the
-    // image is pre-inverted here, then the overlay's backdrop invert flips it
-    // back to normal while everything else stays inverted (readable dark UI).
     const TH = effTheme();   // resolves auto-dark → the theme that should render now
     if (DARK_THEMES[TH]) css += darkCss(DARK_THEMES[TH]);   // real dark theme (not an invert)
     else if (TH === 'custom' && CFG.customTheme) css += darkCss(CFG.customTheme);   // your custom palette
@@ -10384,7 +10481,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
   /* ───────── behavioural features (guarded, enforced on a slow tick) ───────── */
   const VOL_KEY = 'enh:vol';
-  let volRestored = false, lastVolSaved = 0;
+  let lastVolSaved = 0;
   // playback speed — SoundCloud plays through the WEB AUDIO API with NO <audio>
   // element in the page DOM (the console diagnostic showed querySelectorAll
   // returns 0). So plain playbackRate has nothing to drive. Instead we CAPTURE
@@ -10469,6 +10566,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     //    passthrough); >1 widens. Intermediate buses are forced mono so the M/S
     //    maths are exact, and the merger rebuilds a clean stereo pair. ──
     const wIn = ctx.createGain();
+    // force a real stereo pair into the splitter: a mono source would otherwise
+    // arrive as [L, silence] and the M/S maths would zero the right channel
+    try { wIn.channelCount = 2; wIn.channelCountMode = 'explicit'; wIn.channelInterpretation = 'speakers'; } catch (e) {}
     const wSplit = ctx.createChannelSplitter(2);
     const mono = (g) => { const nn = ctx.createGain(); try { nn.channelCount = 1; nn.channelCountMode = 'explicit'; nn.channelInterpretation = 'discrete'; } catch (e) {} nn.gain.value = g; return nn; };
     const wMid = mono(0.5), wSide = mono(0.5), wRinv = mono(-1), wWidth = mono(1), wSinv = mono(-1), wOutL = mono(1), wOutR = mono(1);
@@ -10572,13 +10672,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       sceFx.forEach((e) => {
         const a = e.chain.analyser, buf = e.chain.buf;
         a.getFloatTimeDomainData(buf);
-        let sum = 0; for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; }
+        let sum = 0, peak = 0;
+        for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; const av = v < 0 ? -v : v; if (av > peak) peak = av; }
         const rms = Math.sqrt(sum / buf.length);
         if (rms < 1e-4) return;   // silence/paused — don't chase the noise floor
         let g = 0.12 / rms; g = Math.max(0.5, Math.min(3, g));
+        if (peak > 0) g = Math.min(g, 0.98 / peak);   // never push the peaks past full scale — makeup is the last gain before the output
         try { e.chain.makeup.gain.setTargetAtTime(g, e.ctx.currentTime || 0, 0.5); } catch (er) { try { e.chain.makeup.gain.value = g; } catch (er2) {} }
       });
-    } catch (e) { Log.err('applyFx', e); }
+    } catch (e) { Log.err('updateLoudness', e); }
   }
   function updateFade() {
     try {
@@ -10651,6 +10753,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const vw = (W.innerWidth || 1280) * 0.65;
       for (const el of cand) {
         if (el.__sceKilled || el.children.length > 6) continue;
+        // never inside real content: a comment or description that quotes the
+        // upsell wording is the user's, not SoundCloud's
+        if (el.closest && el.closest('.commentsList,.commentItem,.commentNode,.soundDescription,.truncatedAudioInfo,.soundList__item,.trackList__item,.soundTitle')) continue;
         const t = el.textContent;
         if (!t || t.length < 10 || t.length > 360 || !RX.test(t)) continue;
         // climb to find a VERIFIED full-width/short banner bar; if none is found
@@ -10685,10 +10790,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } catch (e) {}
       // remember volume: restore once when media first has a usable volume
       if (CFG.rememberVol) {
-        if (!volRestored) {
+        if (!m.__sceVolRestored) {   // per element: SoundCloud can hand us a fresh <audio> per track
           const sv = parseFloat(GET(VOL_KEY, ''));
           if (isFinite(sv) && sv >= 0 && sv <= 1) { try { m.volume = sv; } catch (e) {} }
-          volRestored = true;
+          m.__sceVolRestored = true;
         } else {
           const now = Date.now();
           if (now - lastVolSaved > 1500 && isFinite(m.volume)) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
@@ -10892,7 +10997,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     toast('Speed ' + (CFG.speed / 100) + '×');
   }
   function clip(text, label) {
-    try { GM_setClipboard(text); } catch (e) { try { navigator.clipboard.writeText(text); } catch (e2) {} }
+    let ok = false;
+    try { ok = GM_setClipboard(text) !== false; } catch (e) {}
+    if (!ok) { try { navigator.clipboard.writeText(text).catch(() => {}); } catch (e2) {} }
     toast(label || 'Copied');
   }
   function copyTrackLink() {
@@ -10957,9 +11064,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     gmGetJSON(prog.url + (prog.url.indexOf('?') >= 0 ? '&' : '?') + 'client_id=' + encodeURIComponent(c)).then((j) => {
       if (j && j.url) {
         const name = String(d.title || 'track').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120) + '.mp3';
-        try { const a = D.createElement('a'); a.href = j.url; a.download = name; a.rel = 'noopener'; (D.body || D.documentElement).appendChild(a); a.click(); a.remove(); }
-        catch (e) { try { W.open(j.url, '_blank'); } catch (e2) {} }
-        toast('MP3 download started');
+        // the CDN is cross-origin, so <a download> would just navigate this tab
+        // away from SoundCloud — pull the file as a blob first, then save it
+        fetch(j.url, { mode: 'cors', credentials: 'omit' })
+          .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+          .then((b) => {
+            const a = D.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; a.rel = 'noopener';
+            (D.body || D.documentElement).appendChild(a); a.click(); a.remove();
+            setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 60000);
+            toast('MP3 download started');
+          })
+          .catch(() => { try { W.open(j.url, '_blank', 'noopener'); } catch (e2) {} toast('Opened the MP3 in a new tab — save it from there'); });
       } else toast('Could not fetch MP3');
     });
   }
@@ -11316,8 +11431,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     miniEl.appendChild(art); miniEl.appendChild(mid);
     let dg = null;
     miniEl.addEventListener('pointerdown', (e) => { if (e.target.closest && e.target.closest('button')) return; const r = miniEl.getBoundingClientRect(); dg = { dx: e.clientX - r.left, dy: e.clientY - r.top }; try { miniEl.setPointerCapture(e.pointerId); } catch (e2) {} miniEl.style.cursor = 'grabbing'; });
-    miniEl.addEventListener('pointermove', (e) => { if (!dg) return; const x = Math.min(Math.max(4, e.clientX - dg.dx), innerWidth - 232); const y = Math.min(Math.max(4, e.clientY - dg.dy), innerHeight - 60); miniEl.style.left = x + 'px'; miniEl.style.top = y + 'px'; miniEl.style.right = 'auto'; });
-    miniEl.addEventListener('pointerup', () => { if (dg) { try { SET('enh:minipos', { x: parseInt(miniEl.style.left, 10) || 0, y: parseInt(miniEl.style.top, 10) || 0 }); } catch (e) {} } dg = null; miniEl.style.cursor = 'grab'; });
+    miniEl.addEventListener('pointermove', (e) => { if (!dg) return; dg.moved = true; const x = Math.min(Math.max(4, e.clientX - dg.dx), innerWidth - 232); const y = Math.min(Math.max(4, e.clientY - dg.dy), innerHeight - 60); miniEl.style.left = x + 'px'; miniEl.style.top = y + 'px'; miniEl.style.right = 'auto'; });
+    miniEl.addEventListener('pointerup', () => { if (dg && dg.moved) { try { SET('enh:minipos', { x: parseInt(miniEl.style.left, 10) || 0, y: parseInt(miniEl.style.top, 10) || 0 }); } catch (e) {} } dg = null; miniEl.style.cursor = 'grab'; });   // a plain click must not save x:0
     (D.body || D.documentElement).appendChild(miniEl);
   }
   function ensureMini() {
@@ -11497,6 +11612,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['hideRelated', 'toggle', 'Hide related tracks', ''],
     ['hidePlayCounts', 'toggle', 'Hide play / like counts', 'Calmer feed'],
     ['hideUpload', 'toggle', 'Hide Upload button', ''],
+    ['hideStories', 'toggle', 'Hide stories bar', ''],
     ['SEC', 'Player'],
     ['speed', 'range', 'Playback speed', '%', 50, 200],
     ['speedPerTrack', 'toggle', 'Remember speed per track', 'Restore each track’s last speed'],
@@ -11572,7 +11688,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } else if (type === 'range') {
         const rng = D.createElement('input'); rng.type = 'range'; rng.className = 'rng'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
         const val = D.createElement('span'); val.className = 'val'; val.textContent = CFG[key] + (r[3] || '');
-        rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); save(); applyAll(); refreshBar(); });
+        rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); save(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
         row.appendChild(rng); row.appendChild(val);
       } else if (type === 'textarea') {
         row.style.display = 'block';
@@ -11625,7 +11741,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             try {
               const d = JSON.parse(rd.result);
               if (d && typeof d === 'object') {
-                for (const k of Object.keys(DEFAULTS)) if (k in d && typeof d[k] === typeof DEFAULTS[k]) CFG[k] = d[k];
+                for (const k of Object.keys(DEFAULTS)) if (k !== 'abLoop' && k in d && typeof d[k] === typeof DEFAULTS[k]) CFG[k] = d[k];   // A–B endpoints are live-only
                 save(); rebuildPanel(); applyAll(); toast('Settings imported');
               }
             } catch (e) { toast('That file isn’t enhancer settings'); }
@@ -11725,13 +11841,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const sel = D.createElement('select'); sel.setAttribute('aria-label', label);
           sel.style.cssText = 'background:rgba(255,255,255,.08);border:0;border-radius:8px;color:#fff;font:inherit;font-size:11.5px;padding:5px 8px;cursor:pointer;max-width:150px';
           for (const [v, t] of r[4]) { const o = D.createElement('option'); o.value = v; o.textContent = t; o.style.color = '#111'; if (CFG[key] === v) o.selected = true; sel.appendChild(o); }
-          sel.addEventListener('change', () => { CFG[key] = sel.value; if (key === 'theme') CFG.autoDark = false; save(); applyAll(); if (key === 'accent') enhancerRender(container); });
+          sel.addEventListener('change', () => { CFG[key] = sel.value; if (key === 'theme') CFG.autoDark = false; save(); applyAll(); if (key === 'accent' || key === 'theme') enhancerRender(container); });   // theme → custom palette editor / swatches follow
           row.appendChild(sel);
         } else if (type === 'range') {
           const rng = D.createElement('input'); rng.type = 'range'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
           rng.style.cssText = 'flex:none;width:108px;accent-color:' + ACC;
           const val = D.createElement('span'); val.textContent = CFG[key] + (r[3] || ''); val.style.cssText = 'flex:none;font-size:11px;color:#aaa;width:38px;text-align:right';
-          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); save(); applyAll(); refreshBar(); });
+          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); save(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
           row.appendChild(rng); row.appendChild(val);
         } else if (type === 'textarea') {
           row.style.display = 'block';
@@ -11778,7 +11894,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               ci.style.cssText = 'width:24px;height:22px;border:0;border-radius:6px;background:none;cursor:pointer;flex:none;padding:0';
               ci.setAttribute('aria-label', clabel + ' colour');
               let cT = 0;
-              ci.addEventListener('input', () => { CFG.customTheme[ck] = ci.value; clearTimeout(cT); cT = setTimeout(() => { save(); applyAll(); }, 120); });
+              ci.addEventListener('input', () => { if (CFG.customTheme === DEFAULTS.customTheme) CFG.customTheme = Object.assign({}, CFG.customTheme); CFG.customTheme[ck] = ci.value; clearTimeout(cT); cT = setTimeout(() => { save(); applyAll(); }, 120); });   // never edit DEFAULTS' own object
               cell.appendChild(ci); cell.appendChild(D.createTextNode(clabel));
               ed.appendChild(cell);
             }
@@ -11903,7 +12019,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     SUITE.enhancerRestore = (obj) => {
       try {
         if (!obj || typeof obj !== 'object') return;
-        for (const k of Object.keys(DEFAULTS)) if (k in obj && typeof obj[k] === typeof DEFAULTS[k]) CFG[k] = obj[k];
+        for (const k of Object.keys(DEFAULTS)) if (k !== 'abLoop' && k in obj && typeof obj[k] === typeof DEFAULTS[k]) CFG[k] = obj[k];   // A–B endpoints are live-only
         save(); applyAll();
       } catch (e) {}
     };
@@ -11946,6 +12062,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try { L.push('clientId=' + ((SUITE.clientId && SUITE.clientId()) ? 'yes' : 'no')); } catch (e) {}
     L.push('errors (' + errLog.length + '):');
     if (errLog.length) for (const ln of errLog) L.push('  ' + ln); else L.push('  (none captured)');
+    try { L.push('suite log:'); L.push(Log.dump()); } catch (e) {}   // the caught-failure ring the modules write to
     return L.join('\n');
   }
 

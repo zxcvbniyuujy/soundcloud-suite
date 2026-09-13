@@ -77,7 +77,10 @@
       done = document.execCommand('copy');
       ta.remove();
     } catch (e) {}
-    if (!done) { try { navigator.clipboard.writeText(String(text)); } catch (e) {} }
+    if (!done) { try { navigator.clipboard.writeText(String(text)).catch(() => {}); } catch (e) {} }
+    // Tampermonkey returns undefined; we return false when the synchronous copy
+    // failed so callers can fall back to (and report on) the async path
+    return done;
   };
 
   let seq = 0;
