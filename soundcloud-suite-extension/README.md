@@ -49,14 +49,17 @@ data-driven values such as artwork URLs, slider positions and drag offsets.
 `SUITE.toast(message, secondLine, { label, fn })` is the single notification
 for all three modules.
 
-The hub itself is a full-height panel docked to the right edge between
-SoundCloud's header and player bar, drawn in SoundCloud's own language:
-the Söhne web font the site loads, its flat greys and hairlines, its text
-tabs with the orange underline, a 2px orange progress line as the header's
-base (click along it to seek), and lyrics set as a regular-weight reading
-column where the sung part of the live line turns orange like a played
-waveform. A blurred wash of the cover art sits behind the header only.
-Dragging the panel's left edge changes the width (double-click resets).
+The hub itself is a frosted dark sheet floating just inside the right
+edge, between SoundCloud's header and player bar, set in the Söhne web
+font the site loads. The cover art, blurred and enlarged, lights the top
+of the sheet; the header is a Now Playing card whose base is a 4px orange
+progress bar (click along it to seek) with the time and the four actions
+in the band above it; the tabs are a segmented control; lyrics are large
+and bold, the live line bright with its sung words wiping to white; the
+Queue, Stats, Audio and Tweaks tabs lay their content out in rounded
+cards. SoundCloud orange is the one interactive accent; the artwork's
+colour is used only for the ambient light. Dragging the sheet's left edge
+changes the width (double-click resets).
 Press **D**, use ⋯ → Layout, or pull the header away from the edge to turn
 it into the compact floating card, which remembers its own position and
 size; **D** docks it again. Immersive mode (**F**) works from either.
