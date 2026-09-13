@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "SoundCloud SuperSuite",
+  "version": "4.51.0",
+  "description": "All-in-one SoundCloud enhancer — themes & declutter, player upgrades, a powerful synced-lyrics hub, and full-library shuffle with stats.",
+  "author": "you + bhackel",
+  "minimum_chrome_version": "111",
+  "permissions": ["unlimitedStorage"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Toggle SuperSuite lyrics (Alt+L)",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://soundcloud.com/*"],
+      "js": ["js/gm-shim.js", "js/suite.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://soundcloud.com/*"],
+      "js": ["js/bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "host_permissions": [
+    "https://soundcloud.com/*",
+    "https://*.soundcloud.com/*",
+    "https://lrclib.net/*",
+    "https://genius.com/*",
+    "https://*.genius.com/*",
+    "https://itunes.apple.com/*",
+    "https://apic-desktop.musixmatch.com/*",
+    "https://html.duckduckgo.com/*",
+    "https://api.lyrics.ovh/*",
+    "https://web.archive.org/*",
+    "https://api.allorigins.win/*",
+    "https://www.bing.com/*",
+    "https://www.mojeek.com/*",
+    "https://api.codetabs.com/*",
+    "https://krcs.kugou.com/*",
+    "http://krcs.kugou.com/*",
+    "https://lyrics.kugou.com/*",
+    "http://lyrics.kugou.com/*",
+    "https://music.163.com/*",
+    "https://api.listenbrainz.org/*",
+    "https://translate.googleapis.com/*"
+  ]
+}
