@@ -5195,6 +5195,14 @@
    *  5. LRC PARSING — with credit-line filtering
    * ------------------------------------------------------------------ */
 
+  // NetEase and Kugou answer an instrumental with a placeholder LRC instead of
+  // an empty one ("纯音乐，请欣赏" — "pure music, please enjoy", and variants);
+  // shown as lyrics it reads as a Chinese line over an English song
+  const LRC_PLACEHOLDER = /纯音乐|请欣赏|无歌词|暂无歌词|no lyrics/i;
+  function lrcIsPlaceholder(lines) {
+    return lines.length > 0 && lines.length <= 3 && lines.every((l) => LRC_PLACEHOLDER.test(l[1]));
+  }
+
   function parseLRC(raw, selfArtist, selfTitle) {
     const tagRe = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
     let offset = 0;
@@ -5575,6 +5583,7 @@
         const fromLrcRaw = (raw) => {
           if (!raw) return null;
           const lines = parseLRC(raw, c.a, c.t);
+          if (lrcIsPlaceholder(lines)) { Trail.add(`${c.src} body for "${c.t}" is an instrumental placeholder`); return null; }
           return lines.length ? { synced: true, lines } : null;
         };
         const p = c.src === 'genius'
@@ -9613,7 +9622,9 @@
           const raw = item.src === 'netease' ? await neteaseLyric(item.nid) : await kugouLyric(item.kid, item.kkey);
           if (raw) {
             const lines = parseLRC(raw, item.a, item.t);
-            if (lines.length) {
+            if (lrcIsPlaceholder(lines)) {
+              // an instrumental placeholder is not lyrics — leave the result empty
+            } else if (lines.length) {
               // same ladder as the automatic path: scale to the upload's length,
               // or render text when the version is too far off to trust.
               const fit = fitSync(lines, item.dur, wantDur);
