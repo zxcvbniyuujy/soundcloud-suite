@@ -105,7 +105,7 @@
     SUITE.DS = (() => {
       const css = `
 /*!__SS_DS__*/
-.ss { --ss-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; --ss-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+.ss { --ss-font: "Söhne", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;   /* Söhne is the web font soundcloud.com loads; document fonts reach shadow roots */ --ss-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --ss-bg: #111113; --ss-bg2: #1b1b1e; --ss-fill: rgba(255,255,255,.07); --ss-fill2: rgba(255,255,255,.12); --ss-fill3: rgba(255,255,255,.18); --ss-line: rgba(255,255,255,.09); --ss-line2: rgba(255,255,255,.2);
   --ss-tx: #f5f5f6; --ss-tx2: #a0a0a8; --ss-tx3: #6d6d76; --ss-acc: #ff5500; --ss-acc-h: #ff6a1f; --ss-acc-tx: #ff7a3d; --ss-acc-soft: rgba(255,85,0,.14); --ss-on-acc: #fff;
   --ss-ok: #34d17c; --ss-warn: #f5b942; --ss-bad: #ff5c5c; --ss-knob: #fff;
@@ -9081,7 +9081,9 @@
         }
       }
       let art = '';
-      const aEl = badge.querySelector('.sc-artwork');
+      // the badge wraps the artwork in a div that also carries .sc-artwork; the
+      // image URL lives on the inner span's inline style, so match on that
+      const aEl = badge.querySelector('.sc-artwork[style*="background-image"]') || badge.querySelector('.sc-artwork');
       if (aEl) {
         const m = (aEl.style.backgroundImage || '').match(/url\(["']?(.+?)["']?\)/);
         if (m) art = m[1];
