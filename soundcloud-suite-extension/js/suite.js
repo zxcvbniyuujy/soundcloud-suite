@@ -12495,8 +12495,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const balR = sliderRow('Balance', -100, 100, 5, () => num('balance', -100, 100), (x) => { CFG.balance = cl(x | 0, -100, 100); saveSoon(); applyFx(); }, (x) => (x < 0 ? 'L ' + (-x | 0) : x > 0 ? 'R ' + (x | 0) : 'Centre'), 0);
       balR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(balR.row);
       const monoRow = toggleRow('Mono', 'Same sound in both ears · for one earbud or a single speaker', 'monoOn');
+      // swap L / R (WP10): falls out of the 2×2 matrix — the rows swap, balance still applies per output
+      const swapRow = toggleRow('Swap left / right', 'Left channel in the right ear and vice versa · for reversed headphones', 'swapLR');
       liveSync.push(syncSlider(wR, () => cl(CFG.stereoWidth | 0, 0, 200)), syncSlider(balR, () => num('balance', -100, 100)),
-        () => { cfRow.sw._paint(); monoRow.sw._paint(); paintMd(); const mv = cfMode(); if (mdSel.value !== mv) mdSel.value = mv; });
+        () => { cfRow.sw._paint(); monoRow.sw._paint(); swapRow.sw._paint(); paintMd(); const mv = cfMode(); if (mdSel.value !== mv) mdSel.value = mv; });
 
       // a paste area with Apply / Cancel under it, hidden until its opener shows it (2.8, 2.22);
       // Apply keeps the box open when the text was refused (the toast says why)
