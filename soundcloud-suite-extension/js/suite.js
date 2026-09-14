@@ -11549,15 +11549,21 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       sceFx.add(entry);
       // SC reuses one source node in practice; if it ever makes fresh ones per track, keep
       // the iterated set bounded (oldest entry = stalest/dead source) AND take the evicted
-      // chain out of the graph: routed back to passthrough, its input and its worklet leg
-      // disconnected, nothing of it is reachable from the destination, so it costs no
-      // render time (a limiter left connected would keep processing silence forever)
+      // chain out of the graph: routed back to passthrough, then every node disconnected.
+      // Detaching the ends is not enough — the analyser taps have no outputs, so Chromium
+      // pulls them itself every render quantum, and through them the whole chain behind
+      // them (five compressors, two resamplers, the limiter) would keep rendering silence.
       if (sceFx.size > 6) {
         try {
           const old = sceFx.values().next().value; sceFx.delete(old);
           old.routed = false; try { old.reroute(); } catch (e) {}
-          try { old.chain.input.disconnect(); } catch (e) {}
-          try { old.chain.gB.disconnect(); } catch (e) {}
+          const walk = (v) => {
+            if (!v || typeof v !== 'object' || ArrayBuffer.isView(v)) return;
+            if (typeof v.disconnect === 'function' && typeof v.context === 'object') { try { v.disconnect(); } catch (e) {} return; }
+            if (Array.isArray(v)) { v.forEach(walk); return; }
+            for (const k in v) walk(v[k]);
+          };
+          walk(old.chain);
         } catch (e) {}
       }
       if (ctx.__sceTpLimiterOk === true) attachGuard(entry); else loadGuard(ctx);
