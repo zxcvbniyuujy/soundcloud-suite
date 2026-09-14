@@ -10877,7 +10877,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const bass = biq('lowshelf', 100, null, 0);
     // 8b. harmonic bass (WP10): a parallel branch off `bass` for small speakers — lowpass 120 Hz → a soft shaper
     //     x·|x|·0.8 + 0.2·x (no oversampling: its input is band-limited) → bandpass 180 Hz Q 0.9 → gain 0..0.5,
-    //     summed with the direct path in bassSum. applyFx disconnects the branch input at 0: an exact identity.
+    //     summed with the direct path in bassSum. applyFx disconnects the branch input at 0 (pinning the gain to 0 as
+    //     it does: a node whose input went silent is no longer processed, so its readable gain would freeze mid-ramp).
     const bassSum = gain(1), hLP = biq('lowpass', 120, BW, 0), hBP = biq('bandpass', 180, 0.9, 0), hGain = gain(0);
     const hShape = ctx.createWaveShaper();
     try { hShape.oversample = 'none'; const HN = 1025, hc = new Float32Array(HN); for (let i = 0; i < HN; i++) { const x = (i / (HN - 1)) * 2 - 1; hc[i] = x * Math.abs(x) * 0.8 + 0.2 * x; } hShape.curve = hc; } catch (e) {}
@@ -11218,7 +11219,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         w(c.hGain.gain, harm, 0.05);
         if ((harm > 0) !== !!c.harmOn) {
           c.harmOn = harm > 0;
-          try { if (c.harmOn) c.bass.connect(c.hLP); else setTimeout(() => { try { if (!c.harmOn) c.bass.disconnect(c.hLP); } catch (er) {} }, 80); } catch (er) {}
+          try { if (c.harmOn) c.bass.connect(c.hLP); else setTimeout(() => { try { if (!c.harmOn) { c.hGain.gain.cancelScheduledValues(0); c.hGain.gain.value = 0; c.bass.disconnect(c.hLP); } } catch (er) {} }, 250); } catch (er) {}
         }
         w(c.warm.gain, enhOn ? enhAmt * 1.5 : 0); w(c.air.gain, enhOn ? enhAmt * 3 : 0);
         try {
@@ -11241,7 +11242,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           c.rvOn = rv > 0;
           try {
             if (c.rvOn) { if (!c.conv.buffer) c.conv.buffer = reverbIr(e.ctx); c.mxMerge.connect(c.conv); c.conv.connect(c.rvWet); }
-            else setTimeout(() => { try { if (!c.rvOn) { c.mxMerge.disconnect(c.conv); c.conv.disconnect(c.rvWet); } } catch (er) {} }, 80);
+            else setTimeout(() => { try { if (!c.rvOn) { c.rvWet.gain.cancelScheduledValues(0); c.rvWet.gain.value = 0; c.mxMerge.disconnect(c.conv); c.conv.disconnect(c.rvWet); } } catch (er) {} }, 250);
           } catch (er) {}
         }
         if (!keep('loudnessOn')) w(c.makeup.gain, 1, 0.05);   // Compare never touches the loudness gain
@@ -11301,7 +11302,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   // post-limiter peak / mean power (what actually reaches the speakers) plus the
   // untouched source peak, read from the newest routed chain's taps into `meter` (dBFS)
-  function peakTick() {
+  function peakTick(vote) {   // vote: the 1 Hz / 500 ms meter ticks decide the mono-upload verdict; the tab's 10 Hz reads only paint
     try {
       let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); if (!e) return;
       const c = e.chain;
@@ -11327,6 +11328,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // a stereo track reads low on every tick, so three low reads in a row lift the verdict; one stray read never does
       const guard = (+CFG.vocalAmt || 0) !== 0;
       const lift = () => { monoSince = 0; monoLow = 0; if (meter.monoSrc) { meter.monoSrc = false; applyFx(); } };
+      if (!vote) return;
       if (!guard) lift();
       else if (corr > 0.98) { monoLow = 0; const t = Date.now(); if (!monoSince) monoSince = t; else if (t - monoSince > 3000 && !meter.monoSrc) { meter.monoSrc = true; applyFx(); } }
       else if (corr <= 0.98 && ++monoLow >= 3) lift();
@@ -11378,7 +11380,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // the 500 ms loop: output meter, then one 400 ms K-weighted block from the source taps →
   // momentary / short-term / gated integrated loudness → the gain once 3 s have been heard
   function loudTick() {
-    peakTick();
+    peakTick(true);
     try {
       if (!CFG.loudnessOn) return;
       const e = newestRouted(); if (!e) return;
@@ -11630,7 +11632,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.speedPerTrack) restoreTrackSpeed(); } catch (e) {}
       try { if (CFG.eqPerTrack) restoreTrackEq(); } catch (e) {}
       try { restoreTrackLoud(); } catch (e) {}
-      try { if (fxRouted && !loudTimer) peakTick(); } catch (e) {}
+      try { if (fxRouted && !loudTimer) peakTick(true); } catch (e) {}
       try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
       const m = activeMedia();
       if (!m) return;
@@ -12882,7 +12884,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // sleep-timer fade (WP10): module 1 asks for it. With the chain routed, a linear ramp of every routed chain's output
   // gain to 0.02 in `sec` s — after the limiter, so it never pumps, and the element's volume (SoundCloud's slider)
   // stays put; 0 restores unity after the pause. false when nothing is routed: module 1 steps the volume instead.
-  // The ramp lands half a second early: module 1's pause click is on the wall clock, the ramp on the audio clock.
+  // The ramp lands a second early (the floor is −34 dB, so nothing is heard of it): module 1's pause click is on the
+  // wall clock, the ramp on the audio clock, and the two drift apart on a busy machine.
   try {
     SUITE.audioFadeOut = (sec) => {
       let any = false;
@@ -12891,7 +12894,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try {
           const g = e.chain.output.gain, t = e.ctx.currentTime || 0;
           g.cancelScheduledValues(t);
-          if (sec > 0) { g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0.02, t + Math.max(1, sec - 0.5)); } else g.setValueAtTime(1, t);
+          if (sec > 0) { g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0.02, t + Math.max(1, sec - 1)); } else g.setValueAtTime(1, t);
           any = true;
         } catch (er) {}
       });
@@ -12958,7 +12961,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           headroomDb: lastHeadroomDb, curveVer: eqCurveVer, needsLimiter: needsLimiter(),
           branches: e ? { harm: !!e.chain.harmOn, reverb: !!e.chain.rvOn } : null, nodes: () => (e ? e.chain : null),
           ir: (() => { try { const b = e && e.chain.conv.buffer; if (!b) return null; const a0 = b.getChannelData(0), a1 = b.getChannelData(1); let s01 = 0, s00 = 0, s11 = 0; for (let i = 0; i < a0.length; i++) { s01 += a0[i] * a1[i]; s00 += a0[i] * a0[i]; s11 += a1[i] * a1[i]; } return { sec: b.duration, ch: b.numberOfChannels, corr: s01 / Math.sqrt(s00 * s11) }; } catch (er) { return null; } })(),
-          meterTick: () => { peakTick(); return Object.assign({}, meter); },
+          meterTick: () => { peakTick(true); return Object.assign({}, meter); },
           composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb) }; },
           calib: () => { const o = {}; _calib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
           set: (k, v) => { CFG[k] = v; save(); applyFx(); }, get: (k) => CFG[k], cfg: () => Object.assign({}, CFG),
