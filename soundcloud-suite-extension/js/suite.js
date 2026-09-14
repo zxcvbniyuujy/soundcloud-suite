@@ -3727,6 +3727,7 @@
           // track (preload/stale) — trust the timeline instead of drifting away.
           if (a > 0 && Math.abs(raw - a) > 2.5) { clk.reset(); return a; }
           let L = 0; try { if (SUITE.audioLatency) L = (SUITE.audioLatency() || 0) / 1000; } catch (e) {}
+          try { if (SUITE.audioRate) L *= (SUITE.audioRate() || 1); } catch (e) {}   // output seconds → media seconds
           return Math.max(0, clk.smooth(raw) - L);
         }
         // FALLBACKS (these already lag ~1 s by nature): no extra latency on top
@@ -7021,6 +7022,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       applyChrome();
       if (mood !== 'auto') setAccent(MOOD_RGB[mood]);
       if (tab !== 'lyrics') setTab(tab);   // restore the last-used hub tab
+      // the panel is still closed: a remembered Audio tab must not route the FX
+      // chain (latency + CPU with nothing visible); setOpen(true) re-activates it
+      if (tab === 'audio') { try { if (SUITE.audioTabActive) SUITE.audioTabActive(false); } catch (e) {} }
       // no rAF here: the loop starts in setOpen(true) and parks itself when
       // the panel closes — zero per-frame work for users who never open it
     }
@@ -10092,15 +10096,39 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     fadeOn: false,          // fade tracks in/out to smooth the gap
     enhanceOn: false,       // psychoacoustic enhancer: air shelf + warmth + punch
     enhanceAmt: 50,         // enhancer intensity 0..100
-    widenAmt: 0,            // stereo width 0..100 (0 = neutral passthrough)
+    stereoWidth: 100,       // stereo width 0..200 (100 = normal, 0 = mono)
     rememberVol: true,      // restore volume across sessions
     loopTrack: false,       // loop the current track
     pauseOnHide: false,     // pause when the tab is hidden
     volScroll: true,        // scroll wheel over the player bar = volume
     keySeek: false,         // 0–9 seek %, [ ] = ±10s, when not typing (opt-in)
     hotkeys: false,         // global one-key shortcuts (opt-in)
-    abLoop: false,          // A–B loop is armed (set live via buttons)
     miniPlayer: false,      // draggable floating now-playing widget
+    cfgVer: 2,              // settings schema version (migrateCfg)
+    // ── audio: EQ ──
+    eqAutoPre: true,        // lower the pre-amp by the composite boost (auto-headroom)
+    peqOn: false,           // headphone correction bank (AutoEQ)
+    peq: [],                // ≤10 × { t:'PK'|'LSC'|'HSC', f:20..20000, g:-15..15, q:0.1..10 }
+    peqPreamp: 0,           // -15..0 dB, from the AutoEQ "Preamp" line
+    peqName: '',            // ≤40 chars
+    // ── audio: tone ──
+    bassDb: 0,              // 0..9 (step .5); the 25 Hz rumble filter engages automatically under any LF boost
+    tiltDb: 0,              // -4..4 (step .5), per shelf
+    vocalAmt: 0,            // -100..100
+    loudCompOn: false, loudCompAmt: 6,   // 0..9 dB (no slider yet)
+    listenOn: '',           // '' | 'headphones' | 'laptop' | 'speakers' (which chip is lit)
+    // ── audio: stereo (stereoWidth is above, where widenAmt used to be) ──
+    crossfeedOn: false, crossfeedMode: 'natural',   // subtle | natural | strong
+    balance: 0,             // -100..100
+    monoOn: false, swapLR: false,
+    // ── audio: loudness & dynamics ──
+    loudTarget: -14,        // -18 | -14 | -11 LUFS
+    boostAmt: 100,          // 100..300 %
+    limiterOn: true,
+    nightOn: false, nightAmt: 50,        // 0..100
+    // ── audio: playback ──
+    vinylMode: false,
+    fadeIn: 0.6, fadeOut: 2.5,           // 0..3 s, 0..8 s
     // ── toolbar buttons ──
     barSpeed: true, barCopy: true, barRestart: true, barAB: false, barInfo: true,
   };
@@ -10222,6 +10250,64 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
   let CFG = Object.assign({}, DEFAULTS, GET('enh:cfg', {}) || {});
   const save = () => SET('enh:cfg', CFG);
+  // trailing debounce for drags (sliders, the EQ canvas): nodes ramp on every
+  // input event, storage is written once the hand stops moving
+  let _saveT = 0;
+  const saveSoon = () => { clearTimeout(_saveT); _saveT = setTimeout(save, 250); };
+  // every audio key: what Copy/Paste/Reset walk, and what the import clamps cover
+  const AUDIO_KEYS = ['speed', 'speedPerTrack', 'eqOn', 'eqBands', 'eqPreamp', 'eqCustom', 'eqAutoPre', 'peqOn', 'peq', 'peqPreamp', 'peqName',
+    'bassDb', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR',
+    'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'loopTrack', 'rememberVol'];
+  // numeric ranges [min, max, step], string caps { max }, enums { one: [...] }
+  const AUDIO_CLAMP = {
+    speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
+    loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
+    fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1],
+    peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
+  };
+  const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
+  // one PEQ filter entry, re-validated field by field (data only)
+  const clampPeq = (f) => {
+    if (!f || typeof f !== 'object') return null;
+    const t = (f.t === 'LSC' || f.t === 'HSC') ? f.t : 'PK';
+    return { t, f: clampNum(f.f, 20, 20000, 0), g: clampNum(f.g, -15, 15, 0), q: clampNum(f.q == null ? 0.7 : f.q, 0.1, 10, 0) };
+  };
+  // returns a sanitized value for an audio key, or the default when the shape is wrong
+  const clampAudioKey = (k, v) => {
+    const d = DEFAULTS[k];
+    if (k === 'eqBands') { const a = Array.isArray(v) ? v : []; const out = []; for (let i = 0; i < 10; i++) out.push(clampNum(a[i], -12, 12, 1)); return out; }
+    if (k === 'peq') { return (Array.isArray(v) ? v : []).map(clampPeq).filter(Boolean).slice(0, 10); }
+    if (k === 'eqCustom') { return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}; }
+    if (typeof v !== typeof d) return (d && typeof d === 'object') ? JSON.parse(JSON.stringify(d)) : d;
+    const c = AUDIO_CLAMP[k];
+    if (!c) return v;
+    if (Array.isArray(c)) return clampNum(v, c[0], c[1], c[2]);
+    if (c.one) return c.one.indexOf(v) >= 0 ? v : d;
+    if (c.max) return String(v).slice(0, c.max);
+    return v;
+  };
+  // clamp every audio key currently in CFG (after an import / paste)
+  function clampAudioCfg() { try { for (const k of AUDIO_KEYS) CFG[k] = clampAudioKey(k, CFG[k]); } catch (e) {} }
+  // one-shot schema migration for existing users (idempotent; runs before any
+  // Web Audio capture so the chain never sees a pre-migration CFG)
+  function migrateCfg() {
+    try {
+      const stored = GET('enh:cfg', null);
+      // the version must come from what was STORED: CFG already carries the
+      // DEFAULTS cfgVer, so reading it there would skip every existing user
+      const ver = (stored && typeof stored === 'object') ? (stored.cfgVer | 0) : 2;
+      if (ver >= 2) return;
+      if (stored && typeof stored === 'object') {                       // an existing user
+        if ('widenAmt' in stored) { const w = Math.max(0, Math.min(100, +stored.widenAmt || 0)); CFG.stereoWidth = Math.round(100 + w * 0.9); }
+        // keep what they hear: no automatic level drop for boost-heavy EQs
+        const b = Array.isArray(stored.eqBands) ? stored.eqBands : [];
+        if (stored.eqOn && (Math.max(0, ...b.map(Number)) > 0 || (+stored.eqPreamp || 0) > 0)) CFG.eqAutoPre = false;
+      }
+      delete CFG.widenAmt; delete CFG.abLoop; delete CFG.rumbleOn;
+      CFG.cfgVer = 2; save();
+    } catch (e) {}
+  }
+  migrateCfg();
 
   const activeMedia = () => {
     // SoundCloud plays through the Web Audio API with a DETACHED media element
@@ -10535,10 +10621,42 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * prototype — so nothing else on the page is affected. Every step is guarded;
    * any failure falls back to the original connect. */
   const sceFx = new Set();   // { ctx, src, chain, dests, reroute }
-  let fxRouted = false, audioTabOn = false;
+  let fxRouted = false, audioTabOn = false, fxBypass = false;
+  let paintCmp = null;     // set by audioRender (the Compare button's painter); null until the tab has rendered
+  let loudTimer = 0;       // the loudness measurement interval (started/stopped by applyFx)
+  const meter = {};        // live meter values { m, s, i, peak, outDb, gainDb, gr, limGr } — filled by the meter loops
+  // the one AudioParam writer for everything audible: a short linear ramp so
+  // toggles never click; linear ramps arrive exactly, so inert values are exact
+  function ramp(p, v, t, s) {
+    try { p.cancelScheduledValues(t); p.setValueAtTime(p.value, t); p.linearRampToValueAtTime(v, t + (s || 0.03)); }
+    catch (e) { try { p.value = v; } catch (e2) {} }
+  }
+  // what the chain adds on top of the device latency, in ms. Chromium's
+  // DynamicsCompressor has a fixed pre-delay of floor(0.006·sr) frames (≈ 6 ms at
+  // every rate) even at ratio 1; the chain carries two (comp + clip guard) → 12 ms
+  // whenever routed. The WaveShaper's 2× oversampling adds 128 samples while
+  // Enhance is on (Compare leaves oversample alone, so key on CFG.enhanceOn only).
+  function fxLatencyMs() {
+    if (!fxRouted) return 0;
+    const sr = (sceLastCtx && sceLastCtx.sampleRate) || 48000;
+    return 12 + (CFG.enhanceOn ? Math.round(128000 / sr) : 0);
+  }
+  // Compare: a parameter-level bypass (routing stays, so no click and the
+  // spectrum keeps running). Live state only — never persisted.
+  function setBypass(v) {
+    v = !!v;
+    if (v === fxBypass) { try { if (paintCmp) paintCmp(v); } catch (e) {} return; }
+    fxBypass = v;
+    try { applyFx(); } catch (e) {}
+    try { if (paintCmp) paintCmp(v); } catch (e) {}
+  }
+  // a held Compare whose keyup/pointerup was lost (Alt-Tab, screenshot key, the
+  // hub closing) must never leave the player on the original
+  try { W.addEventListener('blur', () => { try { setBypass(false); } catch (e) {} }); } catch (e) {}
+  try { D.addEventListener('visibilitychange', () => { try { if (D.hidden) setBypass(false); } catch (e) {} }); } catch (e) {}
   // the Audio tab routes the (transparent) chain so the spectrum analyser gets a
   // live signal even before any effect is actually enabled
-  function fxOn() { return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || (CFG.widenAmt | 0) > 0 || audioTabOn); }
+  function fxOn() { return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || (CFG.stereoWidth | 0) !== 100 || audioTabOn); }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
   const EQ_LABELS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
   const EQ_PRESETS = {
@@ -10654,16 +10772,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function applyFx() {
     try {
       const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
+      const on = (k) => !fxBypass && !!CFG[k];   // stages Compare bypasses
       sceFx.forEach((e) => {
         const c = e.chain;
-        for (let i = 0; i < c.bands.length; i++) { try { c.bands[i].gain.value = CFG.eqOn ? Math.max(-12, Math.min(12, +bands[i] || 0)) : 0; } catch (er) {} }
-        try { c.preamp.gain.value = CFG.eqOn ? Math.pow(10, Math.max(-12, Math.min(12, +CFG.eqPreamp || 0)) / 20) : 1; } catch (er) {}
+        for (let i = 0; i < c.bands.length; i++) { try { c.bands[i].gain.value = on('eqOn') ? Math.max(-12, Math.min(12, +bands[i] || 0)) : 0; } catch (er) {} }
+        try { c.preamp.gain.value = on('eqOn') ? Math.pow(10, Math.max(-12, Math.min(12, +CFG.eqPreamp || 0)) / 20) : 1; } catch (er) {}
         if (!CFG.loudnessOn) { try { c.makeup.gain.value = 1; } catch (er) {} }
         if (!CFG.fadeOn) { try { c.output.gain.cancelScheduledValues(e.ctx.currentTime || 0); c.output.gain.value = 1; } catch (er) {} }
         // ── enhancer (air + warmth + punch), inert when off ──
         try {
           const amt = Math.max(0, Math.min(100, +CFG.enhanceAmt || 0)) / 100;
-          if (CFG.enhanceOn) {
+          if (on('enhanceOn')) {
             c.air.gain.value = amt * 6;
             c.shaper.curve = satCurve(amt);
             c.comp.threshold.value = -22; c.comp.knee.value = 8; c.comp.ratio.value = 2 + amt * 2; c.comp.attack.value = 0.004; c.comp.release.value = 0.22;
@@ -10672,12 +10791,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             c.shaper.curve = null;
             c.comp.threshold.value = 0; c.comp.knee.value = 0; c.comp.ratio.value = 1;
           }
-          const wa = Math.max(0, Math.min(100, +CFG.widenAmt || 0)) / 100;
-          c.widener.gain.value = 1 + wa * 0.9;   // 1 = neutral/passthrough, up to ~1.9 = wide
+          const sw = Math.max(0, Math.min(200, +CFG.stereoWidth || 0)) / 100;
+          c.widener.gain.value = fxBypass ? 1 : sw;   // 1 = neutral/passthrough (bit-exact), 0 = mono, 2 = side +6 dB
         } catch (er) {}
       });
-      const on = fxOn();
-      if (on !== fxRouted) { fxRouted = on; sceFx.forEach((e) => { try { e.reroute(); } catch (er) {} }); }
+      const want = fxOn();
+      if (want !== fxRouted) { fxRouted = want; sceFx.forEach((e) => { try { e.reroute(); } catch (er) {} }); }
     } catch (e) {}
   }
   function updateLoudness() {
@@ -10813,25 +10932,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
       }
       // A–B loop: jump back to A once we pass B
-      if (CFG.abLoop && abA != null && abB != null && abB > abA) {
+      if (abOn && abA != null && abB != null && abB > abA) {
         try { if (m.currentTime >= abB || m.currentTime < abA - 0.5) m.currentTime = abA; } catch (e) {}
       }
     } catch (e) {}
   }
   /* A–B loop endpoints (live, not persisted) */
-  let abA = null, abB = null;
-  // The endpoints are live-only, so a persisted "armed" flag is always stale on a
-  // fresh load — clear it so the pill doesn't paint engaged with no loop active.
-  if (CFG.abLoop) { CFG.abLoop = false; save(); }
+  let abOn = false, abA = null, abB = null, abT = 0, abI = 0;   // abT/abI: the wrap timers (armed by armAb)
   function abMark() {
     const m = activeMedia();
     if (!m || !isFinite(m.currentTime)) { toast('Play a track first'); return; }
-    if (abA == null || abB != null) { abA = m.currentTime; abB = null; CFG.abLoop = false; save(); toast('A set — mark B next'); }
-    else if (m.currentTime > abA) { abB = m.currentTime; CFG.abLoop = true; save(); toast('A–B loop on'); }
+    if (abA == null || abB != null) { abA = m.currentTime; abB = null; abOn = false; toast('A set — mark B next'); }
+    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; toast('A–B loop on'); }
     else { abA = m.currentTime; toast('A moved'); }
     refreshBar();
   }
-  function abClear() { abA = abB = null; CFG.abLoop = false; save(); refreshBar(); toast('A–B loop cleared'); }
+  function abClear() { abA = abB = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast('A–B loop cleared'); }
   function restartTrack() {
     const m = activeMedia();
     try { if (m) { m.currentTime = 0; toast('Restarted'); } } catch (e) {}
@@ -11009,7 +11125,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
     toast('Speed ' + (CFG.speed / 100) + '×');
   }
+  let _lastClip = '';
   function clip(text, label) {
+    _lastClip = String(text == null ? '' : text);
     let ok = false;
     try { ok = GM_setClipboard(text) !== false; } catch (e) {}
     if (!ok) { try { navigator.clipboard.writeText(text).catch(() => {}); } catch (e2) {} }
@@ -11248,7 +11366,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     CFG.eqBands = arr;
     let flipped = false;
     if (!CFG.eqOn) { CFG.eqOn = true; flipped = true; }   // touching the EQ turns it on
-    save(); applyFx();
+    saveSoon(); applyFx();
     if (flipped && eqRepaint) eqRepaint();
   }
   function applyEqPreset(arr) {
@@ -11276,13 +11394,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         paint(); sw.addEventListener('click', () => { toggle(); paint(); }); sw._paint = paint; return sw;
       };
       // one clean slider row: label · track · value
-      const sliderRow = (label, mn, mx, st, get, set, fmt) => {
+      const sliderRow = (label, mn, mx, st, get, set, fmt, resetTo) => {
         const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0';
         const l = D.createElement('span'); l.textContent = label; l.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
         const r = D.createElement('input'); r.type = 'range'; r.min = mn; r.max = mx; r.step = st; r.value = get(); r.className = 'sxr'; r.style.cssText = 'flex:1';
         const v = D.createElement('span'); v.style.cssText = 'flex:none;width:46px;text-align:right;font-size:11.5px;color:#86868e;font-variant-numeric:tabular-nums';
         const paint = () => { const cur = +r.value; const pct = (cur - mn) / (mx - mn) * 100; r.style.background = 'linear-gradient(90deg,' + ACC + ' ' + pct + '%,rgba(255,255,255,.12) ' + pct + '%)'; v.textContent = fmt(cur); };
         paint(); r.addEventListener('input', () => { set(+r.value); paint(); }); r._paint = paint;
+        if (resetTo != null) { l.title = label + ' · double-click resets'; l.style.cursor = 'default'; l.addEventListener('dblclick', () => { try { r.value = resetTo; set(+r.value); paint(); } catch (e) {} }); }
         row.append(l, r, v); return { row, input: r, paint };
       };
       const sectionLabel = (txt) => { const s = D.createElement('div'); s.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#76767e;margin:22px 2px 6px'; const d = D.createElement('span'); d.style.cssText = 'width:10px;height:2px;border-radius:2px;flex:none;background:rgba(255,255,255,.16)'; const t = D.createElement('span'); t.textContent = txt; s.append(d, t); return s; };
@@ -11300,7 +11419,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       stage.appendChild(canvas); host.appendChild(stage);
 
       // ── pre-amp ──
-      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } save(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB');
+      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB', 0);
       pre.row.style.cssText += ';margin-top:6px;border-top:1px solid rgba(255,255,255,.05)';
       host.appendChild(pre.row);
 
@@ -11325,11 +11444,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const enhHead = D.createElement('div'); enhHead.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)';
       const enhTx = D.createElement('div'); enhTx.style.cssText = 'flex:1';
       enhTx.innerHTML = '<div style="font-size:12.5px;color:#e6e6ea">Enhance audio</div><div style="font-size:10.5px;color:#7c7c84;margin-top:2px">Restores clarity, warmth &amp; punch</div>';
-      const intR = sliderRow('Intensity', 0, 100, 5, () => CFG.enhanceAmt | 0, (x) => { CFG.enhanceAmt = x | 0; if (!CFG.enhanceOn) { CFG.enhanceOn = true; enhSw._paint(); intR.row.style.opacity = '1'; } save(); applyFx(); }, (x) => (x | 0) + '%');
+      const intR = sliderRow('Intensity', 0, 100, 5, () => CFG.enhanceAmt | 0, (x) => { CFG.enhanceAmt = x | 0; if (!CFG.enhanceOn) { CFG.enhanceOn = true; enhSw._paint(); intR.row.style.opacity = '1'; } saveSoon(); applyFx(); }, (x) => (x | 0) + '%', 50);
       const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; });
       enhHead.append(enhTx, enhSw); host.appendChild(enhHead);
       intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; host.appendChild(intR.row);
-      const wR = sliderRow('Stereo width', 0, 100, 5, () => CFG.widenAmt | 0, (x) => { CFG.widenAmt = x | 0; save(); applyFx(); }, (x) => (x | 0) + '%');
+      const wR = sliderRow('Stereo width', 0, 200, 5, () => CFG.stereoWidth | 0, (x) => { CFG.stereoWidth = x | 0; saveSoon(); applyFx(); }, (x) => ((x | 0) === 0 ? 'Mono' : (x | 0) === 100 ? 'Normal' : (x | 0) + '%'), 100);
       host.appendChild(wR.row);
 
       // ── effects ──
@@ -11393,7 +11512,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   try { SUITE.audioRender = audioRender; } catch (e) {}
-  try { SUITE.audioTabActive = (on) => { audioTabOn = !!on; try { applyFx(); } catch (e) {} }; } catch (e) {}
+  try { SUITE.audioTabActive = (on) => { audioTabOn = !!on; if (!on) setBypass(false); try { applyFx(); } catch (e) {} }; } catch (e) {}
   // expose the captured audio element's clock + the AudioContext output latency
   // so the lyrics engine can sync the highlight to what's HEARD, not just decoded
   try { SUITE.audioClock = () => { try {
@@ -11414,7 +11533,82 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (best) return best.currentTime;
     const m = activeMedia(); return (m && isFinite(m.currentTime) && m.currentTime > 0) ? m.currentTime : null;
   } catch (e) { return null; } }; } catch (e) {}
-  try { SUITE.audioLatency = () => { try { const c = sceLastCtx; if (!c) return sceLatMs; const l = (c.outputLatency || c.baseLatency || 0); const raw = (l > 0 && l < 0.6) ? Math.round(l * 1000) : 0; if (raw > 0 && Math.abs(raw - sceLatMs) >= 5) sceLatMs = raw; return sceLatMs; } catch (e) { return sceLatMs; } }; } catch (e) {}
+  // device output latency (smoothed) + whatever the FX chain adds — in output ms
+  try { SUITE.audioLatency = () => { try { const c = sceLastCtx; if (c) { const l = (c.outputLatency || c.baseLatency || 0); const raw = (l > 0 && l < 0.6) ? Math.round(l * 1000) : 0; if (raw > 0 && Math.abs(raw - sceLatMs) >= 5) sceLatMs = raw; } return sceLatMs + fxLatencyMs(); } catch (e) { return sceLatMs; } }; } catch (e) {}
+  // the hub converts that latency from output seconds to media seconds
+  try { SUITE.audioRate = () => wantedRate(); } catch (e) {}
+  // composite EQ response at one frequency (dB) from the newest chain's live bands
+  function eqCurveDbAt(f) {
+    try {
+      const e = [...sceFx].pop(); if (!e) return 0;
+      const fr = new Float32Array([+f || 1000]), mag = new Float32Array(1), ph = new Float32Array(1);
+      let db = 0;
+      const add = (n) => { try { n.getFrequencyResponse(fr, mag, ph); if (mag[0] > 0) db += 20 * Math.log10(mag[0]); } catch (er) {} };
+      (e.chain.bands || []).forEach(add);
+      return db;
+    } catch (e) { return 0; }
+  }
+  // the saturation curve's value at x ∈ [−1, 1] for the current Enhance intensity
+  function satCurveAt(x) {
+    try {
+      const c = satCurve(Math.max(0, Math.min(100, +CFG.enhanceAmt || 0)) / 100);
+      const i = Math.round((Math.max(-1, Math.min(1, +x || 0)) + 1) / 2 * (c.length - 1));
+      return c[Math.max(0, Math.min(c.length - 1, i))];
+    } catch (e) { return NaN; }
+  }
+  /* ── debug accessor — only when the user opted into debug (localStorage 'scss:debug' = '1').
+   * Snapshots every node in the newest chain generically (AudioParams read .value), so
+   * later chain stages are covered without touching this block. Mirrored on the window
+   * under the same gate because SUITE itself is closure-private. ── */
+  try {
+    let dbgOn = false; try { dbgOn = W.localStorage.getItem('scss:debug') === '1'; } catch (e) {}
+    if (dbgOn) {
+      const isAudioNode = (n) => !!(n && typeof n === 'object' && typeof n.connect === 'function' && typeof n.context === 'object');
+      const isParam = (p) => !!(p && typeof p === 'object' && typeof p.value === 'number' && typeof p.setValueAtTime === 'function');
+      const snapNode = (n) => {
+        const out = {};
+        for (const k in n) {
+          if (k === 'context' || k.indexOf('channel') === 0 || k.indexOf('numberOf') === 0 || k.indexOf('on') === 0) continue;
+          let v; try { v = n[k]; } catch (e) { continue; }
+          if (isParam(v)) out[k] = v.value;
+          else if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') out[k] = v;
+          else if (k === 'curve') out.hasCurve = !!v;
+        }
+        return out;
+      };
+      const snapAny = (v, depth) => {
+        if (v == null || depth > 3) return undefined;
+        if (isAudioNode(v)) return snapNode(v);
+        if (ArrayBuffer.isView(v)) return undefined;
+        if (Array.isArray(v)) return v.map((x) => snapAny(x, depth + 1));
+        if (typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) { const r = snapAny(v[k], depth + 1); if (r !== undefined) o[k] = r; } return o; }
+        return undefined;
+      };
+      const snapshot = () => {
+        const e = [...sceFx].pop(); if (!e || !e.chain) return null;
+        const out = snapAny(e.chain, 0) || {};
+        try { out.shaperOversample = e.chain.shaper.oversample; } catch (er) {}
+        return out;
+      };
+      SUITE.audioDebug = () => {
+        const e = [...sceFx].pop();
+        let hasCurve = false; try { hasCurve = !!(e && e.chain.shaper.curve); } catch (er) {}
+        return {
+          routed: fxRouted, bypassed: fxBypass, chains: sceFx.size, latencyMs: fxLatencyMs(), outLatMs: sceLatMs, tabOn: audioTabOn,
+          sampleRate: (sceLastCtx && sceLastCtx.sampleRate) || 0,
+          params: snapshot(), shaperHasCurve: hasCurve, loudTimer: !!loudTimer, meter: Object.assign({}, meter),
+          dests: e ? [...e.dests].map((d) => (Array.isArray(d) ? d : [d, 0, 0])) : [],
+          set: (k, v) => { CFG[k] = v; save(); applyFx(); }, get: (k) => CFG[k], cfg: () => Object.assign({}, CFG),
+          bypass: (v) => setBypass(v), setBand, curveAt: (f) => eqCurveDbAt(f), curveSample: (x) => satCurveAt(x),
+          loudMem: () => GET('loud:bytrack', {}) || {},
+          ab: (a, b) => { abA = +a; abB = +b; abOn = true; refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
+          seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
+          toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
+        };
+      };
+      try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
+    }
+  } catch (e) {}
 
   /* ───────── mini floating now-playing widget (draggable) ───────── */
   let miniEl = null;
@@ -11485,7 +11679,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       show('.sce-restart', CFG.barRestart);
       show('.sce-info', CFG.barInfo);
       const ab = barWrap.querySelector('.sce-ab');
-      if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (CFG.abLoop ? '#ff6a1f' : ''); ab.style.opacity = CFG.abLoop ? '.95' : ''; ab.style.textShadow = CFG.abLoop ? '0 0 10px rgba(255,106,31,.55)' : ''; }
+      if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (abOn ? '#ff6a1f' : ''); ab.style.opacity = abOn ? '.95' : ''; ab.style.textShadow = abOn ? '0 0 10px rgba(255,106,31,.55)' : ''; }
     } catch (e) {}
   }
   function ensureBar() {
@@ -11701,7 +11895,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } else if (type === 'range') {
         const rng = D.createElement('input'); rng.type = 'range'; rng.className = 'rng'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
         const val = D.createElement('span'); val.className = 'val'; val.textContent = CFG[key] + (r[3] || '');
-        rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); save(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
+        rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
         row.appendChild(rng); row.appendChild(val);
       } else if (type === 'textarea') {
         row.style.display = 'block';
@@ -11755,6 +11949,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               const d = JSON.parse(rd.result);
               if (d && typeof d === 'object') {
                 for (const k of Object.keys(DEFAULTS)) if (k !== 'abLoop' && k in d && typeof d[k] === typeof DEFAULTS[k]) CFG[k] = d[k];   // A–B endpoints are live-only
+                ensureEqBands(); clampAudioCfg();
                 save(); rebuildPanel(); applyAll(); toast('Settings imported');
               }
             } catch (e) { toast('That file isn’t enhancer settings'); }
@@ -11860,7 +12055,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const rng = D.createElement('input'); rng.type = 'range'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
           rng.style.cssText = 'flex:none;width:108px;accent-color:' + ACC;
           const val = D.createElement('span'); val.textContent = CFG[key] + (r[3] || ''); val.style.cssText = 'flex:none;font-size:11px;color:#aaa;width:38px;text-align:right';
-          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); save(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
+          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
           row.appendChild(rng); row.appendChild(val);
         } else if (type === 'textarea') {
           row.style.display = 'block';
@@ -12033,6 +12228,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         if (!obj || typeof obj !== 'object') return;
         for (const k of Object.keys(DEFAULTS)) if (k !== 'abLoop' && k in obj && typeof obj[k] === typeof DEFAULTS[k]) CFG[k] = obj[k];   // A–B endpoints are live-only
+        ensureEqBands(); clampAudioCfg();
         save(); applyAll();
       } catch (e) {}
     };
@@ -12070,7 +12266,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try { L.push('url: ' + location.href); } catch (e) {}
     try { L.push('ua: ' + navigator.userAgent); } catch (e) {}
     L.push('audio: domMedia=' + s.dom + ' captured=' + s.cap + ' bufNodes=' + s.buf + ' control=' + (s.ok || s.cap > 0 ? 'available' : 'UNAVAILABLE'));
-    try { L.push('theme=' + effTheme() + ' accent=' + CFG.accent + (CFG.accent === 'custom' ? ('(' + CFG.customAccent + ')') : '') + ' speed=' + CFG.speed + '% loop=' + !!CFG.loopTrack + ' abLoop=' + !!CFG.abLoop); } catch (e) {}
+    try { L.push('theme=' + effTheme() + ' accent=' + CFG.accent + (CFG.accent === 'custom' ? ('(' + CFG.customAccent + ')') : '') + ' speed=' + CFG.speed + '% loop=' + !!CFG.loopTrack + ' abLoop=' + abOn); } catch (e) {}
     try { L.push('flags: hotkeys=' + !!CFG.hotkeys + ' keySeek=' + !!CFG.keySeek + ' speedPerTrack=' + !!CFG.speedPerTrack + ' rememberVol=' + !!CFG.rememberVol + ' mini=' + !!CFG.miniPlayer); } catch (e) {}
     try { L.push('clientId=' + ((SUITE.clientId && SUITE.clientId()) ? 'yes' : 'no')); } catch (e) {}
     L.push('errors (' + errLog.length + '):');
@@ -12089,7 +12285,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       CFG.eqPreamp = -1;
       CFG.loudnessOn = true;
       CFG.enhanceOn = true; CFG.enhanceAmt = 55;
-      CFG.widenAmt = 25;
+      CFG.stereoWidth = 122;
       CFG.hideUpsell = true;
       save();
       try { applyAll(); } catch (e) {}
