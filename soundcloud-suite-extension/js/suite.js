@@ -10601,6 +10601,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
   /* ───────── behavioural features (guarded, enforced on a slow tick) ───────── */
   const VOL_KEY = 'enh:vol';
+  let mutedVol = null;   // the level M muted from (null = not muted); the 1 Hz volume memory skips saves while set
   let lastVolSaved = 0;
   // playback speed — SoundCloud plays through the WEB AUDIO API with NO <audio>
   // element in the page DOM (the console diagnostic showed querySelectorAll
@@ -11583,17 +11584,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   /* A–B loop endpoints (live, not persisted) */
-  let abOn = false, abA = null, abB = null, abT = 0, abI = 0;   // abT/abI: the wrap timers (armed by armAb)
+  let abOn = false, abA = null, abB = null, abM = null, abT = 0, abI = 0;   // abM: the element the loop was set on · abT/abI: the wrap timers (armed by armAb)
   function abMark() {
     const m = activeMedia();
     if (!m || !isFinite(m.currentTime)) { toast('Play a track first'); return; }
     if (abA == null || abB != null) { abA = m.currentTime; abB = null; abOn = false; armAb(); toast('A set — mark B next'); }
-    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
+    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; abM = m; armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
     else { abA = m.currentTime; toast('A moved'); }
     refreshBar();
   }
   // quiet: the loop switched itself off (the user seeked out of it) — a softer toast than an explicit clear
-  function abClear(quiet) { abA = abB = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
+  function abClear(quiet) { abA = abB = null; abM = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
   // 2.28: the wrap is a timer aimed 30 ms of media time before B (rate-aware) plus a 100 ms backstop that survives
   // seeks and rate changes; the 1 Hz enforce tick no longer takes part, so the loop lands within ~50 ms of B
   const abAimMs = (m) => ((abB - 0.03 - m.currentTime) / Math.max(0.25, +m.playbackRate || 1)) * 1000;   // wall ms until 30 ms (media) before B
@@ -11613,9 +11614,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!abOn || abA == null || abB == null) { armAb(); return; }
       const m = activeMedia();
       if (!m || !isFinite(m.currentTime)) return;
+      // another element took over: a track change ends the loop (a fresh element starts at 0, which the outside test below
+      // cannot tell from a loop whose A sits at the very start); a merely paused loop element keeps its loop and rests the backstop
+      if (abM && m !== abM) { if (!m.paused) abClear(true); else { try { clearInterval(abI); } catch (e) {} abI = 0; } return; }
       const t = m.currentTime;
       if (t < abA - 0.5 || t > abB + 1) { abClear(true); return; }   // the listener seeked outside the loop (checked first: a seek past B must not wrap)
       if (t >= abB - 0.05) { __sceUserSeek = Date.now(); m.currentTime = abA; armAb(); return; }
+      if (m.paused) { try { clearInterval(abI); } catch (e) {} abI = 0; return; }   // nothing moves while paused: `play` / `seeking` re-arm the backstop
       // close to B but short of the threshold (the media clock lags the timer a little): re-aim rather than wait for the backstop
       if (abB - t < 0.3 && !m.paused) { try { clearTimeout(abT); } catch (e) {} abT = setTimeout(abCheck, Math.max(5, abAimMs(m))); }
     } catch (e) {}
@@ -11655,6 +11660,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (!m) return;
           e.preventDefault();
           const v = Math.min(1, Math.max(0, (m.volume || 0) + (e.deltaY < 0 ? 0.05 : -0.05)));
+          if (v > 0) mutedVol = null;   // wheeling up out of a mute is an unmute: the volume memory runs again
           m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%');
         } catch (e2) {}
       }, { passive: false });
@@ -11697,8 +11703,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       W.addEventListener('scroll', ensureTop, { passive: true });
     } catch (e) {}
   }
-  let mutedVol = null;
-  function bumpVol(d) { const m = activeMedia(); if (!m) return; const v = Math.min(1, Math.max(0, (m.volume || 0) + d)); m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%'); }
+  function bumpVol(d) { const m = activeMedia(); if (!m) return; const v = Math.min(1, Math.max(0, (m.volume || 0) + d)); if (v > 0) mutedVol = null; m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%'); }
   function toggleMute() { const m = activeMedia(); if (!m) return; if (m.volume > 0) { mutedVol = m.volume; m.volume = 0; toast('Muted'); } else { m.volume = mutedVol || 0.5; mutedVol = null; toast('Unmuted'); } }
 
   /* ───────── sleep timer chips (2.29) — one timer for the whole suite: module 1's SUITE.sleep owns the
@@ -12672,12 +12677,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try {
     SUITE.audioKey = (e) => {
       try {
-        if (!CFG.hotkeys || !e || e.repeat) return false;
+        if (!CFG.hotkeys || !e) return false;
         if (e.altKey || e.ctrlKey || e.metaKey) return false;
         const t = (e.composedPath ? e.composedPath()[0] : null) || e.target, ae = D.activeElement;
         const typing = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
         if (typing(t) || typing(ae)) return false;
         const k = e.key, down = e.type === 'keydown';
+        const mine = k === 'a' || k === 'A' || k === 'n' || k === 'N' || k === ',' || k === '.';
+        if (!mine) return false;
+        // a held key auto-repeats after ~500 ms: those keydowns are ours to swallow (true = the hub's hotkeys()
+        // yields too), otherwise a held A would fall through to tap-align, N to the mini bar, , . to lyric nudging
+        if (e.repeat) return true;
         if (k === 'a' || k === 'A') { setBypass(down); return true; }   // hold to compare: down sets, up clears
         if (!down) return false;
         if (k === 'n' || k === 'N') { toggleNight(); return true; }
@@ -12777,12 +12787,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           loudMemClear: () => SET('loud:bytrack', {}),
           loud: () => ({ href: lnorm.href, blocks: lnorm.blocks.length, lint: lnorm.lint, trackPeak: lnorm.trackPeak, curGainDb: lnorm.curGainDb, nodeDb: lnorm.nodeDb, dur: lnorm.dur, measuring: lnorm.measuring, src: lnorm.src, pending: lnorm.pending }),
           restoreLoud: () => restoreTrackLoud(),
-          ab: (a, b) => { abA = +a; abB = +b; abOn = true; armAb(); refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
+          ab: (a, b) => { abA = +a; abB = +b; abOn = true; abM = activeMedia(); armAb(); refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
           sleep: () => ({ rem: SUITE.sleep ? SUITE.sleep.remainingMs() : -1, armed: !!(SUITE.sleep && SUITE.sleep.armed()), chip: sleepChipMin }),
           muted: () => mutedVol != null,
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
           fade: () => fadeCtl.state(), restartTrack, nudgeSeek, seekPct, applySpeed, status: () => audioStatus(),
-          toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
+          toggleMute, bumpVol, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
         };
