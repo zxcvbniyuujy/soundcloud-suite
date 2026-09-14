@@ -11951,9 +11951,107 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     for (const k of Object.keys(cu)) if (eqPresetNameOk(k) && same(cu[k])) return 'c:' + k;
     return '';
   }
+  // ── headphone correction (2.8): an AutoEQ "ParametricEQ.txt" → ≤ 10 filters. Data only, never
+  //    eval'd; OFF filters skipped; LS/HS folded into LSC/HSC; more than ten → the ten with the
+  //    largest |gain| (so a 12-band profile keeps its treble filters), then in frequency order ──
+  function parseAutoEq(text) {
+    const out = { preamp: 0, name: '', filters: [] };
+    try {
+      const s = String(text == null ? '' : text);
+      const pm = /^\s*Preamp:\s*(-?[\d.]+)\s*dB/mi.exec(s);
+      if (pm) out.preamp = clampNum(pm[1], -15, 0, 0);
+      const re = /Filter\s*\d+:\s*(ON|OFF)\s+(PK|LSC|HSC|LS|HS)\s+Fc\s+([\d.]+)\s*Hz\s+Gain\s+(-?[\d.]+)\s*dB(?:\s+Q\s+([\d.]+))?/gi;
+      let m, all = [];
+      while ((m = re.exec(s))) {
+        if (m[1].toUpperCase() === 'OFF') continue;
+        let t = m[2].toUpperCase(); if (t === 'LS') t = 'LSC'; else if (t === 'HS') t = 'HSC';
+        all.push(clampPeq({ t, f: +m[3], g: +m[4], q: m[5] == null ? 0.7 : +m[5] }));
+      }
+      all = all.filter(Boolean);
+      if (all.length > 10) { all.sort((a, b) => Math.abs(b.g) - Math.abs(a.g)); all = all.slice(0, 10); }
+      all.sort((a, b) => a.f - b.f);
+      out.filters = all;
+      // the profile's name: the first line that is neither the Preamp nor a Filter line
+      const line = s.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !/^Preamp:/i.test(l) && !/^Filter\s*\d+:/i.test(l));
+      out.name = (line || 'AutoEQ profile').slice(0, 40);
+    } catch (e) {}
+    return out;
+  }
+  function applyAutoEqText(text) {
+    const p = parseAutoEq(text);
+    if (!p.filters.length) { toast('No filters found in that text'); return false; }
+    CFG.peq = p.filters; CFG.peqPreamp = p.preamp; CFG.peqName = p.name; CFG.peqOn = true;
+    save(); applyFx(); if (eqRepaint) eqRepaint();
+    toast(p.name + ' · ' + p.filters.length + (p.filters.length === 1 ? ' filter' : ' filters'));
+    return true;
+  }
+  function clearAutoEq() {
+    CFG.peq = []; CFG.peqPreamp = 0; CFG.peqName = ''; CFG.peqOn = false;
+    save(); applyFx(); if (eqRepaint) eqRepaint();
+    toast('Headphone profile cleared');
+  }
+  // ── Copy / Paste / Reset all audio (2.22) ──
+  let audioHost = null;   // the tab body audioRender last painted: a paste or a reset rebuilds it in place
+  function rerenderAudio() { try { if (audioHost && audioHost.isConnected && audioTabOn) audioRender(audioHost); else if (eqRepaint) eqRepaint(); } catch (e) {} }
+  function exportAudio() {
+    const audio = {};
+    for (const k of AUDIO_KEYS) { try { const v = CFG[k] === undefined ? DEFAULTS[k] : CFG[k]; audio[k] = (v && typeof v === 'object') ? JSON.parse(JSON.stringify(v)) : v; } catch (e) {} }
+    let loudMem = GET('loud:bytrack', {}); if (!loudMem || typeof loudMem !== 'object' || Array.isArray(loudMem)) loudMem = {};
+    return { v: 1, audio, loudMem };
+  }
+  // the per-track loudness memory from a paste, entry by entry (≤ 1000, numbers only)
+  const clampLoudMem = (v) => {
+    const out = {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+    let n = 0;
+    for (const k of Object.keys(v)) {
+      const e = v[k];
+      if (!eqPresetNameOk(k) || k.length > 300 || !e || typeof e !== 'object' || !isFinite(+e.l)) continue;
+      out[k] = { l: clampNum(e.l, -70, 0, 0), p: clampNum(e.p, 0, 4, 0), s: clampNum(e.s, 0, 36000, 0), d: clampNum(e.d, 0, 36000, 0), t: clampNum(e.t, 0, 1e13, 0), f: e.f ? 1 : 0 };
+      if (++n >= 1000) break;
+    }
+    return out;
+  };
+  // the Paste box takes the JSON from Copy settings OR an AutoEQ profile: a leading `{` routes to
+  // the settings importer, anything else to the AutoEQ parser. Unknown keys are ignored, a key of
+  // the wrong shape keeps its current value, every accepted value goes through the audio clamps.
+  // Saved presets are merged, never dropped, and the loudness memory is restored when present.
+  function importAudioText(text) {
+    const s = String(text == null ? '' : text).trim();
+    if (!s) return false;
+    if (s.charAt(0) !== '{') return applyAutoEqText(s);
+    let obj = null;
+    try { obj = JSON.parse(s); } catch (e) { obj = null; }
+    const audio = obj && typeof obj === 'object' && obj.audio && typeof obj.audio === 'object' && !Array.isArray(obj.audio) ? obj.audio : null;
+    if (!audio) { toast('That isn’t audio settings JSON'); return false; }
+    for (const k of AUDIO_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(audio, k)) continue;
+      const v = audio[k], d = DEFAULTS[k];
+      if (v === null || typeof v !== typeof d || Array.isArray(v) !== Array.isArray(d)) continue;
+      if (k === 'eqCustom') { CFG.eqCustom = clampEqCustom(Object.assign({}, clampEqCustom(CFG.eqCustom), clampEqCustom(v))); continue; }
+      CFG[k] = clampAudioKey(k, v);
+    }
+    if (obj.loudMem && typeof obj.loudMem === 'object') { try { SET('loud:bytrack', clampLoudMem(obj.loudMem)); } catch (e) {} }
+    ensureEqBands();
+    save(); try { applySpeed(); } catch (e) {} applyFx(); rerenderAudio();
+    try { refreshBar(); } catch (e) {}
+    toast('Audio settings pasted');
+    return true;
+  }
+  // every audio key back to its default (saved presets stay: they are a library, not a setting),
+  // the per-track loudness memory cleared, the tab rebuilt
+  function resetAudio() {
+    for (const k of AUDIO_KEYS) { if (k === 'eqCustom') continue; try { const d = DEFAULTS[k]; CFG[k] = (d && typeof d === 'object') ? JSON.parse(JSON.stringify(d)) : d; } catch (e) {} }
+    try { SET('loud:bytrack', {}); } catch (e) {}
+    save(); try { applySpeed(); } catch (e) {} applyFx(); rerenderAudio();
+    try { refreshBar(); } catch (e) {}
+    toast('Audio reset · track loudness memory cleared');
+  }
+
   function audioRender(host) {
     try {
       if (!host) return;
+      audioHost = host;
       ensureEqBands();
       host.replaceChildren();
       host.style.padding = '16px 18px 26px';
@@ -12214,16 +12312,72 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       liveSync.push(syncSlider(wR, () => cl(CFG.stereoWidth | 0, 0, 200)), syncSlider(balR, () => num('balance', -100, 100)),
         () => { cfRow.sw._paint(); monoRow.sw._paint(); paintMd(); const mv = cfMode(); if (mdSel.value !== mv) mdSel.value = mv; });
 
-      // ── footnote ──
+      // a paste area with Apply / Cancel under it, hidden until its opener shows it (2.8, 2.22);
+      // Apply keeps the box open when the text was refused (the toast says why)
+      const pasteUi = (ph, onApply) => {
+        const box = pasteBox(ph);
+        const act = D.createElement('div'); act.style.cssText = 'display:none;gap:8px;margin-top:8px';
+        const ok = mkBtn('Apply'), no = mkBtn('Cancel');
+        const show = (v) => { box.style.display = v ? 'block' : 'none'; act.style.display = v ? 'flex' : 'none'; if (v) { try { box.focus(); } catch (e) {} } else box.value = ''; };
+        ok.addEventListener('click', () => { try { const t = box.value; if (!t.trim()) { show(false); return; } if (onApply(t) !== false) show(false); } catch (e) {} });
+        no.addEventListener('click', () => show(false));
+        act.append(ok, no); bodyEl.append(box, act);
+        return { box, act, show };
+      };
+
+      // ── headphone correction (2.8): the AutoEQ bank, kept apart from the taste EQ ──
+      bodyEl.appendChild(sectionLabel('Headphone correction'));
+      const PEQ_HINT = 'Paste an AutoEQ profile for your headphones';
+      const peqDesc = () => {
+        const n = Array.isArray(CFG.peq) ? CFG.peq.length : 0;
+        if (!n || !CFG.peqName) return PEQ_HINT;
+        const shelf = CFG.peq.some((f) => f && f.t !== 'PK');   // Web Audio shelves have a fixed slope: the profile's shelf Q cannot be honoured
+        return CFG.peqName + ' · ' + n + (n === 1 ? ' filter' : ' filters') + (shelf ? ' (shelf Q ignored)' : '');
+      };
+      const peqRow = toggleRow('Headphone correction', peqDesc(), 'peqOn');
+      const pqBtns = D.createElement('div'); pqBtns.style.cssText = 'display:flex;gap:8px;margin-top:4px';
+      const pqPaste = mkBtn('Paste AutoEQ'), pqClear = mkBtn('Clear');
+      pqBtns.append(pqPaste, pqClear); bodyEl.appendChild(pqBtns);
+      const pqUi = pasteUi('Preamp: -6.2 dB\nFilter 1: ON PK Fc 105 Hz Gain 3.1 dB Q 0.7 …', (t) => importAudioText(t));
+      const paintPeq = () => { peqRow.sw._paint(); const d = peqDesc(); if (peqRow.desc.textContent !== d) peqRow.desc.textContent = d; pqClear.style.display = (Array.isArray(CFG.peq) && CFG.peq.length) ? '' : 'none'; };
+      pqPaste.addEventListener('click', () => pqUi.show(true));
+      pqClear.addEventListener('click', () => { clearAutoEq(); paintPeq(); });
+      // the switch alone can do nothing without a profile: turning it on opens the paste box
+      peqRow.sw.addEventListener('click', () => { if (CFG.peqOn && !(Array.isArray(CFG.peq) && CFG.peq.length)) pqUi.show(true); });
+      paintPeq(); liveSync.push(paintPeq);
+
+      // ── footer (2.22): Copy / Paste / Reset all audio, then the engine footnote (2.24) ──
+      const ft = D.createElement('div'); ft.style.cssText = 'display:flex;gap:8px;margin-top:18px';
+      const cpB = mkBtn('Copy settings'), psB = mkBtn('Paste settings'), rsB = mkBtn('Reset all audio');
+      cpB.title = 'Every audio setting + the per-track loudness memory, as JSON'; psB.title = 'The JSON from Copy settings, or an AutoEQ profile'; rsB.title = 'Every audio setting back to its default · saved presets stay';
+      for (const b of [cpB, psB, rsB]) { b.style.flex = '1 1 0'; b.style.minWidth = '0'; b.style.padding = '10px 6px'; b.style.whiteSpace = 'nowrap'; }   // three across the ~396 px body
+      ft.append(cpB, psB, rsB); bodyEl.appendChild(ft);
+      const psUi = pasteUi('Paste the JSON from Copy settings here (an AutoEQ profile works too)', (t) => importAudioText(t));
+      cpB.addEventListener('click', () => { try { clip(JSON.stringify(exportAudio()), 'Audio settings copied'); } catch (e) {} });
+      psB.addEventListener('click', () => psUi.show(true));
+      rsB.addEventListener('click', () => { try { resetAudio(); } catch (e) {} });
+
+      // ── footnote (2.24): the engine line (rate · total delay = output + effects), refreshed
+      //    from the draw loop every 60 frames, then the plain-language sentences ──
+      const NOTE_TAIL = 'These shape SoundCloud’s audio in real time; turn them off and playback returns to normal instantly. Crossfade and higher bitrates aren’t possible in the browser; the system volume is invisible to the loudness contour.';
+      const noteText = () => {
+        let sr = 48000, fx = 0, out = 0;
+        try { sr = (sceLastCtx && sceLastCtx.sampleRate) || 48000; } catch (e) {}
+        try { fx = fxLatencyMs() | 0; } catch (e) {}
+        try { out = Math.max(0, ((SUITE.audioLatency ? SUITE.audioLatency() : sceLatMs) | 0) - fx); } catch (e) { out = sceLatMs | 0; }
+        return Math.round(sr / 1000) + ' kHz · ' + (out + fx) + ' ms delay (' + out + ' ms output + ' + fx + ' ms effects) · ' + NOTE_TAIL;
+      };
       const note = D.createElement('div'); note.style.cssText = 'margin-top:20px;font-size:10px;color:#67676f;line-height:1.5';
-      note.textContent = 'These shape SoundCloud’s audio in real time. Turn them off and playback returns to normal instantly.';
-      bodyEl.appendChild(note);
+      let lastNote = '';
+      const paintNote = () => { const t = noteText(); if (t !== lastNote) { lastNote = t; note.textContent = t; } };
+      paintNote(); bodyEl.appendChild(note);
 
       // ── the live numbers: output-tap reads at 10 Hz while loudness is off (the loudness
       //    loop reads them itself otherwise); sub-line + guard suffix repainted at ~5 Hz ──
       const refreshMeter = () => {
         try {
           if (!loudTimer && frame % 6 === 0) peakTick();
+          if (frame % 60 === 0) paintNote();
           if (frame % 12) return;
           paintSub();
           const gr = +meter.limGr;
@@ -12412,6 +12566,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ab: (a, b) => { abA = +a; abB = +b; abOn = true; refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
           toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
+          pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
         };
       };
