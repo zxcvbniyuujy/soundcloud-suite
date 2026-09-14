@@ -1254,12 +1254,13 @@
         try { viaChain = !!(SUITE.audioFadeOut && SUITE.audioFadeOut(8)); } catch (e) {}
         if (!viaChain && !m) { if (pc && pc.classList.contains('playing')) clickIt(pc); return; }
         fading = true;
-        const v0 = m ? m.volume : 1;
-        let step = 0;
+        const v0 = m ? m.volume : 1, t0 = Date.now();
+        // wall-clock, not step-counted: the ticker's worker messages queue through a main-thread stall and then
+        // burst, which would end the countdown early and click pause before the chain's ramp has landed
         const t = makeTicker(() => {
-            step++;
-            if (!viaChain) { try { m.volume = Math.max(0, v0 * (1 - step / 160)); } catch (e) {} }
-            if (step >= 160) {
+            const k = Math.min(1, (Date.now() - t0) / 8000);
+            if (!viaChain) { try { m.volume = Math.max(0, v0 * (1 - k)); } catch (e) {} }
+            if (k >= 1) {
                 t.stop();
                 fading = false;
                 const p = q('playControl');
@@ -10822,10 +10823,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try { const OAC = W.OfflineAudioContext || window.OfflineAudioContext; if (OAC) _probeFallback = buildProbeBank(new OAC(1, 128, 48000)); } catch (e) { _probeFallback = null; }
     return _probeFallback;
   }
-  // reverb IR (WP10): 1.6 s of decorrelated noise (two independent channels), −60 dB at the end; built on first use
+  // reverb IR (WP10): 1.6 s of decorrelated noise (two independent channels), −60 dB at the end; built on first use.
+  // Seeded (mulberry32) so every chain — and every session — gets the same room: a fresh random IR would give each
+  // frequency a different response each time (a noise IR's gain at one frequency is Rayleigh-distributed).
   function reverbIr(ctx) {
     const sr = ctx.sampleRate || 48000, n = Math.round(1.6 * sr), buf = ctx.createBuffer(2, n, sr);
-    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-6.9 * i / n); }
+    let seed = 0x9e3779b9;
+    const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < n; i++) d[i] = (rnd() * 2 - 1) * Math.exp(-6.9 * i / n); }
     return buf;
   }
   function buildFxChain(ctx) {
