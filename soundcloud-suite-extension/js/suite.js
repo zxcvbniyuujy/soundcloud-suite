@@ -10678,7 +10678,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   let fxRouted = false, audioTabOn = false, fxBypass = false;
   let paintCmp = null;     // set by audioRender (the Compare button's painter); null until the tab has rendered
   let loudTimer = 0;       // the loudness measurement interval (started/stopped by applyFx)
-  const meter = {};        // live meter values { m, s, i, peak, outDb, gainDb, gr, limGr } — filled by the meter loops
+  const meter = {};        // live meter values { m, s, i, peak, outDb, gainDb, gr, limGr, corr, monoSrc } — filled by the meter loops
+  let monoSince = 0, monoLow = 0;   // WP10 mono-upload guard: when r first read > 0.98 with the vocal band in use · consecutive low reads
   // Loudness-normalize measurement state (2.4 / 2.5), one track at a time: the gated K-weighted
   // blocks (400 ms each, from the SOURCE taps), the integrated value, the source peak, the gain
   // the makeup node was last told (dB) and where it came from ('' measuring · 'measured' · 'remembered')
@@ -11149,7 +11150,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const L = needsLimiter();
       const limTrimGain = L ? db2g(-calibrateComp(-3, 0, 20)) : 1;
       // ── vocals: 1 = LP + HP + band = mid exactly; softer floors at 0.1, lift ≤ +4 dB ──
-      const vG = vocal === 0 ? 1 : vocal < 0 ? Math.max(0.1, 1 - 0.9 * Math.abs(vocal)) : db2g(4 * vocal);
+      if (!vocal) { monoSince = 0; monoLow = 0; meter.monoSrc = false; }   // the mono-upload verdict lives only while the knob is in use
+      const vG = (vocal === 0 || meter.monoSrc) ? 1 : vocal < 0 ? Math.max(0.1, 1 - 0.9 * Math.abs(vocal)) : db2g(4 * vocal);
       // ── output matrix [LL, LR, RL, RR]: identity → mono / swap → balance (attenuates only) ──
       const bL = 1 - Math.max(0, bal) / 100, bR = 1 - Math.max(0, -bal) / 100;
       const base = on('monoOn') ? [0.5, 0.5, 0.5, 0.5] : on('swapLR') ? [0, 1, 1, 0] : [1, 0, 0, 1];
@@ -11262,6 +11264,24 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const sl = rd(c.pL, c.bufPL), sr = rd(c.pR, c.bufPR), spk = Math.max(sl.pk, sr.pk);
       meter.srcPeak = spk > 1e-6 ? 20 * Math.log10(spk) : -120;
       try { meter.gr = c.comp.reduction; meter.limGr = c.lim.reduction; } catch (er) {}
+      // stereo correlation (WP10): Pearson r of the source taps (NaN on silence — no verdict). A mono upload (r > 0.98
+      // for 3 s) has no side signal, so softening the vocal band would only dip the whole mix: while the Vocals knob is
+      // in use the guard forces vGain to 1 and the row reads "Mono upload", until a stereo track (r ≤ 0.98) arrives.
+      // The window runs only while Vocals ≠ 0 — there is nothing to guard at Normal.
+      // The taps are read one after the other, so a render quantum landing between the reads shifts R against L
+      // by 128 samples (a sine's r collapses): re-read L and compare the tail — a changed tail = no verdict this tick.
+      const bl = c.bufPL, br = c.bufPR, n = bl.length; let sL = 0, sR = 0, sLR = 0, raced = false;
+      try { const tail = Array.prototype.slice.call(bl, n - 8); c.pL.getFloatTimeDomainData(c.bufOL); for (let i = 0; i < 8; i++) if (c.bufOL[n - 8 + i] !== tail[i]) { raced = true; break; } } catch (er) { raced = true; }
+      for (let i = 0; i < n; i++) { sL += bl[i]; sR += br[i]; sLR += bl[i] * br[i]; }
+      const den = Math.sqrt(Math.max(0, (n * sl.ss - sL * sL) * (n * sr.ss - sR * sR)));
+      const corr = (!raced && den > 1e-9) ? Math.max(-1, Math.min(1, (n * sLR - sL * sR) / den)) : NaN;
+      meter.corr = corr;
+      // a stereo track reads low on every tick, so three low reads in a row lift the verdict; one stray read never does
+      const guard = (+CFG.vocalAmt || 0) !== 0;
+      const lift = () => { monoSince = 0; monoLow = 0; if (meter.monoSrc) { meter.monoSrc = false; applyFx(); } };
+      if (!guard) lift();
+      else if (corr > 0.98) { monoLow = 0; const t = Date.now(); if (!monoSince) monoSince = t; else if (t - monoSince > 3000 && !meter.monoSrc) { meter.monoSrc = true; applyFx(); } }
+      else if (corr <= 0.98 && ++monoLow >= 3) lift();
     } catch (e) {}
   }
   // ── Loudness normalize (2.4): K-weighted, gated, measured at `input` (the untouched
@@ -12431,7 +12451,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const bassR = sliderRow('Bass', 0, 9, 0.5, () => num('bassDb', 0, 9), (x) => { CFG.bassDb = cl(+x || 0, 0, 9); saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + x + ' dB', 0);
       bassR.row.firstChild.title = 'Sub-25 Hz rumble is removed automatically while bass is boosted · double-click resets';
       bassR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(bassR.row);
-      const vocR = sliderRow('Vocals', -100, 100, 5, () => num('vocalAmt', -100, 100), (x) => { CFG.vocalAmt = cl(x | 0, -100, 100); saveSoon(); applyFx(); }, (x) => (x < 0 ? 'Softer ' + (-x | 0) : x > 0 ? 'Lift ' + (x | 0) : 'Normal'), 0);
+      const vocR = sliderRow('Vocals', -100, 100, 5, () => num('vocalAmt', -100, 100), (x) => { CFG.vocalAmt = cl(x | 0, -100, 100); saveSoon(); applyFx(); }, (x) => (meter.monoSrc && (x | 0) !== 0 ? 'Mono upload' : x < 0 ? 'Softer ' + (-x | 0) : x > 0 ? 'Lift ' + (x | 0) : 'Normal'), 0);
       vocR.row.firstChild.title = 'Softens or lifts the centre of a stereo mix (200 Hz – 7 kHz) · vocals are softened, not removed · double-click resets';
       vocR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(vocR.row);
       // loudness contour (2.14): the description carries the live state so the row never looks
@@ -12673,6 +12693,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
           cx.font = '500 15px -apple-system,BlinkMacSystemFont,sans-serif'; cx.textAlign = 'center';
           for (let i = 0; i < N; i++) { const x = bandX(i), y = gainToY(bands[i] || 0), act = (i === dragBand || i === hoverBand); cx.fillStyle = act ? 'rgba(255,170,120,.85)' : 'rgba(150,150,160,.36)'; cx.fillText(EQ_LABELS[i], x, CH - 16); cx.beginPath(); cx.arc(x, y, act ? 5.5 : 4, 0, 7); cx.fillStyle = act ? '#ff7a3d' : '#fff'; cx.fill(); }
+          // stereo correlation (WP10): a 3-px tick on a small scale in the free top-right corner — left = anti-phase,
+          // right = identical channels; lit while the mono-upload guard holds the vocal band
+          if (isFinite(meter.corr)) { const x0 = CW - padX - 40, y = 14; cx.fillStyle = 'rgba(255,255,255,.06)'; cx.fillRect(x0, y - 1, 40, 2); cx.fillStyle = meter.monoSrc ? 'rgba(255,170,120,.85)' : 'rgba(150,150,160,.5)'; cx.fillRect(x0 + (meter.corr + 1) / 2 * 40 - 1.5, y - 6, 3, 12); }
           // the value while dragging, just above the handle
           if (dragBand >= 0) { const g = bands[dragBand] | 0; cx.fillStyle = 'rgba(255,170,120,.85)'; cx.fillText((g > 0 ? '+' : g < 0 ? '−' : '') + Math.abs(g) + ' dB', bandX(dragBand), gainToY(g) - 16); }
         } catch (e) {}
