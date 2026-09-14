@@ -10140,6 +10140,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // ── audio: playback ──
     vinylMode: false,
     fadeIn: 0.6, fadeOut: 2.5,           // 0..3 s, 0..8 s
+    skipSilence: false,     // end-of-track silence trim (WP10): the last 30 s only, never mid-track
     // ── toolbar buttons ──
     barSpeed: true, barCopy: true, barRestart: true, barAB: false, barInfo: true,
   };
@@ -10268,7 +10269,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // every audio key: what Copy/Paste/Reset walk, and what the import clamps cover
   const AUDIO_KEYS = ['speed', 'speedPerTrack', 'eqOn', 'eqBands', 'eqPreamp', 'eqCustom', 'eqAutoPre', 'eqPerTrack', 'peqOn', 'peq', 'peqPreamp', 'peqName',
     'bassDb', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR',
-    'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'loopTrack', 'rememberVol'];
+    'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'skipSilence', 'loopTrack', 'rememberVol'];
   // numeric ranges [min, max, step], string caps { max }, enums { one: [...] }
   const AUDIO_CLAMP = {
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
@@ -10746,7 +10747,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || CFG.peqOn || CFG.nightOn || CFG.loudCompOn
       || CFG.crossfeedOn || CFG.monoOn || CFG.swapLR
       || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0
-      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (CFG.boostAmt | 0) > 100);
+      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (CFG.boostAmt | 0) > 100 || CFG.skipSilence);   // the trim listens through the source taps
   }
   function fxOn() { return fxUserOn() || audioTabOn; }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -11440,6 +11441,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * level. The enforce tick re-runs the timeupdate check as a backstop; nothing here ever throws. */
   const FADE_FLOOR = 0.04;
   let __sceUserSeek = 0;          // Date.now() of the last suite-initiated seek
+  let silentSince = 0;            // end-trim (WP10): when the source peak first read below −60 dBFS inside the last 30 s
   let fadeHref = null;            // the track the last fade-in was for
   let fadeOutSched = false;       // one fade-out per track
   let fadeInAt = 0;               // Date.now() of the last fade-in (guards the href-change fade against a double dip)
@@ -11593,6 +11595,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
       const m = activeMedia();
       if (!m) return;
+      // end-of-track silence trim (WP10): source peak < −60 dBFS for 2 s with under 30 s left → seek to the end.
+      // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
+      try {
+        const left = isFinite(m.duration) ? m.duration - m.currentTime : NaN;
+        if (CFG.skipSilence && fxRouted && !m.paused && left < 30 && left > 0.5 && meter.srcPeak < -60) {
+          if (!silentSince) silentSince = Date.now();
+          else if (Date.now() - silentSince > 2000) { silentSince = 0; __sceUserSeek = Date.now(); m.currentTime = m.duration - 0.2; toast('Skipped the silent ending'); }
+        } else silentSince = 0;
+      } catch (e) {}
       try { updateContour(m); } catch (e) {}
       // loop — only ever ASSERT our own loop; never force-off (so we don't
       // fight SoundCloud's native repeat button)
@@ -12484,8 +12495,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       foR.row.firstChild.title = 'Fade out · shortened in proportion at higher speeds · double-click resets';
       fadeRow.sw.addEventListener('click', paintFade);
       paintFade(); bodyEl.append(fiR.row, foR.row);
+      const skipRow = toggleRow('Skip silent endings', 'Jumps to the end when the last 30 s of a track go quiet · never mid-track', 'skipSilence');   // WP10
       liveSync.push(syncSlider(spdR, () => cl(CFG.speed | 0, 50, 200)), () => { paintSpeed(); vinR.sw._paint(); },
-        syncSlider(fiR, () => num('fadeIn', 0, 3)), syncSlider(foR, () => num('fadeOut', 0, 8)), () => { fadeRow.sw._paint(); paintFade(); });
+        syncSlider(fiR, () => num('fadeIn', 0, 3)), syncSlider(foR, () => num('fadeOut', 0, 8)), () => { fadeRow.sw._paint(); skipRow.sw._paint(); paintFade(); });
 
       // ── tone (2.10 – 2.14): Bass · Vocals · Loudness contour · Tilt. No master switch — the
       //    label's double-click (sliderRow's resetTo) is how a listener turns a knob off ──
