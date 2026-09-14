@@ -10124,6 +10124,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     peqName: '',            // ≤40 chars
     // ── audio: tone ──
     bassDb: 0,              // 0..9 (step .5); the 25 Hz rumble filter engages automatically under any LF boost
+    bassHarm: 0,            // 0..100 harmonic bass for small speakers (WP10): a parallel branch off `bass`, gain 0..0.5
     tiltDb: 0,              // -4..4 (step .5), per shelf
     vocalAmt: 0,            // -100..100
     loudCompOn: false, loudCompAmt: 6,   // 0..9 dB (no slider yet)
@@ -10268,11 +10269,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const saveSoon = () => { clearTimeout(_saveT); _saveT = setTimeout(save, 250); };
   // every audio key: what Copy/Paste/Reset walk, and what the import clamps cover
   const AUDIO_KEYS = ['speed', 'speedPerTrack', 'eqOn', 'eqBands', 'eqPreamp', 'eqCustom', 'eqAutoPre', 'eqPerTrack', 'peqOn', 'peq', 'peqPreamp', 'peqName',
-    'bassDb', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR',
+    'bassDb', 'bassHarm', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR',
     'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'skipSilence', 'loopTrack', 'rememberVol'];
   // numeric ranges [min, max, step], string caps { max }, enums { one: [...] }
   const AUDIO_CLAMP = {
-    speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
+    speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
     fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1],
     peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
@@ -10747,7 +10748,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || CFG.peqOn || CFG.nightOn || CFG.loudCompOn
       || CFG.crossfeedOn || CFG.monoOn || CFG.swapLR
       || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0
-      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (CFG.boostAmt | 0) > 100 || CFG.skipSilence);   // the trim listens through the source taps
+      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (+CFG.bassHarm || 0) > 0 || (CFG.boostAmt | 0) > 100 || CFG.skipSilence);   // the trim listens through the source taps
   }
   function fxOn() { return fxUserOn() || audioTabOn; }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -10862,6 +10863,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const peq = mkPeq();
     // 8. bass shelf · 9. Enhance's linear parts (before the nonlinear stages so they shape what gets saturated)
     const bass = biq('lowshelf', 100, null, 0);
+    // 8b. harmonic bass (WP10): a parallel branch off `bass` for small speakers — lowpass 120 Hz → a soft shaper
+    //     x·|x|·0.8 + 0.2·x (no oversampling: its input is band-limited) → bandpass 180 Hz Q 0.9 → gain 0..0.5,
+    //     summed with the direct path in bassSum. applyFx disconnects the branch input at 0: an exact identity.
+    const bassSum = gain(1), hLP = biq('lowpass', 120, BW, 0), hBP = biq('bandpass', 180, 0.9, 0), hGain = gain(0);
+    const hShape = ctx.createWaveShaper();
+    try { hShape.oversample = 'none'; const HN = 1025, hc = new Float32Array(HN); for (let i = 0; i < HN; i++) { const x = (i / (HN - 1)) * 2 - 1; hc[i] = x * Math.abs(x) * 0.8 + 0.2 * x; } hShape.curve = hc; } catch (e) {}
+    hLP.connect(hShape); hShape.connect(hBP); hBP.connect(hGain); hGain.connect(bassSum);
     const warm = biq('lowshelf', 90, null, 0), air = biq('highshelf', 8500, null, 0);
     // 10. Enhance saturation: curve null + oversample 'none' = passthrough with 0 latency
     const shaper = ctx.createWaveShaper(); try { shaper.oversample = 'none'; } catch (e) {}
@@ -10928,14 +10936,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // 19. output (fade) — after the limiter so a fade never triggers gain reduction; reroute connects it to SC's destinations
     const output = gain(1);
     // the audio path
-    const path = [input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi].concat(bands, peq, [bass, warm, air, shaper, comp, compTrim, wIn]);
+    const path = [input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi].concat(bands, peq, [bass, bassSum, warm, air, shaper, comp, compTrim, wIn]);
     for (let i = 0; i < path.length - 1; i++) path[i].connect(path[i + 1]);
     wMerge.connect(cfIn); cfMerge.connect(mxIn); mxMerge.connect(analyser);
     analyser.connect(makeup); makeup.connect(boost); boost.connect(lim); lim.connect(limTrim); limTrim.connect(output);
     // probe bank — a second, never-connected copy of every linear user stage (see buildProbeBank)
     const probe = buildProbeBank(ctx);
     return {
-      input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, warm, air, shaper, comp, compTrim,
+      input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, bassSum, hLP, hShape, hBP, hGain, harmOn: false, warm, air, shaper, comp, compTrim,
       widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR,
       analyser, kL, kR, pL, pR, oL, oR, makeup, boost, lim, limTrim, output, probe,
       rumbleOn: false,   // the rumble filter's current type (edge-triggered by applyFx)
@@ -10989,7 +10997,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
     const eqBoosting = on('eqOn') && ((+CFG.eqPreamp || 0) > 0 || Math.max(0, ...bands.map((x) => +x || 0)) > 0);
     const boosting = eqBoosting || on('peqOn') || !!CFG.loudnessOn || on('enhanceOn') || on('nightOn') || on('loudCompOn')
-      || (!fxBypass && ((CFG.stereoWidth | 0) > 100 || (+CFG.bassDb || 0) > 0 || (+CFG.tiltDb || 0) !== 0 || (+CFG.vocalAmt || 0) > 0));
+      || (!fxBypass && ((CFG.stereoWidth | 0) > 100 || (+CFG.bassDb || 0) > 0 || (+CFG.bassHarm || 0) > 0 || (+CFG.tiltDb || 0) !== 0 || (+CFG.vocalAmt || 0) > 0));
     return (!!CFG.limiterOn && boosting) || (CFG.boostAmt | 0) > 100;
   }
   // Chromium's DynamicsCompressor applies an automatic makeup gain that depends on
@@ -11113,6 +11121,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const eqPre = cl(CFG.eqPreamp, -12, 12), peqPre = cl(CFG.peqPreamp, -15, 0);
       const peq = (peqOn && Array.isArray(CFG.peq)) ? CFG.peq.slice(0, 10).map(clampPeq) : [];
       const bassDb = fxBypass ? 0 : cl(CFG.bassDb, 0, 9);
+      const harm = fxBypass ? 0 : cl(CFG.bassHarm, 0, 100) / 100 * 0.5;
       const tilt = fxBypass ? 0 : cl(CFG.tiltDb, -4, 4);
       const vocal = fxBypass ? 0 : cl(CFG.vocalAmt, -100, 100) / 100;
       const lcDb = on('loudCompOn') ? contourK * cl(CFG.loudCompAmt, 0, 9) : 0;
@@ -11189,6 +11198,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           else { try { if (n.type !== 'peaking') n.type = 'peaking'; } catch (er) {} w(n.gain, 0); }
         }
         w(c.bass.gain, bassDb);
+        w(c.hGain.gain, harm, 0.05);
+        if ((harm > 0) !== !!c.harmOn) {
+          c.harmOn = harm > 0;
+          try { if (c.harmOn) c.bass.connect(c.hLP); else setTimeout(() => { try { if (!c.harmOn) c.bass.disconnect(c.hLP); } catch (er) {} }, 80); } catch (er) {}
+        }
         w(c.warm.gain, enhOn ? enhAmt * 1.5 : 0); w(c.air.gain, enhOn ? enhAmt * 3 : 0);
         try {
           const curve = enhOn ? satCurve(enhAmt) : null;
@@ -12506,6 +12520,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const bassR = sliderRow('Bass', 0, 9, 0.5, () => num('bassDb', 0, 9), (x) => { CFG.bassDb = cl(+x || 0, 0, 9); saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + x + ' dB', 0);
       bassR.row.firstChild.title = 'Sub-25 Hz rumble is removed automatically while bass is boosted · double-click resets';
       bassR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(bassR.row);
+      // harmonic bass (WP10): harmonics of the sub-bass that a small speaker can actually play
+      const harmR = sliderRow('Harmonic bass', 0, 100, 5, () => num('bassHarm', 0, 100), (x) => { CFG.bassHarm = cl(x | 0, 0, 100); saveSoon(); applyFx(); }, (x) => ((x | 0) ? (x | 0) + '%' : 'Off'), 0);
+      harmR.row.firstChild.title = 'Adds harmonics of the sub-bass that small speakers can play · double-click resets';
+      harmR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(harmR.row);
       const vocR = sliderRow('Vocals', -100, 100, 5, () => num('vocalAmt', -100, 100), (x) => { CFG.vocalAmt = cl(x | 0, -100, 100); saveSoon(); applyFx(); }, (x) => (meter.monoSrc && (x | 0) !== 0 ? 'Mono upload' : x < 0 ? 'Softer ' + (-x | 0) : x > 0 ? 'Lift ' + (x | 0) : 'Normal'), 0);
       vocR.row.firstChild.title = 'Softens or lifts the centre of a stereo mix (200 Hz – 7 kHz) · vocals are softened, not removed · double-click resets';
       vocR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(vocR.row);
@@ -12519,7 +12537,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const tiltR = sliderRow('Tilt', -4, 4, 0.5, () => num('tiltDb', -4, 4), (x) => { CFG.tiltDb = cl(+x || 0, -4, 4); saveSoon(); applyFx(); }, (x) => (x < 0 ? 'Warm ' + (-x) : x > 0 ? 'Bright ' + x : 'Flat'), 0);
       tiltR.row.firstChild.title = 'Tilts the whole balance around 700 Hz · the figure is per shelf · double-click resets';
       tiltR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(tiltR.row);
-      liveSync.push(syncSlider(bassR, () => num('bassDb', 0, 9)), syncSlider(vocR, () => num('vocalAmt', -100, 100)), syncSlider(tiltR, () => num('tiltDb', -4, 4)), () => { lcRow.sw._paint(); paintLc(); });
+      liveSync.push(syncSlider(bassR, () => num('bassDb', 0, 9)), syncSlider(harmR, () => num('bassHarm', 0, 100)), syncSlider(vocR, () => num('vocalAmt', -100, 100)), syncSlider(tiltR, () => num('tiltDb', -4, 4)), () => { lcRow.sw._paint(); paintLc(); });
 
       // ── enhance ──
       bodyEl.appendChild(sectionLabel('Enhance'));
@@ -12899,6 +12917,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           params: snapshot(), shaperHasCurve: hasCurve, loudTimer: !!loudTimer, meter: Object.assign({}, meter),
           dests: e ? [...e.dests].map((kv) => [kv[0], kv[1][0], kv[1][1]]) : [],
           headroomDb: lastHeadroomDb, curveVer: eqCurveVer, needsLimiter: needsLimiter(),
+          branches: e ? { harm: !!e.chain.harmOn } : null, nodes: () => (e ? e.chain : null),
           meterTick: () => { peakTick(); return Object.assign({}, meter); },
           composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb) }; },
           calib: () => { const o = {}; _calib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
