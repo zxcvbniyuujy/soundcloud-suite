@@ -10617,15 +10617,39 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
-      try { m.preservesPitch = true; m.mozPreservesPitch = true; m.webkitPreservesPitch = true; } catch (e) {}
+      syncPitch(m);
+      // fades (2.21) are event-driven: `play` arms, `playing` fades in, `timeupdate` schedules the
+      // fade-out, `seeking` clears it; pause / ended only track the element's state
+      try {
+        m.addEventListener('play', () => { try { fadeCtl.onPlay(m); } catch (e) {} });
+        m.addEventListener('playing', () => { try { fadeCtl.onPlaying(m); } catch (e) {} });
+        m.addEventListener('timeupdate', () => { try { fadeCtl.onTimeUpdate(m); } catch (e) {} });
+        m.addEventListener('seeking', () => { try { fadeCtl.onSeeking(m); } catch (e) {} });
+        m.addEventListener('pause', () => { try { fadeCtl.onPause(m); } catch (e) {} });
+        m.addEventListener('ended', () => { try { fadeCtl.onEnded(m); } catch (e) {} });
+      } catch (e) {}
+      // capture hygiene (2.31): keep the set bounded — once past eight, drop one paused element
+      // (its listeners stay; the element is garbage as soon as SoundCloud lets go of it)
+      if (sceMediaEls.size > 8) { for (const x of sceMediaEls) { if (x !== m && x.paused) { sceMediaEls.delete(x); break; } } }
+    } catch (e) {}
+  }
+  // pitch follows speed (2.20): preservesPitch is the element's, so it is written here (capture, every
+  // applySpeed, every applyFx) rather than in the chain. `true` = the old hard-coded behaviour.
+  function syncPitch(m) {
+    try {
+      const pp = !CFG.vinylMode;
+      if (m.preservesPitch !== pp) m.preservesPitch = pp;
+      if ('mozPreservesPitch' in m && m.mozPreservesPitch !== pp) m.mozPreservesPitch = pp;
+      if ('webkitPreservesPitch' in m && m.webkitPreservesPitch !== pp) m.webkitPreservesPitch = pp;
     } catch (e) {}
   }
   function applySpeed() {
     try {
       const want = wantedRate();
       try { D.querySelectorAll('audio,video').forEach((m) => captureMedia(m)); } catch (e) {}
-      sceMediaEls.forEach((m) => { try { if (Math.abs((m.playbackRate || 1) - want) > 0.01) m.playbackRate = want; } catch (e) {} });
-      if (sceBufNodes.size) sceBufNodes.forEach((n) => { try { if (n.playbackRate) n.playbackRate.value = want; } catch (e) {} });
+      sceMediaEls.forEach((m) => { try { if (Math.abs((m.playbackRate || 1) - want) > 0.01) m.playbackRate = want; } catch (e) {} syncPitch(m); });
+      // raw buffer sources: only real tracks (> 30 s) follow the speed — UI blips and previews stay put (2.31)
+      if (sceBufNodes.size) sceBufNodes.forEach((n) => { try { if (n.playbackRate && n.buffer && n.buffer.duration > 30 && n.playbackRate.value !== want) n.playbackRate.value = want; } catch (e) {} });
     } catch (e) {}
   }
   /* ───────── Audio FX (EXPERIMENTAL) — EQ · loudness · fade ─────────
@@ -11164,6 +11188,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         w(c.limTrim.gain, limTrimGain);
         if (!keep('fadeOn')) { try { c.output.gain.cancelScheduledValues(now); c.output.gain.setValueAtTime(1, now); c.output.gain.value = 1; } catch (er) {} }
       });
+      if (!keep('fadeOn')) fadeCtl.reset();
+      try { sceMediaEls.forEach(syncPitch); } catch (er) {}   // vinyl mode (2.20) is an element property
       // ── routing, per chain entry; fxRouted = "any entry routed" (latency + loudness gates) ──
       let any = false;
       sceFx.forEach((e) => { if (e.routed !== want) { e.routed = want; try { e.reroute(); } catch (er) {} } if (e.routed) any = true; });
@@ -11361,21 +11387,78 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   try { W.addEventListener('pagehide', () => { try { rememberLoud(true); } catch (e) {} }); } catch (e) {}
-  function updateFade() {
-    try {
-      const m = activeMedia();
-      const dur = m && m.duration, cur = m && m.currentTime;
-      sceFx.forEach((e) => {
-        let target = 1;
-        if (isFinite(dur) && dur > 8 && isFinite(cur)) {
-          const tOut = dur - cur;
-          if (cur < 1.4) target = Math.max(0.04, cur / 1.4);          // fade in the first 1.4s
-          else if (tOut < 2.5) target = Math.max(0.04, tOut / 2.5);   // fade out the last 2.5s
-        }
-        try { e.chain.output.gain.setTargetAtTime(target, e.ctx.currentTime || 0, 0.25); } catch (er) { try { e.chain.output.gain.value = target; } catch (er2) {} }
-      });
-    } catch (e) {}
-  }
+  /* fades (2.21) — event-driven, on `output` (the last node, after the limiter, so a fade never
+   * triggers gain reduction). `play` only ARMS the gain at the floor so nothing bursts before audio
+   * flows; `playing` (audio actually flowing — the decoder's start-up no longer eats the ramp) fades
+   * in, the full length for a fresh start and a short one when the same track resumes after a pause;
+   * `timeupdate` (≈ 4 Hz) schedules ONE exponential fade-out into the last `fadeOut` seconds, its
+   * length divided by the playback rate; `seeking` clears it and restores unity unless the seek lands
+   * inside the fade-out window (the next timeupdate reschedules). A user seek (restart / nudge /
+   * seekPct / the A–B wrap) in the last 500 ms skips the arm and the fade so a jump never dips the
+   * level. The enforce tick re-runs the timeupdate check as a backstop; nothing here ever throws. */
+  const FADE_FLOOR = 0.04;
+  let __sceUserSeek = 0;          // Date.now() of the last suite-initiated seek
+  let fadeHref = null;            // the track the last fade-in was for
+  let fadeOutSched = false;       // one fade-out per track
+  let fadeInAt = 0;               // Date.now() of the last fade-in (guards the href-change fade against a double dip)
+  let fadeOutInfo = null;         // the last scheduled fade-out { at, dur, rate, remain } (debug)
+  const fadeLen = () => ({ fi: clampNum(CFG.fadeIn == null ? 0.6 : CFG.fadeIn, 0, 3, 0), fo: clampNum(CFG.fadeOut == null ? 2.5 : CFG.fadeOut, 0, 8, 0) });
+  const fadeEach = (fn) => { sceFx.forEach((e) => { try { fn(e.chain.output.gain, e.ctx.currentTime || 0); } catch (er) {} }); };
+  const fadeUnity = () => fadeEach((g, t) => { g.cancelScheduledValues(t); g.setValueAtTime(1, t); });
+  const fadeInNow = (len) => {
+    fadeInAt = Date.now();
+    fadeEach((g, t) => { g.cancelScheduledValues(t); if (len > 0) { g.setValueAtTime(FADE_FLOOR, t); g.exponentialRampToValueAtTime(1, t + len); } else g.setValueAtTime(1, t); });
+  };
+  const inFadeOutWindow = (m, fo) => { const dur = m.duration, cur = m.currentTime; return isFinite(dur) && dur > 8 && isFinite(cur) && fo > 0 && (dur - cur) <= fo + 0.25; };
+  const fadeCtl = {
+    onPlay(m) {
+      if (!CFG.fadeOn || !m) return;
+      if (Date.now() - __sceUserSeek < 500) { m.__sceFade = 'seek'; return; }   // a jump: never dip
+      m.__sceFade = 'armed';
+      fadeEach((g, t) => { g.cancelScheduledValues(t); g.setValueAtTime(FADE_FLOOR, t); });
+    },
+    onPlaying(m) {
+      if (!CFG.fadeOn || !m) return;
+      const href = curTrackHref(), same = href === fadeHref, st = m.__sceFade;
+      if (!same) fadeOutSched = false;
+      fadeHref = href;
+      if (Date.now() - __sceUserSeek < 500 || st === 'seek') { m.__sceFade = 'flowing'; if (!fadeOutSched) fadeUnity(); return; }
+      if (st === 'flowing' && same) return;   // a stall or a seek on a flowing track: leave the gain alone
+      m.__sceFade = 'flowing';
+      const { fi } = fadeLen();
+      fadeInNow(same && m.currentTime > 1 ? Math.min(fi, 0.15) : fi);
+    },
+    onTimeUpdate(m) {
+      if (!CFG.fadeOn || !m || m.paused) return;
+      const { fi, fo } = fadeLen();
+      // a new track on the same element (SoundCloud swaps src) or the badge catching up: fade it in once
+      const href = curTrackHref();
+      if (href !== fadeHref) {
+        fadeHref = href; fadeOutSched = false;
+        if (Date.now() - fadeInAt > 1200 && m.currentTime < 2) { m.__sceFade = 'flowing'; fadeInNow(fi); }
+      }
+      const dur = m.duration, cur = m.currentTime;
+      if (fadeOutSched) {
+        // a wrap (element loop) lands well before the window with the fade-out still armed: start over
+        if (isFinite(dur) && isFinite(cur) && cur < dur - fo - 1) { fadeOutSched = false; fadeInNow(fi); }
+        return;
+      }
+      if (!inFadeOutWindow(m, fo)) return;
+      const remain = Math.max(0.05, (dur - cur) / Math.max(0.25, m.playbackRate || 1));
+      fadeEach((g, t) => { g.cancelScheduledValues(t); g.setValueAtTime(Math.max(FADE_FLOOR, g.value), t); g.exponentialRampToValueAtTime(FADE_FLOOR, t + remain); });
+      fadeOutSched = true; fadeOutInfo = { at: cur, dur, rate: m.playbackRate || 1, remain };
+    },
+    onSeeking(m) {
+      if (!CFG.fadeOn || !m) return;
+      fadeOutSched = false;
+      if (inFadeOutWindow(m, fadeLen().fo)) return;   // the next timeupdate reschedules the fade-out
+      fadeUnity();
+    },
+    onPause(m) { try { if (m && m.__sceFade !== 'seek') m.__sceFade = 'paused'; } catch (e) {} },
+    onEnded(m) { fadeOutSched = false; try { if (m) m.__sceFade = 'ended'; } catch (e) {} },
+    reset() { fadeHref = null; fadeOutSched = false; fadeInAt = 0; },
+    state() { return { href: fadeHref, outScheduled: fadeOutSched, out: fadeOutInfo, userSeekAgo: __sceUserSeek ? Date.now() - __sceUserSeek : null }; },
+  };
   // Install the Web Audio captures ONCE at module load (document_start, before
   // SoundCloud builds its audio graph). All wrappers preserve native behaviour
   // exactly and are inert at 1×, so they can't affect normal playback.
@@ -11402,11 +11485,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (oBS) AC.prototype.createBufferSource = function () {
           const node = oBS.apply(this, arguments);
           try {
-            const w = wantedRate();
-            if (w !== 1 && node.playbackRate) node.playbackRate.value = w;
             sceBufNodes.add(node);
             const drop = () => { try { sceBufNodes.delete(node); } catch (e) {} };
             if (node.addEventListener) node.addEventListener('ended', drop);
+            // the rate is decided at start(), when the buffer is known: only real tracks follow the speed (2.31)
+            const ost = node.start; if (typeof ost === 'function') node.start = function () { try { const w = wantedRate(); if (w !== 1 && node.playbackRate && node.buffer && node.buffer.duration > 30) node.playbackRate.value = w; } catch (e) {} return ost.apply(this, arguments); };
             const os = node.stop; if (typeof os === 'function') node.stop = function () { drop(); return os.apply(this, arguments); };
             const od = node.disconnect; if (typeof od === 'function') node.disconnect = function () { drop(); return od.apply(this, arguments); };
           } catch (e) {}
@@ -11459,7 +11542,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.speedPerTrack) restoreTrackSpeed(); } catch (e) {}
       try { restoreTrackLoud(); } catch (e) {}
       try { if (fxRouted && !loudTimer) peakTick(); } catch (e) {}
-      try { if (CFG.fadeOn) updateFade(); } catch (e) {}
+      try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
       const m = activeMedia();
       if (!m) return;
       try { updateContour(m); } catch (e) {}
@@ -11482,7 +11565,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       // A–B loop: jump back to A once we pass B
       if (abOn && abA != null && abB != null && abB > abA) {
-        try { if (m.currentTime >= abB || m.currentTime < abA - 0.5) m.currentTime = abA; } catch (e) {}
+        try { if (m.currentTime >= abB || m.currentTime < abA - 0.5) { __sceUserSeek = Date.now(); m.currentTime = abA; } } catch (e) {}
       }
     } catch (e) {}
   }
@@ -11499,15 +11582,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function abClear() { abA = abB = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast('A–B loop cleared'); }
   function restartTrack() {
     const m = activeMedia();
-    try { if (m) { m.currentTime = 0; toast('Restarted'); } } catch (e) {}
+    try { if (m) { __sceUserSeek = Date.now(); m.currentTime = 0; toast('Restarted'); } } catch (e) {}
   }
   function nudgeSeek(sec) {
     const m = activeMedia();
-    try { if (m && isFinite(m.duration)) { m.currentTime = Math.min(m.duration - 0.3, Math.max(0, m.currentTime + sec)); } } catch (e) {}
+    try { if (m && isFinite(m.duration)) { __sceUserSeek = Date.now(); m.currentTime = Math.min(m.duration - 0.3, Math.max(0, m.currentTime + sec)); } } catch (e) {}
   }
   function seekPct(p) {
     const m = activeMedia();
-    try { if (m && isFinite(m.duration) && m.duration > 0) { m.currentTime = m.duration * p; } } catch (e) {}
+    try { if (m && isFinite(m.duration) && m.duration > 0) { __sceUserSeek = Date.now(); m.currentTime = m.duration * p; } } catch (e) {}
   }
   function setupBehaviour() {
     try { setInterval(() => { enforce(); ensureMini(); }, 1000); } catch (e) {}
@@ -11654,7 +11737,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!href || href === lastSpeedUrl) return;
       lastSpeedUrl = href;
       const want = (GET('spd:bytrack', {}) || {})[href] | 0;
-      if (want >= 50 && want <= 200 && want !== (CFG.speed | 0)) { CFG.speed = want; save(); applySpeed(); refreshBar(); toast('Speed ' + (want / 100) + '× (remembered)'); }
+      if (want >= 50 && want <= 200 && want !== (CFG.speed | 0)) { CFG.speed = want; save(); applySpeed(); refreshBar(); try { if (eqRepaint) eqRepaint(); } catch (e) {} toast('Speed ' + (want / 100) + '× (remembered)'); }
     } catch (e) {}
   }
   const SPEEDS = [100, 125, 150, 175, 200, 50, 75];
@@ -11664,6 +11747,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // remember BEFORE enforce(): enforce→restoreTrackSpeed must see this track
     // already locked, so a manual change can't be clobbered by a stale remembered value
     save(); rememberSpeed(); enforce(); refreshBar();
+    try { if (eqRepaint) eqRepaint(); } catch (e) {}   // the Audio tab's Speed row and chips follow
     // one-line diagnostic so we can see whether SoundCloud's audio element even
     // accepts the rate (open DevTools console → change speed → read this)
     try {
@@ -12212,9 +12296,47 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       bodyEl.appendChild(chipRow);
       liveSync.push(() => chips.forEach((b) => b._paint()));
 
-      // ── playback (speed, vinyl mode and the fade lengths join this section later) ──
+      // ── playback (2.19 – 2.21): Speed + tempo chips, Pitch follows speed, Fade in / out + lengths.
+      //    Speed is the suite's most-used control, so it sits right under Listening on ──
       bodyEl.appendChild(sectionLabel('Playback'));
-      toggleRow('Fade in / out', 'Smooth the gap between tracks', 'fadeOn');
+      const setSpeed = (x) => { CFG.speed = cl(x | 0, 50, 200); saveSoon(); rememberSpeed(); applySpeed(); refreshBar(); };
+      let paintSpeed = () => {};
+      const spdR = sliderRow('Speed', 50, 200, 5, () => cl(CFG.speed | 0, 50, 200), (x) => { setSpeed(x); paintSpeed(); }, (x) => (x / 100) + '×', 100);
+      spdR.row.firstChild.title = 'Playback speed · 0.5× – 2× · double-click resets';
+      bodyEl.appendChild(spdR.row);
+      // tempo chips: the same six stops the player-bar pill cycles through; the lit one is the current speed
+      const tempoRow = D.createElement('div'); tempoRow.style.cssText = 'display:flex;gap:6px';
+      const tempoChips = [50, 75, 100, 125, 150, 200].map((v) => {
+        const b = mkBtn((v / 100) + '×'); b.style.flex = '1'; b.style.padding = '8px 0';
+        const tint = () => { const lit = (CFG.speed | 0) === v; b.style.background = lit ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; b.style.color = lit ? '#ffb083' : '#c4c4ca'; };
+        // mkBtn's own hover handlers run first; these keep the tint on the lit chip
+        b.addEventListener('mouseenter', () => { if ((CFG.speed | 0) === v) tint(); });
+        b.addEventListener('mouseleave', () => { if ((CFG.speed | 0) === v) tint(); });
+        b.addEventListener('click', () => { setSpeed(v); try { spdR.input.value = v; } catch (e) {} spdR.paint(); paintSpeed(); });
+        b._paint = tint; tint(); tempoRow.appendChild(b); return b;
+      });
+      bodyEl.appendChild(tempoRow);
+      // pitch follows speed (2.20): the semitone shift rides in the description, hidden at 1×
+      const VINYL_DESC = 'Vinyl / tape feel · slowed sounds deeper, sped-up sounds higher';
+      const vinR = toggleRow('Pitch follows speed', VINYL_DESC, 'vinylMode');
+      const semis = () => { const st = 12 * Math.log2(wantedRate()); return Math.abs(st) < 0.05 ? '' : ' · ' + (st < 0 ? '−' : '+') + Math.abs(st).toFixed(1) + ' semitones'; };
+      const paintVinyl = () => { const t = VINYL_DESC + semis(); if (vinR.desc.textContent !== t) vinR.desc.textContent = t; };
+      vinR.sw.addEventListener('click', () => { try { applySpeed(); } catch (e) {} });   // toggleRow flipped the key; the element follows at once
+      paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); };
+      paintVinyl();
+      // fade in / out (2.21): the lengths dim while off and wake the switch like Intensity does
+      const fadeRow = toggleRow('Fade in / out', 'Smooth the gap between tracks', 'fadeOn');
+      const fmtSec = (x) => (+x).toFixed(1) + ' s';
+      let fiR = null, foR = null;
+      const paintFade = () => { try { const op = CFG.fadeOn ? '1' : '.45'; fiR.row.style.opacity = op; foR.row.style.opacity = op; } catch (e) {} };
+      const wakeFade = () => { if (!CFG.fadeOn) { CFG.fadeOn = true; fadeRow.sw._paint(); } saveSoon(); applyFx(); paintFade(); };
+      fiR = sliderRow('Fade in', 0, 3, 0.1, () => num('fadeIn', 0, 3), (x) => { CFG.fadeIn = Math.round(cl(+x || 0, 0, 3) * 10) / 10; wakeFade(); }, fmtSec, 0.6);
+      foR = sliderRow('Fade out', 0, 8, 0.1, () => num('fadeOut', 0, 8), (x) => { CFG.fadeOut = Math.round(cl(+x || 0, 0, 8) * 10) / 10; wakeFade(); }, fmtSec, 2.5);
+      foR.row.firstChild.title = 'Fade out · shortened in proportion at higher speeds · double-click resets';
+      fadeRow.sw.addEventListener('click', paintFade);
+      paintFade(); bodyEl.append(fiR.row, foR.row);
+      liveSync.push(syncSlider(spdR, () => cl(CFG.speed | 0, 50, 200)), () => { paintSpeed(); vinR.sw._paint(); },
+        syncSlider(fiR, () => num('fadeIn', 0, 3)), syncSlider(foR, () => num('fadeOut', 0, 8)), () => { fadeRow.sw._paint(); paintFade(); });
 
       // ── tone (2.10 – 2.14): Bass · Vocals · Loudness contour · Tilt. No master switch — the
       //    label's double-click (sliderRow's resetTo) is how a listener turns a knob off ──
@@ -12565,6 +12687,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           restoreLoud: () => restoreTrackLoud(),
           ab: (a, b) => { abA = +a; abB = +b; abOn = true; refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
+          fade: () => fadeCtl.state(), restartTrack, nudgeSeek, seekPct, applySpeed, status: () => audioStatus(),
           toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
