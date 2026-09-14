@@ -11318,7 +11318,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       for (let i = 0; i < n; i++) { sL += bl[i]; sR += br[i]; sLR += bl[i] * br[i]; }
       const den = Math.sqrt(Math.max(0, (n * sl.ss - sL * sL) * (n * sr.ss - sR * sR)));
       const corr = (!raced && den > 1e-9) ? Math.max(-1, Math.min(1, (n * sLR - sL * sR) / den)) : NaN;
-      meter.corr = corr;
+      if (!raced) meter.corr = corr;   // a raced read casts no vote and leaves the displayed value alone (no tick flicker); silence clears it
       // a stereo track reads low on every tick, so three low reads in a row lift the verdict; one stray read never does
       const guard = (+CFG.vocalAmt || 0) !== 0;
       const lift = () => { monoSince = 0; monoLow = 0; if (meter.monoSrc) { meter.monoSrc = false; applyFx(); } };
