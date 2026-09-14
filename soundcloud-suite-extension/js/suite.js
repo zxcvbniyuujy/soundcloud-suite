@@ -10651,6 +10651,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   let lastHeadroomDb = 0;  // the auto-headroom applyFx last took off the pre-amp (dB, ≥ 0) — shown in the Pre-amp value
   let eqCurveVer = 0;      // bumped by applyFx whenever anything that shapes the composite curve changed (the canvas redraws on it)
   let contourK = 0;        // loudness-contour depth 0..1 from SoundCloud's volume slider (driven by the enforce tick)
+  let contourAppliedK = 0; // contourK as of the last applyFx — the headroom re-runs once k·amt has moved > 0.5 dB
+  let listenSig = null;    // the five keys a Listening-on profile set, as applyFx last saw them; drift un-lights the chip (2.13)
   // the biquad corners the bands actually use: the 31 Hz / 16 kHz labels stay, but a
   // lowshelf AT 31 Hz gives the 31 Hz label only half its gain and a highshelf at 16 kHz
   // sits above the codec's passband (2.26)
@@ -11072,6 +11074,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const boost = cl(CFG.boostAmt == null ? 100 : CFG.boostAmt, 100, 300) / 100;   // kept during Compare
       const enhAmt = cl(CFG.enhanceAmt, 0, 100) / 100, nightAmt = cl(CFG.nightAmt, 0, 100) / 100;
       const cfF = on('crossfeedOn') ? cfFeed(CFG.crossfeedMode) : 0;
+      // ── Listening on (2.13): the chip stays lit only while the five keys its bundle set are
+      //    untouched — any edit (slider, switch, debug, paste) clears it. From CFG, not Compare ──
+      const sig = [cl(CFG.bassDb, 0, 9), cl(CFG.tiltDb, -4, 4), !!CFG.crossfeedOn, String(CFG.crossfeedMode), !!CFG.loudCompOn].join('|');
+      if (CFG.listenOn) { if (listenSig == null) listenSig = sig; else if (sig !== listenSig) { CFG.listenOn = ''; listenSig = null; try { save(); } catch (er) {} } }
+      else listenSig = null;
+      contourAppliedK = contourK;
+      // ── Vocals (2.12): once, the first time the slider goes past the middle of "softer" ──
+      if (cl(CFG.vocalAmt, -100, 100) < -50 && !GET('enh:vocalHint', 0)) { SET('enh:vocalHint', 1); toast('Vocals are softened, not removed — works on stereo mixes'); }
       // ── auto-headroom from the composite response (2.9): overlapping shelves add up,
       //    and with Enhance on the shaper hard-clips anything over 0 dBFS at that point ──
       let headroomDb = 0;
@@ -11166,6 +11176,38 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       else loudRetarget();   // a new target or guard state re-applies the gain immediately
       eqCurveVer++;
     } catch (e) { Log.err('applyFx', e); }
+  }
+  // ── Listening on (2.13): one tap sets a bundle for the output in use. Never auto-applied
+  //    (no device detection); `listenOn` only remembers which chip is lit ──
+  const LISTEN_ON = {
+    headphones: { set: { crossfeedOn: true, crossfeedMode: 'natural', bassDb: 2, loudCompOn: false }, toast: 'Headphones · crossfeed + bass +2 dB' },
+    laptop: { set: { crossfeedOn: false, bassDb: 3, tiltDb: 1, loudCompOn: true }, toast: 'Laptop · bass +3 dB, brighter, loudness contour' },
+    speakers: { set: { crossfeedOn: false, bassDb: 0, tiltDb: 0, loudCompOn: false }, toast: 'Speakers · neutral' },
+  };
+  function applyListenOn(which) {
+    try {
+      const p = LISTEN_ON[which]; if (!p) return;
+      Object.assign(CFG, p.set);
+      CFG.listenOn = which; listenSig = null;   // applyFx records the bundle it now sees
+      save(); applyFx(); toast(p.toast);
+    } catch (e) { Log.err('applyListenOn', e); }
+  }
+  // ── Loudness contour (2.14): SoundCloud's volume slider drives element.volume (the OS
+  //    volume is invisible to a page); below 0.45 the 100 Hz / 8 kHz shelves rise toward
+  //    loudCompAmt (bass) and a third of it (treble), with a 0.3 s time constant. Run by the
+  //    enforce tick; the headroom part of applyFx re-runs once the depth moved > 0.5 dB ──
+  function updateContour(m) {
+    try {
+      let v = +m.volume; if (!isFinite(v)) v = 1;
+      contourK = Math.max(0, Math.min(1, (0.45 - v) / 0.45));
+      const amt = Math.max(0, Math.min(9, +CFG.loudCompAmt || 0));
+      const db = (!fxBypass && !!CFG.loudCompOn) ? contourK * amt : 0;
+      sceFx.forEach((e) => {
+        if (!e.routed) return;   // a detached chain gets no automation (applyFx writes it directly)
+        try { const now = e.ctx.currentTime || 0; e.chain.lcLo.gain.setTargetAtTime(db, now, 0.3); e.chain.lcHi.gain.setTargetAtTime(db / 3, now, 0.3); } catch (er) {}
+      });
+      if (Math.abs((contourK - contourAppliedK) * amt) > 0.5) applyFx();
+    } catch (e) {}
   }
   // post-limiter peak / mean power (what actually reaches the speakers) plus the
   // untouched source peak, read from the newest routed chain's taps into `meter` (dBFS)
@@ -11420,6 +11462,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.fadeOn) updateFade(); } catch (e) {}
       const m = activeMedia();
       if (!m) return;
+      try { updateContour(m); } catch (e) {}
       // loop — only ever ASSERT our own loop; never force-off (so we don't
       // fight SoundCloud's native repeat button)
       try {
@@ -11947,6 +11990,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const mkBtn = (txt) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.style.cssText = 'flex:none;border:0;border-radius:10px;padding:10px 14px;font:600 11.5px inherit;cursor:pointer;background:rgba(255,255,255,.06);color:#c4c4ca;transition:background .14s'; b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.11)'; }); b.addEventListener('mouseleave', () => { b.style.background = 'rgba(255,255,255,.06)'; }); return b; };
       // everything after the canvas lives in one body div, dimmed while comparing (2.3)
       const bodyEl = D.createElement('div'); bodyEl.style.cssText = 'transition:opacity .15s';
+      // rows that mirror CFG (the chips, the tone / stereo sliders and switches) re-sync on
+      // every applyFx through repaintAll, so a profile tap or a debug write repaints them
+      const liveSync = [];
+      const syncSlider = (r, get) => () => { const v = get(); if (String(r.input.value) !== String(v)) r.input.value = v; r.paint(); };
+      const num = (k, lo, hi) => { const v = +CFG[k]; return isFinite(v) ? cl(v, lo, hi) : 0; };
       const toggleRow = (label, desc, key) => {
         const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.05)';
         const tx = D.createElement('div'); tx.style.cssText = 'flex:1';
@@ -12024,7 +12072,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '10px 0'; delBtn.style.width = '36px'; delBtn.title = 'Delete preset';
       // dirty state: the select shows the preset the curve equals, or nothing once a band or the pre-amp moved
       const syncSel = () => { try { const v = matchEqPreset(); if (sel.value !== v) sel.value = v; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; } catch (e) {} };
-      const repaintAll = () => { eqSw._paint(); try { pre.input.value = CFG.eqPreamp | 0; } catch (e) {} pre.paint(); syncSel(); };
+      const repaintAll = () => { eqSw._paint(); try { pre.input.value = CFG.eqPreamp | 0; } catch (e) {} pre.paint(); syncSel(); for (const f of liveSync) { try { f(); } catch (e) {} } };
       eqRepaint = repaintAll;
       syncSel();
       sel.addEventListener('change', () => { const v = sel.value; if (!v) { syncSel(); return; } eqPresetHint = v; if (v.charAt(0) === 'b') applyEqPreset(EQ_PRESETS[v.slice(2)]); else { const cu = customPresets(), name = v.slice(2); if (Object.prototype.hasOwnProperty.call(cu, name)) applyEqPreset(cu[name]); else syncSel(); } });
@@ -12050,9 +12098,47 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // auto-headroom (2.9) closes the EQ block
       toggleRow('Auto-headroom', 'Lowers the volume by your biggest boost so nothing clips', 'eqAutoPre');
 
+      // ── listening on (2.13): three chips, one tap applies a bundle; the lit one is only a
+      //    memory of which bundle was tapped, cleared by any edit of what it set ──
+      bodyEl.appendChild(sectionLabel('Listening on'));
+      const chipRow = D.createElement('div'); chipRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+      const chips = [['headphones', 'Headphones'], ['laptop', 'Laptop'], ['speakers', 'Speakers']].map((c) => {
+        const b = mkBtn(c[1]); b.style.flex = '1'; b.style.padding = '8px 0';
+        const tint = () => { const lit = CFG.listenOn === c[0]; b.style.background = lit ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; b.style.color = lit ? '#ffb083' : '#c4c4ca'; };
+        // mkBtn's own hover handlers run first; these keep the tint on the lit chip
+        b.addEventListener('mouseenter', () => { if (CFG.listenOn === c[0]) tint(); });
+        b.addEventListener('mouseleave', () => { if (CFG.listenOn === c[0]) tint(); });
+        b.addEventListener('click', () => { applyListenOn(c[0]); repaintAll(); });
+        b._paint = tint; tint(); chipRow.appendChild(b); return b;
+      });
+      bodyEl.appendChild(chipRow);
+      liveSync.push(() => chips.forEach((b) => b._paint()));
+
       // ── playback (speed, vinyl mode and the fade lengths join this section later) ──
       bodyEl.appendChild(sectionLabel('Playback'));
       toggleRow('Fade in / out', 'Smooth the gap between tracks', 'fadeOn');
+
+      // ── tone (2.10 – 2.14): Bass · Vocals · Loudness contour · Tilt. No master switch — the
+      //    label's double-click (sliderRow's resetTo) is how a listener turns a knob off ──
+      bodyEl.appendChild(sectionLabel('Tone'));
+      const VAL_WIDE = ';width:62px';   // room for "Softer 100" / "Bright 2.5" without the track shifting mid-drag
+      const bassR = sliderRow('Bass', 0, 9, 0.5, () => num('bassDb', 0, 9), (x) => { CFG.bassDb = cl(+x || 0, 0, 9); saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + x + ' dB', 0);
+      bassR.row.firstChild.title = 'Sub-25 Hz rumble is removed automatically while bass is boosted · double-click resets';
+      bassR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(bassR.row);
+      const vocR = sliderRow('Vocals', -100, 100, 5, () => num('vocalAmt', -100, 100), (x) => { CFG.vocalAmt = cl(x | 0, -100, 100); saveSoon(); applyFx(); }, (x) => (x < 0 ? 'Softer ' + (-x | 0) : x > 0 ? 'Lift ' + (x | 0) : 'Normal'), 0);
+      vocR.row.firstChild.title = 'Softens or lifts the centre of a stereo mix (200 Hz – 7 kHz) · vocals are softened, not removed · double-click resets';
+      vocR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(vocR.row);
+      // loudness contour (2.14): the description carries the live state so the row never looks
+      // broken for listeners who use the OS volume (invisible to a page) instead of SoundCloud's slider
+      const LC_DESC = 'Keeps bass & sparkle when SoundCloud’s volume slider is low';
+      const lcRow = toggleRow('Loudness contour', LC_DESC, 'loudCompOn');
+      const lcDesc = () => { if (!CFG.loudCompOn) return LC_DESC; const db = contourK > 0 ? contourK * num('loudCompAmt', 0, 9) : 0; return LC_DESC + (db > 0 ? ' · +' + db.toFixed(1) + ' dB bass' : ' · off at this volume'); };
+      let lastLc = ''; const paintLc = () => { const t = lcDesc(); if (t !== lastLc) { lastLc = t; lcRow.desc.textContent = t; } };
+      paintLc(); lcRow.sw.addEventListener('click', paintLc);
+      const tiltR = sliderRow('Tilt', -4, 4, 0.5, () => num('tiltDb', -4, 4), (x) => { CFG.tiltDb = cl(+x || 0, -4, 4); saveSoon(); applyFx(); }, (x) => (x < 0 ? 'Warm ' + (-x) : x > 0 ? 'Bright ' + x : 'Flat'), 0);
+      tiltR.row.firstChild.title = 'Tilts the whole balance around 700 Hz · the figure is per shelf · double-click resets';
+      tiltR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(tiltR.row);
+      liveSync.push(syncSlider(bassR, () => num('bassDb', 0, 9)), syncSlider(vocR, () => num('vocalAmt', -100, 100)), syncSlider(tiltR, () => num('tiltDb', -4, 4)), () => { lcRow.sw._paint(); paintLc(); });
 
       // ── enhance ──
       bodyEl.appendChild(sectionLabel('Enhance'));
@@ -12098,7 +12184,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ── stereo ──
       bodyEl.appendChild(sectionLabel('Stereo'));
       const wR = sliderRow('Stereo width', 0, 200, 5, () => CFG.stereoWidth | 0, (x) => { CFG.stereoWidth = x | 0; saveSoon(); applyFx(); }, (x) => ((x | 0) === 0 ? 'Mono' : (x | 0) === 100 ? 'Normal' : (x | 0) + '%'), 100);
-      bodyEl.appendChild(wR.row);
+      wR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(wR.row);
+      // crossfeed (2.16) + its Mode select: like the loudness Target, choosing a mode wakes the switch
+      const cfRow = toggleRow('Crossfeed', 'Headphones sound like speakers in a room · less ping-pong fatigue', 'crossfeedOn');
+      const mdRow = D.createElement('div'); mdRow.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0;transition:opacity .15s';
+      const mdL = D.createElement('span'); mdL.textContent = 'Mode'; mdL.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
+      mdL.title = 'How much of each side reaches the other ear · Subtle 9.5 · Natural 6 · Strong 4.5 dB below direct';
+      const CF_MODES = ['subtle', 'natural', 'strong'];
+      const cfMode = () => (CF_MODES.indexOf(CFG.crossfeedMode) >= 0 ? CFG.crossfeedMode : 'natural');
+      const paintMd = () => { mdRow.style.opacity = CFG.crossfeedOn ? '1' : '.45'; };
+      const mdSel = mkSel([['subtle', 'Subtle'], ['natural', 'Natural'], ['strong', 'Strong']], cfMode,
+        (v) => { CFG.crossfeedMode = CF_MODES.indexOf(v) >= 0 ? v : 'natural'; if (!CFG.crossfeedOn) { CFG.crossfeedOn = true; cfRow.sw._paint(); } save(); applyFx(); paintMd(); });
+      cfRow.sw.addEventListener('click', paintMd);
+      mdRow.append(mdL, mdSel); paintMd(); bodyEl.appendChild(mdRow);
+      // balance (2.17): attenuates the other side only, never boosts
+      const balR = sliderRow('Balance', -100, 100, 5, () => num('balance', -100, 100), (x) => { CFG.balance = cl(x | 0, -100, 100); saveSoon(); applyFx(); }, (x) => (x < 0 ? 'L ' + (-x | 0) : x > 0 ? 'R ' + (x | 0) : 'Centre'), 0);
+      balR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(balR.row);
+      const monoRow = toggleRow('Mono', 'Same sound in both ears · for one earbud or a single speaker', 'monoOn');
+      liveSync.push(syncSlider(wR, () => cl(CFG.stereoWidth | 0, 0, 200)), syncSlider(balR, () => num('balance', -100, 100)),
+        () => { cfRow.sw._paint(); monoRow.sw._paint(); paintMd(); const mv = cfMode(); if (mdSel.value !== mv) mdSel.value = mv; });
 
       // ── footnote ──
       const note = D.createElement('div'); note.style.cssText = 'margin-top:20px;font-size:10px;color:#67676f;line-height:1.5';
@@ -12117,6 +12221,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (g !== lastGuard) { lastGuard = g; guard.desc.textContent = g; }
           const ld = loudDesc();
           if (ld !== lastLoud) { lastLoud = ld; loudRow.desc.textContent = ld; }
+          paintLc();
         } catch (e) {}
       };
 
@@ -12294,6 +12399,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ab: (a, b) => { abA = +a; abB = +b; abOn = true; refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
           toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
+          gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
