@@ -12875,8 +12875,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // the hub converts that latency from output seconds to media seconds
   try { SUITE.audioRate = () => wantedRate(); } catch (e) {}
   // sleep-timer fade (WP10): module 1 asks for it. With the chain routed, a linear ramp of every routed chain's output
-  // gain to 0.02 over `sec` s — after the limiter, so it never pumps, and the element's volume (SoundCloud's slider)
+  // gain to 0.02 in `sec` s — after the limiter, so it never pumps, and the element's volume (SoundCloud's slider)
   // stays put; 0 restores unity after the pause. false when nothing is routed: module 1 steps the volume instead.
+  // The ramp lands half a second early: module 1's pause click is on the wall clock, the ramp on the audio clock.
   try {
     SUITE.audioFadeOut = (sec) => {
       let any = false;
@@ -12885,7 +12886,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try {
           const g = e.chain.output.gain, t = e.ctx.currentTime || 0;
           g.cancelScheduledValues(t);
-          if (sec > 0) { g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0.02, t + sec); } else g.setValueAtTime(1, t);
+          if (sec > 0) { g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0.02, t + Math.max(1, sec - 0.5)); } else g.setValueAtTime(1, t);
           any = true;
         } catch (er) {}
       });
