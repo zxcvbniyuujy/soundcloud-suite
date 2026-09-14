@@ -2297,11 +2297,15 @@ const FIXTURE_SRC = `
     await trap();
     await dbg(`d.sleepSet(0.01);`);   // 0.6 s; the shuffle watcher checks every 2 s
     approx((await snap()).params.output.gain, 1, 0.001, 'gain 1 before the fade');
+    const clock = () => dbg(`const c = d.nodes().output.context; return { t: c.currentTime, w: performance.now() / 1000, st: c.state, chains: d.chains };`);
+    const c0 = await clock();
     await sleep(3200);
     let s = await snap(); const g3 = s.params.output.gain; assert(g3 < 0.97 && g3 > 0.25, 'fading through the chain (' + g3.toFixed(3) + ')');
     eq(await dbg(`return d.sleepFading();`), true, 'sleep fade flagged'); eq(await elProp('volume'), 1, 'the element volume is untouched');
     await set('tiltDb', 1); s = await snap(); assert(s.params.output.gain < g3, 'an applyFx mid-fade leaves the ramp alone (' + s.params.output.gain.toFixed(3) + ')');
     let w = await watch(() => dbg(`return { v: d.params.output.gain, n: window.__pcClicks };`));
+    const c1 = await clock();
+    console.log('  clock: audio advanced ' + (c1.t - c0.t).toFixed(2) + ' s while the wall clock advanced ' + (c1.w - c0.w).toFixed(2) + ' s (' + c1.st + ', ' + c1.chains + ' chains)');
     assert(w.clickV != null, 'the play button was clicked at the end of the fade'); assert(w.clickV <= 0.06, 'at the click the gain rests near the floor (' + w.clickV + ')');
     approx(w.minV, 0.02, 0.01, 'floor 0.02'); assert(w.restored, 'gain restored after the pause click'); eq(w.clicks, 1, 'exactly one click');
     eq(await dbg(`return d.sleepFading();`), false, 'flag cleared'); eq(await elProp('volume'), 1, 'volume still untouched');
