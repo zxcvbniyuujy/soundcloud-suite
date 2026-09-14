@@ -10625,6 +10625,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   let paintCmp = null;     // set by audioRender (the Compare button's painter); null until the tab has rendered
   let loudTimer = 0;       // the loudness measurement interval (started/stopped by applyFx)
   const meter = {};        // live meter values { m, s, i, peak, outDb, gainDb, gr, limGr } — filled by the meter loops
+  let lastHeadroomDb = 0;  // the auto-headroom applyFx last took off the pre-amp (dB, ≥ 0) — shown in the Pre-amp value
+  let eqCurveVer = 0;      // bumped by applyFx whenever anything that shapes the composite curve changed (the canvas redraws on it)
+  let contourK = 0;        // loudness-contour depth 0..1 from SoundCloud's volume slider (driven by the enforce tick)
+  // the biquad corners the bands actually use: the 31 Hz / 16 kHz labels stay, but a
+  // lowshelf AT 31 Hz gives the 31 Hz label only half its gain and a highshelf at 16 kHz
+  // sits above the codec's passband (2.26)
+  const EQ_NODE_FREQS = [48, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 11000];
+  // 160 log-spaced probe frequencies, 20 Hz – 20 kHz: the composite curve + auto-headroom
+  const PROBE_N = 160;
+  const PROBE_FREQS = (() => { const a = new Float32Array(PROBE_N); for (let i = 0; i < PROBE_N; i++) a[i] = 20 * Math.pow(1000, i / (PROBE_N - 1)); return a; })();
+  const _probeMag = new Float32Array(PROBE_N), _probePh = new Float32Array(PROBE_N);
+  // crossfeed feed levels (LF cross level below direct, the bs2b convention): f = r/(1+r), r = 10^(−dB/20)
+  const CF_FEED_DB = { subtle: 9.5, natural: 6, strong: 4.5 };   // bs2b "Meier" / "Chu Moy" / default
+  const cfFeed = (mode) => { const db = CF_FEED_DB[mode] == null ? CF_FEED_DB.natural : CF_FEED_DB[mode]; const r = Math.pow(10, -db / 20); return r / (1 + r); };
+  // compressor auto-makeup calibration cache: key 'thr|knee|ratio' → { db, exact }
+  const _calib = new Map(), _calibWanted = new Set();
   // the one AudioParam writer for everything audible: a short linear ramp so
   // toggles never click; linear ramps arrive exactly, so inert values are exact
   function ramp(p, v, t, s) {
@@ -10656,7 +10672,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { D.addEventListener('visibilitychange', () => { try { if (D.hidden) setBypass(false); } catch (e) {} }); } catch (e) {}
   // the Audio tab routes the (transparent) chain so the spectrum analyser gets a
   // live signal even before any effect is actually enabled
-  function fxOn() { return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || (CFG.stereoWidth | 0) !== 100 || audioTabOn); }
+  function fxOn() {
+    return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || CFG.peqOn || CFG.nightOn || CFG.loudCompOn
+      || CFG.crossfeedOn || CFG.monoOn || CFG.swapLR
+      || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0
+      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (CFG.boostAmt | 0) > 100 || audioTabOn);
+  }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
   const EQ_LABELS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
   const EQ_PRESETS = {
@@ -10675,57 +10696,258 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     'Lo-fi': [4, 3, 1, 0, 0, -2, -5, -8, -11, -12],
     'Podcast': [-5, -3, 0, 3, 4, 4, 3, 1, -2, -4],
   };
+  // K-weighting (the ITU-R BS.1770 pre-filter + RLB high-pass) derived for any sample
+  // rate by the bilinear method libebur128 uses — reproduces the 48 kHz table exactly
+  function kCoeffs(fs) {
+    const G = 3.999843853973347;
+    let f0 = 1681.974450955533, Q = 0.7071752369554196;
+    let K = Math.tan(Math.PI * f0 / fs);
+    const Vh = Math.pow(10, G / 20), Vb = Math.pow(Vh, 0.4996667741545416);
+    const a0 = 1 + K / Q + K * K;
+    const pb = [(Vh + Vb * K / Q + K * K) / a0, 2 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0];
+    const pa = [1, 2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0];
+    f0 = 38.13547087602444; Q = 0.5003270373238773; K = Math.tan(Math.PI * f0 / fs);
+    const rb = [1, -2, 1], d = 1 + K / Q + K * K;
+    const ra = [1, 2 * (K * K - 1) / d, (1 - K / Q + K * K) / d];
+    const mul = (x, y) => { const r = new Array(x.length + y.length - 1).fill(0); for (let i = 0; i < x.length; i++) for (let j = 0; j < y.length; j++) r[i + j] += x[i] * y[j]; return r; };
+    return { b: mul(pb, rb), a: mul(pa, ra) };
+  }
+  /* The chain (spec §3). Every stage is an exact identity at its default, so with
+   * nothing enabled the routed chain is a passthrough (plus the two compressors'
+   * fixed 6 ms pre-delay); the chain is detached entirely when fxOn() is false.
+   *   input → [taps] → preamp → rumble → tiltLo/Hi → lcLo/Hi → bands[10] → peq[10] → bass →
+   *   warm → air → shaper → comp → compTrim → M/S (width + vocal band) → crossfeed →
+   *   matrix → analyser → makeup → boost → lim → limTrim → [tap] → output
+   * Highpass/lowpass biquads cannot be made inert by parameters, so they are either
+   * swapped to `peaking` 0 dB (rumble) or live only on paths whose gain is 0. */
   function buildFxChain(ctx) {
-    const input = ctx.createGain();
-    const preamp = ctx.createGain(); preamp.gain.value = 1;
-    const bands = EQ_FREQS.map((f, i) => {
-      const b = ctx.createBiquadFilter();
-      if (i === 0) b.type = 'lowshelf';
-      else if (i === EQ_FREQS.length - 1) b.type = 'highshelf';
-      else { b.type = 'peaking'; try { b.Q.value = 1.4; } catch (e) {} }
-      b.frequency.value = f; b.gain.value = 0;
-      return b;
-    });
-    // ── enhancer: an "air" high-shelf, harmonic warmth, and gentle punch.
-    //    All inert when off (shelf 0 dB, waveshaper curve null = passthrough,
-    //    compressor ratio 1 = no compression) so it can't colour the sound. ──
-    const air = ctx.createBiquadFilter(); air.type = 'highshelf'; air.frequency.value = 11000; air.gain.value = 0;
-    const shaper = ctx.createWaveShaper(); try { shaper.oversample = '2x'; } catch (e) {}
+    const sr = ctx.sampleRate || 48000;
+    const biq = (type, f, q, g) => { const b = ctx.createBiquadFilter(); b.type = type; try { b.frequency.value = f; if (q != null) b.Q.value = q; b.gain.value = g || 0; } catch (e) {} return b; };
+    const gain = (g) => { const n = ctx.createGain(); n.gain.value = g; return n; };
+    // intermediate mono buses: explicit 1 channel so the M/S maths stay exact
+    const mono = (g) => { const nn = ctx.createGain(); try { nn.channelCount = 1; nn.channelCountMode = 'explicit'; nn.channelInterpretation = 'discrete'; } catch (e) {} nn.gain.value = g; return nn; };
+    // stereo entry points: force a real L/R pair so a mono source never arrives as [L, silence]
+    const stereo = (g) => { const nn = ctx.createGain(); try { nn.channelCount = 2; nn.channelCountMode = 'explicit'; nn.channelInterpretation = 'speakers'; } catch (e) {} nn.gain.value = g == null ? 1 : g; return nn; };
+    // measurement taps: time-domain reads only (no FFT is ever computed), so the
+    // 32768 size is free and a 500 ms read sees every sample
+    const tap = () => { const a = ctx.createAnalyser(); try { a.fftSize = 32768; a.smoothingTimeConstant = 0; a.channelCount = 1; } catch (e) {} return a; };
+    const BW = -3.01;   // Chromium reads highpass/lowpass Q in dB: −3.01 dB = linear 0.707 = Butterworth
+    // 1. input — the single attachment point for reroute. Stereo-forced so the source
+    //    taps and the whole chain see the same L/R pair the speakers would (a mono
+    //    stream is up-mixed L = R exactly as the destination would do it).
+    const input = stereo(1);
+    // 1b. side taps from `input` (never in the audio path; outputs unconnected — Chromium
+    //     still processes them): K-weighted L/R for loudness, plain L/R for the source peak.
+    //     Measured BEFORE every user stage so the stored loudness is the track's, not ours.
+    let kIn = null, kOut = null;
+    try { const k = kCoeffs(sr); kIn = kOut = ctx.createIIRFilter(k.b, k.a); } catch (e) { kIn = kOut = null; }
+    if (!kIn) { kIn = biq('highshelf', 1681.97, null, 4); kOut = biq('highpass', 38.135, -6.02, 0); kIn.connect(kOut); }   // within 0.26 dB
+    const kSplit = ctx.createChannelSplitter(2), kL = tap(), kR = tap();
+    input.connect(kIn); kOut.connect(kSplit); kSplit.connect(kL, 0); kSplit.connect(kR, 1);
+    const pSplit = ctx.createChannelSplitter(2), pL = tap(), pR = tap();
+    input.connect(pSplit); pSplit.connect(pL, 0); pSplit.connect(pR, 1);
+    // 2. pre-amp: user pre-amp + AutoEQ preamp − composite auto-headroom
+    const preamp = gain(1);
+    // 3. automatic rumble filter: identity (peaking 0 dB) until something boosts the
+    //    low end, then a 25 Hz Butterworth high-pass (type swapped on the edge only)
+    const rumble = biq('peaking', 25, 1, 0);
+    // 4. tilt shelves (700 Hz pivot) · 5. loudness-contour shelves
+    const tiltLo = biq('lowshelf', 700, null, 0), tiltHi = biq('highshelf', 700, null, 0);
+    const lcLo = biq('lowshelf', 100, null, 0), lcHi = biq('highshelf', 8000, null, 0);
+    // 6. the graphic EQ (48 Hz lowshelf, 62 Hz–8 kHz peaking Q 1.4, 11 kHz highshelf)
+    const mkBands = () => EQ_NODE_FREQS.map((f, i) => (i === 0 ? biq('lowshelf', f, null, 0) : i === EQ_NODE_FREQS.length - 1 ? biq('highshelf', f, null, 0) : biq('peaking', f, 1.4, 0)));
+    const bands = mkBands();
+    // 7. headphone-correction bank (peaking 0 dB = exact identity while unused)
+    const mkPeq = () => { const a = []; for (let i = 0; i < 10; i++) a.push(biq('peaking', 1000, 1, 0)); return a; };
+    const peq = mkPeq();
+    // 8. bass shelf · 9. Enhance's linear parts (before the nonlinear stages so they shape what gets saturated)
+    const bass = biq('lowshelf', 100, null, 0);
+    const warm = biq('lowshelf', 90, null, 0), air = biq('highshelf', 8500, null, 0);
+    // 10. Enhance saturation: curve null + oversample 'none' = passthrough with 0 latency
+    const shaper = ctx.createWaveShaper(); try { shaper.oversample = 'none'; } catch (e) {}
+    // 11. Enhance punch / Night mode compressor (arbitrated) + a trim that replaces
+    //     Chromium's auto-makeup with peak-detector-aware makeup. Inert: thr 0, ratio 1.
     const comp = ctx.createDynamicsCompressor();
     try { comp.threshold.value = 0; comp.knee.value = 0; comp.ratio.value = 1; comp.attack.value = 0.003; comp.release.value = 0.25; } catch (e) {}
-    // ── stereo widener (mid/side). width=1 perfectly reconstructs L/R (a neutral
-    //    passthrough); >1 widens. Intermediate buses are forced mono so the M/S
-    //    maths are exact, and the merger rebuilds a clean stereo pair. ──
-    const wIn = ctx.createGain();
-    // force a real stereo pair into the splitter: a mono source would otherwise
-    // arrive as [L, silence] and the M/S maths would zero the right channel
-    try { wIn.channelCount = 2; wIn.channelCountMode = 'explicit'; wIn.channelInterpretation = 'speakers'; } catch (e) {}
+    const compTrim = gain(1);
+    // 12. M/S block: width on the side bus, the vocal band on the mid bus. width = 1
+    //     reconstructs L/R bit-exactly; the merger rebuilds a clean stereo pair.
+    const wIn = stereo(1);
     const wSplit = ctx.createChannelSplitter(2);
-    const mono = (g) => { const nn = ctx.createGain(); try { nn.channelCount = 1; nn.channelCountMode = 'explicit'; nn.channelInterpretation = 'discrete'; } catch (e) {} nn.gain.value = g; return nn; };
     const wMid = mono(0.5), wSide = mono(0.5), wRinv = mono(-1), wWidth = mono(1), wSinv = mono(-1), wOutL = mono(1), wOutR = mono(1);
     const wMerge = ctx.createChannelMerger(2);
     wIn.connect(wSplit);
     wSplit.connect(wMid, 0); wSplit.connect(wMid, 1);                          // mid = 0.5(L+R)
     wSplit.connect(wSide, 0); wSplit.connect(wRinv, 1); wRinv.connect(wSide);  // side = 0.5(L−R)
     wSide.connect(wWidth); wWidth.connect(wSinv);                              // sideW = side·width
-    wMid.connect(wOutL); wWidth.connect(wOutL);                                // L = mid + sideW
-    wMid.connect(wOutR); wSinv.connect(wOutR);                                 // R = mid − sideW
+    // vocals: mid = LP(mid) + HP(mid) + band with band = mid − LP − HP (sample-exact —
+    // biquads have no latency), so only the 200 Hz – 7 kHz centre is scaled by vGain
+    const vLP = biq('lowpass', 200, BW, 0), vHP = biq('highpass', 7000, BW, 0);
+    const vInv = mono(-1), vBand = mono(1), vGain = mono(1);
+    wMid.connect(vLP); wMid.connect(vHP);
+    vLP.connect(vInv); vHP.connect(vInv);
+    wMid.connect(vBand); vInv.connect(vBand);
+    vBand.connect(vGain);
+    vLP.connect(wOutL); vHP.connect(wOutL); vGain.connect(wOutL); wWidth.connect(wOutL);   // L = mid' + sideW
+    vLP.connect(wOutR); vHP.connect(wOutR); vGain.connect(wOutR); wSinv.connect(wOutR);    // R = mid' − sideW
     wOutL.connect(wMerge, 0, 0); wOutR.connect(wMerge, 0, 1);
+    // 13. crossfeed, exact-complement topology: X' = x − f·LP(x) + f·LP(y). Centre content
+    //     (x = y) sums back to x at every frequency and phase; the Butterworth's 0.32 ms
+    //     low-frequency group delay is the inter-aural delay, so there is no DelayNode.
+    //     Off: both gain pairs 0 → the lowpass lives only on silent paths.
+    const cfIn = stereo(1);
+    const cfSplit = ctx.createChannelSplitter(2), cfMerge = ctx.createChannelMerger(2);
+    const cfLpL = biq('lowpass', 700, BW, 0), cfLpR = biq('lowpass', 700, BW, 0);
+    const cfFeedL = mono(0), cfFeedR = mono(0), cfNegL = mono(0), cfNegR = mono(0);
+    cfIn.connect(cfSplit);
+    cfSplit.connect(cfMerge, 0, 0); cfSplit.connect(cfMerge, 1, 1);            // direct, gain 1, no filter
+    cfSplit.connect(cfLpL, 0); cfSplit.connect(cfLpR, 1);
+    cfLpL.connect(cfFeedL); cfFeedL.connect(cfMerge, 0, 1);                    // cross: LP(L) → R
+    cfLpR.connect(cfFeedR); cfFeedR.connect(cfMerge, 0, 0);                    // cross: LP(R) → L
+    cfLpL.connect(cfNegL); cfNegL.connect(cfMerge, 0, 0);                      // complement: −LP(L) → L
+    cfLpR.connect(cfNegR); cfNegR.connect(cfMerge, 0, 1);                      // complement: −LP(R) → R
+    // 14. output matrix — balance / mono / swap, the last spatial operation. gXY = input X → output Y.
+    const mxIn = stereo(1);
+    const mxSplit = ctx.createChannelSplitter(2), mxMerge = ctx.createChannelMerger(2);
+    const gLL = mono(1), gLR = mono(0), gRL = mono(0), gRR = mono(1);
+    mxIn.connect(mxSplit);
+    mxSplit.connect(gLL, 0); gLL.connect(mxMerge, 0, 0);
+    mxSplit.connect(gLR, 0); gLR.connect(mxMerge, 0, 1);
+    mxSplit.connect(gRL, 1); gRL.connect(mxMerge, 0, 0);
+    mxSplit.connect(gRR, 1); gRR.connect(mxMerge, 0, 1);
+    // 15. spectrum analyser (the canvas only) · 16. loudness gain · 17. volume boost
     const analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.82;
-    const makeup = ctx.createGain(); makeup.gain.value = 1;
-    const output = ctx.createGain(); output.gain.value = 1;
-    let prev = input; prev.connect(preamp); prev = preamp;
-    bands.forEach((b) => { prev.connect(b); prev = b; });
-    prev.connect(air); air.connect(shaper); shaper.connect(comp); comp.connect(wIn); wMerge.connect(analyser); analyser.connect(makeup); makeup.connect(output);
-    return { input, preamp, bands, air, shaper, comp, widener: wWidth, analyser, makeup, output, freq: new Uint8Array(analyser.frequencyBinCount), buf: new Float32Array(analyser.fftSize) };
+    const makeup = gain(1);
+    const boost = gain(1);
+    // 18. clip guard (inert: thr 0, ratio 1) + trim · 18b. output tap = what reaches the speakers
+    const lim = ctx.createDynamicsCompressor();
+    try { lim.threshold.value = 0; lim.knee.value = 0; lim.ratio.value = 1; lim.attack.value = 0.001; lim.release.value = 0.08; } catch (e) {}
+    const limTrim = gain(1);
+    const oSplit = ctx.createChannelSplitter(2), oL = tap(), oR = tap();
+    limTrim.connect(oSplit); oSplit.connect(oL, 0); oSplit.connect(oR, 1);
+    // 19. output (fade) — after the limiter so a fade never triggers gain reduction; reroute connects it to SC's destinations
+    const output = gain(1);
+    // the audio path
+    const path = [input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi].concat(bands, peq, [bass, warm, air, shaper, comp, compTrim, wIn]);
+    for (let i = 0; i < path.length - 1; i++) path[i].connect(path[i + 1]);
+    wMerge.connect(cfIn); cfMerge.connect(mxIn); mxMerge.connect(analyser);
+    analyser.connect(makeup); makeup.connect(boost); boost.connect(lim); lim.connect(limTrim); limTrim.connect(output);
+    // probe bank — a second, never-connected copy of every linear user stage. Its params
+    // are written with .value (no ramp to lag behind), so getFrequencyResponse gives the
+    // true composite curve for auto-headroom and the canvas. Unconnected nodes cost no render time.
+    const probe = { bands: mkBands(), peq: mkPeq(), bass: biq('lowshelf', 100, null, 0), warm: biq('lowshelf', 90, null, 0), air: biq('highshelf', 8500, null, 0),
+      tiltLo: biq('lowshelf', 700, null, 0), tiltHi: biq('highshelf', 700, null, 0), lcLo: biq('lowshelf', 100, null, 0), lcHi: biq('highshelf', 8000, null, 0) };
+    return {
+      input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, warm, air, shaper, comp, compTrim,
+      widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR,
+      analyser, kL, kR, pL, pR, oL, oR, makeup, boost, lim, limTrim, output, probe,
+      rumbleOn: false,   // the rumble filter's current type (edge-triggered by applyFx)
+      freq: new Uint8Array(analyser.frequencyBinCount), buf: new Float32Array(analyser.fftSize),
+      bufKL: new Float32Array(kL.fftSize), bufKR: new Float32Array(kR.fftSize), bufPL: new Float32Array(pL.fftSize), bufPR: new Float32Array(pR.fftSize),
+      bufOL: new Float32Array(oL.fftSize), bufOR: new Float32Array(oR.fftSize),
+    };
   }
-  // cached soft-saturation curve (rebuilt only when the intensity changes)
+  // composite response of the user stages from the newest chain's probe bank, in dB at
+  // `fr` (default: the 160-point log grid): userDb = bands + bass + tilt + warm + air +
+  // contour (each only while active), peqDb = the AutoEQ bank while it is on
+  function compositeDb(fr) {
+    fr = fr || PROBE_FREQS;
+    const n = fr.length, userDb = new Float32Array(n), peqDb = new Float32Array(n);
+    try {
+      const e = [...sceFx].pop(); const p = e && e.chain && e.chain.probe;
+      if (!p) return { userDb, peqDb };
+      const on = (k) => !fxBypass && !!CFG[k];
+      const cl = (v, lo, hi) => { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0; };
+      const mag = n === PROBE_N ? _probeMag : new Float32Array(n), ph = n === PROBE_N ? _probePh : new Float32Array(n);
+      const add = (node, out) => { try { node.getFrequencyResponse(fr, mag, ph); for (let i = 0; i < n; i++) { const m = mag[i]; if (m > 0 && isFinite(m)) out[i] += 20 * Math.log10(m); } } catch (er) {} };
+      const setG = (node, g) => { try { node.gain.value = g; } catch (er) {} };
+      const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
+      const eqOn = on('eqOn');
+      for (let i = 0; i < p.bands.length; i++) { const g = eqOn ? cl(bands[i], -12, 12) : 0; setG(p.bands[i], g); if (g) add(p.bands[i], userDb); }
+      const bassG = fxBypass ? 0 : cl(CFG.bassDb, 0, 9); setG(p.bass, bassG); if (bassG) add(p.bass, userDb);
+      const t = fxBypass ? 0 : cl(CFG.tiltDb, -4, 4); setG(p.tiltLo, -t); setG(p.tiltHi, t); if (t) { add(p.tiltLo, userDb); add(p.tiltHi, userDb); }
+      const a = on('enhanceOn') ? cl(CFG.enhanceAmt, 0, 100) / 100 : 0; setG(p.warm, a * 1.5); setG(p.air, a * 3); if (a) { add(p.warm, userDb); add(p.air, userDb); }
+      const k = on('loudCompOn') ? contourK * cl(CFG.loudCompAmt, 0, 9) : 0; setG(p.lcLo, k); setG(p.lcHi, k / 3); if (k) { add(p.lcLo, userDb); add(p.lcHi, userDb); }
+      if (on('peqOn') && Array.isArray(CFG.peq)) {
+        for (let i = 0; i < p.peq.length; i++) {
+          const f = clampPeq(CFG.peq[i]); if (!f || !f.g) continue;
+          const node = p.peq[i];
+          try { node.type = f.t === 'LSC' ? 'lowshelf' : f.t === 'HSC' ? 'highshelf' : 'peaking'; node.frequency.value = f.f; if (f.t === 'PK') node.Q.value = f.q; node.gain.value = f.g; } catch (er) {}
+          add(node, peqDb);
+        }
+      }
+    } catch (e) {}
+    return { userDb, peqDb };
+  }
+  // does anything upstream push the level up? Boost above 100 % engages the guard even
+  // with the switch off (the row text says so). During Compare only the kept stages
+  // (loudness gain, boost) count, so the original is not guarded when nothing kept needs it.
+  function needsLimiter() {
+    const on = (k) => !fxBypass && !!CFG[k];
+    const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
+    const eqBoosting = on('eqOn') && ((+CFG.eqPreamp || 0) > 0 || Math.max(0, ...bands.map((x) => +x || 0)) > 0);
+    const boosting = eqBoosting || on('peqOn') || !!CFG.loudnessOn || on('enhanceOn') || on('nightOn') || on('loudCompOn')
+      || (!fxBypass && ((CFG.stereoWidth | 0) > 100 || (+CFG.bassDb || 0) > 0 || (+CFG.tiltDb || 0) !== 0 || (+CFG.vocalAmt || 0) > 0));
+    return (!!CFG.limiterOn && boosting) || (CFG.boostAmt | 0) > 100;
+  }
+  // Chromium's DynamicsCompressor applies an automatic makeup gain that depends on
+  // threshold / knee / ratio: 0.6 × the static curve's gain at 0 dBFS. The hard-knee
+  // figure is 0.6·|thr|·(1 − 1/ratio) dB; with a soft knee Chromium's exponential knee
+  // curve gives noticeably less (6 dB at thr −30 / knee 24 / ratio 3), so this replica
+  // of its static-curve maths (kAtSlope + saturate) is the synchronous estimate.
+  function compAutoDb(thr, knee, ratio) {
+    if (!(thr < 0) || !(ratio > 1)) return 0;
+    const db2lin = (d) => Math.pow(10, d / 20), lin2db = (x) => 20 * Math.log10(x);
+    const lt = db2lin(thr), kneeDb = thr + knee, kneeLin = db2lin(kneeDb), slope = 1 / ratio;
+    const kneeCurve = (x, k) => (x < lt ? x : lt + (1 - Math.exp(-k * (x - lt))) / k);
+    const slopeAt = (x, k) => { if (x < lt) return 1; const x2 = x * 1.001; return (lin2db(kneeCurve(x2, k)) - lin2db(kneeCurve(x, k))) / (lin2db(x2) - lin2db(x)); };
+    let minK = 0.1, maxK = 10000, k = 5;
+    for (let i = 0; i < 15; i++) { if (slopeAt(kneeLin, k) < slope) maxK = k; else minK = k; k = Math.sqrt(minK * maxK); }
+    const yKneeDb = lin2db(kneeCurve(kneeLin, k));
+    const full = 1 < kneeLin ? kneeCurve(1, k) : db2lin(yKneeDb + slope * (0 - kneeDb));
+    const db = -0.6 * lin2db(full);
+    return isFinite(db) ? Math.max(0, db) : 0;
+  }
+  // Returns that estimate synchronously and measures the exact figure once, offline
+  // (0.4 s of a −50 dBFS 200 Hz sine — far below any threshold, so only the makeup
+  // shows), then calls applyFx() once when it lands.
+  function calibrateComp(thr, knee, ratio) {
+    const key = thr + '|' + knee + '|' + ratio;
+    const analytic = compAutoDb(thr, knee, ratio);
+    _calibWanted.add(key);
+    const hit = _calib.get(key);
+    if (hit) return hit.db;
+    const ent = { db: analytic, exact: false }; _calib.set(key, ent);
+    try {
+      const OAC = W.OfflineAudioContext || W.webkitOfflineAudioContext;
+      if (!OAC) return analytic;
+      const sr = (sceLastCtx && sceLastCtx.sampleRate) || 48000, len = Math.round(0.4 * sr), amp = Math.pow(10, -50 / 20);
+      const oc = new OAC(1, len, sr);
+      const buf = oc.createBuffer(1, len, sr), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = amp * Math.sin(2 * Math.PI * 200 * i / sr);
+      const src = oc.createBufferSource(); src.buffer = buf;
+      const c = oc.createDynamicsCompressor();
+      c.threshold.value = thr; c.knee.value = knee; c.ratio.value = ratio; c.attack.value = 0.001; c.release.value = 0.05;
+      src.connect(c); c.connect(oc.destination); src.start(0);
+      oc.startRendering().then((out) => {
+        try {
+          const x = out.getChannelData(0); let pk = 0;
+          for (let i = Math.round(0.3 * sr); i < x.length; i++) { const v = Math.abs(x[i]); if (v > pk) pk = v; }
+          if (pk > 0) { ent.db = 20 * Math.log10(pk / amp); ent.exact = true; if (_calibWanted.has(key)) applyFx(); }
+        } catch (e) {}
+      }).catch(() => {});
+    } catch (e) {}
+    return analytic;
+  }
+  // cached saturation curve: a unity-gain cubic, x − k²x³/3 with k = 0.15 + 0.45·a. The
+  // derivative at 0 is exactly 1 (no small-signal level change), |c| ≤ 1 − k²/3 = 0.88 at
+  // full intensity so it can never exceed its input; THD ≈ 0.3 % at −10 dBFS.
   let _satKey = -1, _satCurve = null;
   function satCurve(amt01) {
     const key = Math.round(amt01 * 100);
     if (key === _satKey && _satCurve) return _satCurve;
-    const drive = amt01 * 2.2, n = 1024, c = new Float32Array(n);
-    for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; c[i] = (1 + drive) * x / (1 + drive * Math.abs(x)); }
+    const k = 0.15 + 0.45 * amt01, n = 2048, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = i * 2 / (n - 1) - 1, xk = x * k; c[i] = (xk - xk * xk * xk / 3) / k; }
     _satKey = key; _satCurve = c; return c;
   }
   function installFx(ctx, src) {
@@ -10733,25 +10955,27 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!ctx || !src || src.__sceFxInstalled) return;
       src.__sceFxInstalled = true;
       const chain = buildFxChain(ctx);
-      const dests = new Set();
+      const dests = new Map();   // dest → [output index, input index] exactly as SC connected it
       const oConnect = src.connect.bind(src);
       const oDisconnect = src.disconnect.bind(src);
       const isNode = (d) => !!(d && typeof d.connect === 'function' && typeof d.context !== 'undefined');
+      const entry = { ctx, src, chain, dests, reroute: null, routed: null };   // routed: null = never decided (passthrough)
       const reroute = () => {
-        dests.forEach((d) => { try { oDisconnect(d); } catch (e) {} });
+        dests.forEach((oi, d) => { try { oDisconnect(d); } catch (e) {} });
         try { oDisconnect(chain.input); } catch (e) {}
         try { chain.output.disconnect(); } catch (e) {}
-        if (fxOn()) {
+        if (entry.routed) {
           try { oConnect(chain.input); } catch (e) {}
-          dests.forEach((d) => { try { chain.output.connect(d); } catch (e) {} });
+          dests.forEach((oi, d) => { try { chain.output.connect(d, 0, oi[1]); } catch (e) { try { chain.output.connect(d); } catch (e2) {} } });
         } else {
-          dests.forEach((d) => { try { oConnect(d); } catch (e) {} });
+          dests.forEach((oi, d) => { try { oConnect(d, oi[0], oi[1]); } catch (e) { try { oConnect(d); } catch (e2) {} } });
         }
       };
-      src.connect = function (dest) {
+      entry.reroute = reroute;
+      src.connect = function (dest, out, inp) {
         try {
           if (!isNode(dest)) return oConnect.apply(src, arguments);   // AudioParam / odd target — never reroute
-          dests.add(dest); reroute(); return dest;
+          dests.set(dest, [out | 0, inp | 0]); reroute(); return dest;
         } catch (e) { try { return oConnect.apply(src, arguments); } catch (e2) {} }
       };
       src.disconnect = function () {
@@ -10762,43 +10986,150 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           return oDisconnect.apply(src, arguments);
         } catch (e) { try { return oDisconnect.apply(src, arguments); } catch (e2) {} }
       };
-      sceFx.add({ ctx, src, chain, dests, reroute });
+      sceFx.add(entry);
       // SC reuses one source node in practice; if it ever makes fresh ones per
       // track, keep the iterated set bounded (oldest entry = stalest/dead source)
       if (sceFx.size > 6) { try { sceFx.delete(sceFx.values().next().value); } catch (e) {} }
       applyFx();
     } catch (e) { Log.err('installFx', e); }
   }
+  /* applyFx — the one place CFG becomes node parameters. Reads and clamps CFG once,
+   * takes the auto-headroom from the composite response, then writes every stage of
+   * every chain with short ramps (inert values arrive exactly). `on(key)` = the stages
+   * Compare bypasses (tone, dynamics, spatial); `keep(key)` = the stages it keeps
+   * (loudness gain, boost, the clip guard, fade) so every A/B is level-honest.
+   * Routing is decided per chain entry; the loudness timer follows the routing. */
   function applyFx() {
     try {
+      const on = (k) => !fxBypass && !!CFG[k];
+      const keep = (k) => !!CFG[k];
+      const cl = (v, lo, hi) => { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : lo; };
+      const db2g = (db) => Math.pow(10, db / 20);
+      // ── read + clamp CFG once ──
       const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
-      const on = (k) => !fxBypass && !!CFG[k];   // stages Compare bypasses
-      sceFx.forEach((e) => {
-        const c = e.chain;
-        for (let i = 0; i < c.bands.length; i++) { try { c.bands[i].gain.value = on('eqOn') ? Math.max(-12, Math.min(12, +bands[i] || 0)) : 0; } catch (er) {} }
-        try { c.preamp.gain.value = on('eqOn') ? Math.pow(10, Math.max(-12, Math.min(12, +CFG.eqPreamp || 0)) / 20) : 1; } catch (er) {}
-        if (!CFG.loudnessOn) { try { c.makeup.gain.value = 1; } catch (er) {} }
-        if (!CFG.fadeOn) { try { c.output.gain.cancelScheduledValues(e.ctx.currentTime || 0); c.output.gain.value = 1; } catch (er) {} }
-        // ── enhancer (air + warmth + punch), inert when off ──
-        try {
-          const amt = Math.max(0, Math.min(100, +CFG.enhanceAmt || 0)) / 100;
-          if (on('enhanceOn')) {
-            c.air.gain.value = amt * 6;
-            c.shaper.curve = satCurve(amt);
-            c.comp.threshold.value = -22; c.comp.knee.value = 8; c.comp.ratio.value = 2 + amt * 2; c.comp.attack.value = 0.004; c.comp.release.value = 0.22;
-          } else {
-            c.air.gain.value = 0;
-            c.shaper.curve = null;
-            c.comp.threshold.value = 0; c.comp.knee.value = 0; c.comp.ratio.value = 1;
-          }
-          const sw = Math.max(0, Math.min(200, +CFG.stereoWidth || 0)) / 100;
-          c.widener.gain.value = fxBypass ? 1 : sw;   // 1 = neutral/passthrough (bit-exact), 0 = mono, 2 = side +6 dB
-        } catch (er) {}
-      });
+      const eqOn = on('eqOn'), peqOn = on('peqOn'), enhOn = on('enhanceOn'), nightOn = on('nightOn');
+      const eqPre = cl(CFG.eqPreamp, -12, 12), peqPre = cl(CFG.peqPreamp, -15, 0);
+      const peq = (peqOn && Array.isArray(CFG.peq)) ? CFG.peq.slice(0, 10).map(clampPeq) : [];
+      const bassDb = fxBypass ? 0 : cl(CFG.bassDb, 0, 9);
+      const tilt = fxBypass ? 0 : cl(CFG.tiltDb, -4, 4);
+      const vocal = fxBypass ? 0 : cl(CFG.vocalAmt, -100, 100) / 100;
+      const lcDb = on('loudCompOn') ? contourK * cl(CFG.loudCompAmt, 0, 9) : 0;
+      const width = fxBypass ? 1 : cl(CFG.stereoWidth == null ? 100 : CFG.stereoWidth, 0, 200) / 100;
+      const bal = on('balance') ? cl(CFG.balance, -100, 100) : 0;
+      const boost = cl(CFG.boostAmt == null ? 100 : CFG.boostAmt, 100, 300) / 100;   // kept during Compare
+      const enhAmt = cl(CFG.enhanceAmt, 0, 100) / 100, nightAmt = cl(CFG.nightAmt, 0, 100) / 100;
+      const cfF = on('crossfeedOn') ? cfFeed(CFG.crossfeedMode) : 0;
+      // ── auto-headroom from the composite response (2.9): overlapping shelves add up,
+      //    and with Enhance on the shaper hard-clips anything over 0 dBFS at that point ──
+      let headroomDb = 0;
+      if (on('eqAutoPre')) {
+        const cd = compositeDb();
+        for (let i = 0; i < cd.userDb.length; i++) { const v = cd.userDb[i] + (peqOn ? cd.peqDb[i] + peqPre : 0); if (v > headroomDb) headroomDb = v; }
+      }
+      lastHeadroomDb = headroomDb;
+      const preampDb = cl((eqOn ? eqPre : 0) + (peqOn ? peqPre : 0) - headroomDb, -36, 12);
+      // ── rumble: from CFG only — Compare never flips it (the type swap is a one-time
+      //    transient; the biquad state is not reset on a type change) ──
+      const rumbleNeeded = cl(CFG.bassDb, 0, 9) > 0 || (!!CFG.eqOn && (+bands[0] || 0) > 0) || !!CFG.peqOn || !!CFG.loudCompOn || !!CFG.enhanceOn;
+      // ── Enhance / Night compressor arbitration (Night wins). Set against Chromium's
+      //    per-sample PEAK detector (which sits around −5..−8 dBFS on a modern master),
+      //    not against programme LUFS; the trim swaps its auto-makeup for ours ──
+      _calibWanted.clear();
+      let cp = null;
+      if (nightOn) {
+        const thr = -24 - 12 * nightAmt, ratio = 2 + 2 * nightAmt;
+        const mk = Math.min(22, Math.max(0, -8 - thr) * (1 - 1 / ratio));
+        cp = { thr, knee: 24, ratio, att: 0.02, rel: 0.5, trim: db2g(mk - calibrateComp(thr, 24, ratio)) };
+      } else if (enhOn) {
+        const thr = -8 - 6 * enhAmt, ratio = 1.5 + 0.5 * enhAmt;
+        const mk = Math.max(0, -4 - thr) * (1 - 1 / ratio);
+        cp = { thr, knee: 12, ratio, att: 0.015, rel: 0.25, trim: db2g(mk - calibrateComp(thr, 12, ratio)) };
+      }
+      // ── clip guard: −3 dB ceiling, 20:1, its auto-makeup trimmed back out ──
+      const L = needsLimiter();
+      const limTrimGain = L ? db2g(-calibrateComp(-3, 0, 20)) : 1;
+      // ── vocals: 1 = LP + HP + band = mid exactly; softer floors at 0.1, lift ≤ +4 dB ──
+      const vG = vocal === 0 ? 1 : vocal < 0 ? Math.max(0.1, 1 - 0.9 * Math.abs(vocal)) : db2g(4 * vocal);
+      // ── output matrix [LL, LR, RL, RR]: identity → mono / swap → balance (attenuates only) ──
+      const bL = 1 - Math.max(0, bal) / 100, bR = 1 - Math.max(0, -bal) / 100;
+      const base = on('monoOn') ? [0.5, 0.5, 0.5, 0.5] : on('swapLR') ? [0, 1, 1, 0] : [1, 0, 0, 1];
+      const mx = [base[0] * bL, base[1] * bR, base[2] * bL, base[3] * bR];
+      // ── routing is decided first: a chain nobody hears gets its params written directly.
+      //    AudioParam automation only advances while the node is rendered, so ramping a
+      //    detached chain would leave stale events (and stale .value reads) behind ──
       const want = fxOn();
-      if (want !== fxRouted) { fxRouted = want; sceFx.forEach((e) => { try { e.reroute(); } catch (er) {} }); }
+      sceFx.forEach((e) => {
+        const c = e.chain; let now = 0; try { now = e.ctx.currentTime || 0; } catch (er) {}
+        const w = want ? (p, v, sec) => ramp(p, v, now, sec) : (p, v) => { try { p.cancelScheduledValues(0); p.value = v; } catch (er) {} };
+        w(c.preamp.gain, db2g(preampDb));
+        if (rumbleNeeded !== !!c.rumbleOn) {
+          c.rumbleOn = rumbleNeeded;
+          try {
+            if (rumbleNeeded) { c.rumble.type = 'highpass'; c.rumble.frequency.value = 25; c.rumble.Q.value = -3.01; c.rumble.gain.value = 0; }
+            else { c.rumble.type = 'peaking'; c.rumble.gain.value = 0; c.rumble.Q.value = 1; }
+          } catch (er) {}
+        }
+        w(c.tiltLo.gain, -tilt); w(c.tiltHi.gain, tilt);
+        w(c.lcLo.gain, lcDb); w(c.lcHi.gain, lcDb / 3);
+        for (let i = 0; i < c.bands.length; i++) w(c.bands[i].gain, eqOn ? cl(bands[i], -12, 12) : 0, 0.02);
+        for (let i = 0; i < c.peq.length; i++) {
+          const f = peq[i], n = c.peq[i];
+          if (f) { try { n.type = f.t === 'LSC' ? 'lowshelf' : f.t === 'HSC' ? 'highshelf' : 'peaking'; n.frequency.value = f.f; if (f.t === 'PK') n.Q.value = f.q; } catch (er) {} w(n.gain, f.g); }
+          else { try { if (n.type !== 'peaking') n.type = 'peaking'; } catch (er) {} w(n.gain, 0); }
+        }
+        w(c.bass.gain, bassDb);
+        w(c.warm.gain, enhOn ? enhAmt * 1.5 : 0); w(c.air.gain, enhOn ? enhAmt * 3 : 0);
+        try {
+          const curve = enhOn ? satCurve(enhAmt) : null;
+          if (c.shaper.curve !== curve) c.shaper.curve = curve;
+          // the resampler (and its 128-sample latency) follows the REAL toggle only:
+          // Compare nulls the curve but leaves oversample, so the lyric clock stays put
+          const os = CFG.enhanceOn ? '2x' : 'none';
+          if (c.shaper.oversample !== os) c.shaper.oversample = os;
+        } catch (er) {}
+        w(c.comp.threshold, cp ? cp.thr : 0, 0.05); w(c.comp.knee, cp ? cp.knee : 0, 0.05); w(c.comp.ratio, cp ? cp.ratio : 1, 0.05);
+        if (cp) { w(c.comp.attack, cp.att, 0.05); w(c.comp.release, cp.rel, 0.05); }
+        w(c.compTrim.gain, cp ? cp.trim : 1, 0.05);
+        w(c.widener.gain, width, 0.05);
+        w(c.vGain.gain, vG, 0.05);
+        w(c.cfFeedL.gain, cfF, 0.05); w(c.cfFeedR.gain, cfF, 0.05); w(c.cfNegL.gain, -cfF, 0.05); w(c.cfNegR.gain, -cfF, 0.05);
+        w(c.gLL.gain, mx[0]); w(c.gLR.gain, mx[1]); w(c.gRL.gain, mx[2]); w(c.gRR.gain, mx[3]);
+        if (!keep('loudnessOn')) w(c.makeup.gain, 1, 0.05);   // Compare never touches the loudness gain
+        w(c.boost.gain, boost, 0.05);
+        w(c.lim.threshold, L ? -3 : 0); w(c.lim.knee, 0); w(c.lim.ratio, L ? 20 : 1);
+        try { c.lim.attack.value = 0.001; c.lim.release.value = 0.08; } catch (er) {}
+        w(c.limTrim.gain, limTrimGain);
+        if (!keep('fadeOn')) { try { c.output.gain.cancelScheduledValues(now); c.output.gain.setValueAtTime(1, now); c.output.gain.value = 1; } catch (er) {} }
+      });
+      // ── routing, per chain entry; fxRouted = "any entry routed" (latency + loudness gates) ──
+      let any = false;
+      sceFx.forEach((e) => { if (e.routed !== want) { e.routed = want; try { e.reroute(); } catch (er) {} } if (e.routed) any = true; });
+      fxRouted = any;
+      // ── the loudness measurement loop runs only while it can hear something ──
+      const wantLoud = keep('loudnessOn') && fxRouted;
+      if (wantLoud && !loudTimer) loudTimer = setInterval(loudTick, 500);
+      else if (!wantLoud && loudTimer) { clearInterval(loudTimer); loudTimer = 0; }
+      eqCurveVer++;
+    } catch (e) { Log.err('applyFx', e); }
+  }
+  // post-limiter peak / mean power (what actually reaches the speakers) plus the
+  // untouched source peak, read from the newest routed chain's taps into `meter` (dBFS)
+  function peakTick() {
+    try {
+      let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); if (!e) return;
+      const c = e.chain;
+      const rd = (a, b) => { a.getFloatTimeDomainData(b); let pk = 0, ss = 0; for (let i = 0; i < b.length; i++) { const v = b[i]; ss += v * v; const av = v < 0 ? -v : v; if (av > pk) pk = av; } return { pk, ss, n: b.length }; };
+      const l = rd(c.oL, c.bufOL), r = rd(c.oR, c.bufOR), pk = Math.max(l.pk, r.pk), ms = (l.ss + r.ss) / (l.n + r.n);
+      meter.peak = pk > 1e-6 ? 20 * Math.log10(pk) : -120;
+      meter.outDb = ms > 1e-12 ? 10 * Math.log10(ms) : -120;
+      const sl = rd(c.pL, c.bufPL), sr = rd(c.pR, c.bufPR), spk = Math.max(sl.pk, sr.pk);
+      meter.srcPeak = spk > 1e-6 ? 20 * Math.log10(spk) : -120;
+      try { meter.gr = c.comp.reduction; meter.limGr = c.lim.reduction; } catch (er) {}
     } catch (e) {}
   }
+  // the 500 ms loudness loop (the K-weighted, gated measurement lands with the
+  // Loudness-normalize rework); until then it keeps the output meter fresh
+  function loudTick() { peakTick(); }
   function updateLoudness() {
     try {
       sceFx.forEach((e) => {
@@ -10911,6 +11242,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (sleepUntil) paintSleep(); } catch (e) {}
       try { if (CFG.speedPerTrack) restoreTrackSpeed(); } catch (e) {}
       try { if (CFG.loudnessOn) updateLoudness(); } catch (e) {}
+      try { if (fxRouted && !loudTimer) peakTick(); } catch (e) {}
       try { if (CFG.fadeOn) updateFade(); } catch (e) {}
       const m = activeMedia();
       if (!m) return;
@@ -11537,23 +11869,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.audioLatency = () => { try { const c = sceLastCtx; if (c) { const l = (c.outputLatency || c.baseLatency || 0); const raw = (l > 0 && l < 0.6) ? Math.round(l * 1000) : 0; if (raw > 0 && Math.abs(raw - sceLatMs) >= 5) sceLatMs = raw; } return sceLatMs + fxLatencyMs(); } catch (e) { return sceLatMs; } }; } catch (e) {}
   // the hub converts that latency from output seconds to media seconds
   try { SUITE.audioRate = () => wantedRate(); } catch (e) {}
-  // composite EQ response at one frequency (dB) from the newest chain's live bands
+  // composite user response at one frequency (dB), from the probe bank (2.26)
   function eqCurveDbAt(f) {
-    try {
-      const e = [...sceFx].pop(); if (!e) return 0;
-      const fr = new Float32Array([+f || 1000]), mag = new Float32Array(1), ph = new Float32Array(1);
-      let db = 0;
-      const add = (n) => { try { n.getFrequencyResponse(fr, mag, ph); if (mag[0] > 0) db += 20 * Math.log10(mag[0]); } catch (er) {} };
-      (e.chain.bands || []).forEach(add);
-      return db;
-    } catch (e) { return 0; }
+    try { return compositeDb(new Float32Array([+f || 1000])).userDb[0] || 0; } catch (e) { return 0; }
   }
-  // the saturation curve's value at x ∈ [−1, 1] for the current Enhance intensity
+  // the saturation curve's value at x ∈ [−1, 1] for the current Enhance intensity,
+  // interpolated between table points exactly as the WaveShaper does
   function satCurveAt(x) {
     try {
       const c = satCurve(Math.max(0, Math.min(100, +CFG.enhanceAmt || 0)) / 100);
-      const i = Math.round((Math.max(-1, Math.min(1, +x || 0)) + 1) / 2 * (c.length - 1));
-      return c[Math.max(0, Math.min(c.length - 1, i))];
+      const p = (Math.max(-1, Math.min(1, +x || 0)) + 1) / 2 * (c.length - 1);
+      const i = Math.max(0, Math.min(c.length - 2, Math.floor(p))), t = p - i;
+      return c[i] + (c[i + 1] - c[i]) * t;
     } catch (e) { return NaN; }
   }
   /* ── debug accessor — only when the user opted into debug (localStorage 'scss:debug' = '1').
@@ -11597,7 +11924,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           routed: fxRouted, bypassed: fxBypass, chains: sceFx.size, latencyMs: fxLatencyMs(), outLatMs: sceLatMs, tabOn: audioTabOn,
           sampleRate: (sceLastCtx && sceLastCtx.sampleRate) || 0,
           params: snapshot(), shaperHasCurve: hasCurve, loudTimer: !!loudTimer, meter: Object.assign({}, meter),
-          dests: e ? [...e.dests].map((d) => (Array.isArray(d) ? d : [d, 0, 0])) : [],
+          dests: e ? [...e.dests].map((kv) => [kv[0], kv[1][0], kv[1][1]]) : [],
+          headroomDb: lastHeadroomDb, curveVer: eqCurveVer, needsLimiter: needsLimiter(),
+          meterTick: () => { peakTick(); return Object.assign({}, meter); },
+          composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb) }; },
+          calib: () => { const o = {}; _calib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
           set: (k, v) => { CFG[k] = v; save(); applyFx(); }, get: (k) => CFG[k], cfg: () => Object.assign({}, CFG),
           bypass: (v) => setBypass(v), setBand, curveAt: (f) => eqCurveDbAt(f), curveSample: (x) => satCurveAt(x),
           loudMem: () => GET('loud:bytrack', {}) || {},
