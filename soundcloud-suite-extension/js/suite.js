@@ -7272,6 +7272,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🎚️', 'A complete Audio tab', 'Loudness normalize that measures like the streaming services (with a per-track memory), a clip guard, volume boost to 300 %, Night mode, hold-to-compare, headphone correction from AutoEQ, bass, vocals, tilt, crossfeed, balance, mono, tempo chips, pitch-follows-speed, fades — every control an exact passthrough when off.'],
           ['🎯', 'Pinpoint lyric sync', 'Synced lyrics auto-stretch to THIS upload’s real length (SoundCloud is full of sped-up / edited versions), and a phase-locked clock makes the highlight glide exactly with the audio — locked to the track that’s actually playing, no more creeping out by the last chorus. For tracks with no synced lyrics anywhere, the timing is estimated — tap the 🎤 prompt (or ⋯ → Calibrate sync) and tap each line as you hear it to lock it perfectly.'],
           ['🌐', 'Lyric translation', 'Lyrics ⋯ menu → Translate: each line gets a dimmed translation in your language, right under the original.'],
           ['🚀', 'One-tap recommended setup', 'First run offers a “Use recommended” option — a dark theme, the audio enhancer, loudness leveling & a tuned EQ, all in one tap. Or set it up yourself.'],

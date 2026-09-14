@@ -6,3 +6,6 @@ tools/dev-token.txt
 .DS_Store
 Thumbs.db
 node_modules/
+
+# audio harness screenshots
+tools/shots/

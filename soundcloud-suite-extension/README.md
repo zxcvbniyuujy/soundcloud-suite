@@ -32,6 +32,42 @@ Everything the suite stores (settings, stats, lyric cache, blocklist, library
 cache) lives in soundcloud.com's own localStorage and IndexedDB, under the
 `scssgm:` / `bh_sc_` / `sl4:` prefixes. Nothing leaves the browser.
 
+## Audio
+
+The hub's Audio tab shapes SoundCloud's sound in real time through a Web
+Audio chain spliced into the player's own graph. Every control is an exact
+passthrough at its default, and with nothing enabled the chain is detached
+entirely, so SoundCloud plays exactly as it does without the extension.
+
+- **Equalizer** — 10 bands you drag on the curve (the curve shown is the real
+  combined response of everything below), pre-amp, 23 presets, your own saved
+  presets, and **Auto-headroom**, which lowers the pre-amp by your biggest
+  boost so nothing clips. Optionally remembers the curve per track.
+- **Listening on** — one-tap Headphones / Laptop / Speakers profiles.
+- **Playback** — speed 0.5×–2× with tempo chips, **Pitch follows speed**
+  (vinyl / slowed / nightcore), fade in and out with adjustable lengths, and a
+  **Slowed + reverb** chip.
+- **Tone** — Bass (with an automatic sub-25 Hz rumble filter), Vocals softer
+  or lifted, a loudness contour for low volume, Tilt (warm ↔ bright), and a
+  harmonic bass for small speakers.
+- **Enhance** — clarity, warmth and punch, level-matched so it never wins by
+  simply being louder.
+- **Loudness & dynamics** — K-weighted, gated loudness normalization with a
+  Quiet / Normal / Loud target and a per-track memory; Night mode; Volume
+  boost up to 300 %; and a **Clip guard** limiter that engages automatically
+  whenever something boosts.
+- **Stereo** — width 0–200 %, headphone crossfeed (Subtle / Natural /
+  Strong), balance, mono, swap left / right.
+- **Headphone correction** — paste an AutoEQ profile for your headphones.
+- **Compare** — hold to hear the original at the same level; the header shows
+  a live meter (loudness, peak, applied gain, guard).
+- Copy / Paste / Reset all audio settings; the footnote reports the engine's
+  sample rate and total delay, which the lyrics sync accounts for.
+
+Audio hotkeys (with **Global hotkeys** on in Tweaks): **A** hold to compare,
+**N** night mode, **,** / **.** speed −5 % / +5 %. Inside the hub they work on
+the Audio tab.
+
 ## Building and releasing
 
 `build.sh` keeps the four version strings (userscript `@version`,
@@ -54,6 +90,23 @@ build, never into the tracked source.
 
 - **Alt+L** lyrics hub · **Alt+S** shuffle · **Alt+B** block the current track
 - **Ctrl/⌘+K** command palette · **?** the full cheat-sheet (inside the hub)
+- **A** (hold) compare · **N** night mode · **,** / **.** speed, with Global hotkeys on
+
+## Testing the audio engine
+
+`tools/audio-harness.js` loads the unpacked extension into Playwright's
+Chromium, plays synthetic test tones through the same Web Audio hooks
+SoundCloud's player uses, and checks every audio feature: node values,
+passthrough, loudness measurement, limiter ceiling, fades, hotkeys and the
+tab's rendering.
+
+```sh
+npm i -g playwright && npx playwright install chromium   # once
+node tools/audio-harness.js              # all scenarios; add --list or --only a,b
+```
+
+The debug accessor it reads (`window.__sceAudioDebug`) exists only while
+`localStorage['scss:debug'] === '1'` on soundcloud.com.
 
 ## Troubleshooting
 
