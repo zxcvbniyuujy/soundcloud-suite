@@ -10117,6 +10117,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     cfgVer: 2,              // settings schema version (migrateCfg)
     // ── audio: EQ ──
     eqAutoPre: true,        // lower the pre-amp by the composite boost (auto-headroom)
+    eqPerTrack: false,      // remember & restore the EQ curve per track URL (WP10; the spd:bytrack pattern)
     peqOn: false,           // headphone correction bank (AutoEQ)
     peq: [],                // ≤10 × { t:'PK'|'LSC'|'HSC', f:20..20000, g:-15..15, q:0.1..10 }
     peqPreamp: 0,           // -15..0 dB, from the AutoEQ "Preamp" line
@@ -10265,7 +10266,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   let _saveT = 0;
   const saveSoon = () => { clearTimeout(_saveT); _saveT = setTimeout(save, 250); };
   // every audio key: what Copy/Paste/Reset walk, and what the import clamps cover
-  const AUDIO_KEYS = ['speed', 'speedPerTrack', 'eqOn', 'eqBands', 'eqPreamp', 'eqCustom', 'eqAutoPre', 'peqOn', 'peq', 'peqPreamp', 'peqName',
+  const AUDIO_KEYS = ['speed', 'speedPerTrack', 'eqOn', 'eqBands', 'eqPreamp', 'eqCustom', 'eqAutoPre', 'eqPerTrack', 'peqOn', 'peq', 'peqPreamp', 'peqName',
     'bassDb', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR',
     'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'loopTrack', 'rememberVol'];
   // numeric ranges [min, max, step], string caps { max }, enums { one: [...] }
@@ -11586,6 +11587,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { killUpsellBanners(); } catch (e) {}
       try { if (sleepEls) paintSleep(); } catch (e) {}
       try { if (CFG.speedPerTrack) restoreTrackSpeed(); } catch (e) {}
+      try { if (CFG.eqPerTrack) restoreTrackEq(); } catch (e) {}
       try { restoreTrackLoud(); } catch (e) {}
       try { if (fxRouted && !loudTimer) peakTick(); } catch (e) {}
       try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
@@ -11845,6 +11847,39 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       lastSpeedUrl = href;
       const want = (GET('spd:bytrack', {}) || {})[href] | 0;
       if (want >= 50 && want <= 200 && want !== (CFG.speed | 0)) { CFG.speed = want; save(); applySpeed(); refreshBar(); try { if (eqRepaint) eqRepaint(); } catch (e) {} toast('Speed ' + (want / 100) + '× (remembered)'); }
+    } catch (e) {}
+  }
+  // per-track EQ memory (WP10, opt-in — the spd:bytrack pattern, cap 250): the curve, pre-amp and switch a track was
+  // last left with, saved when a canvas drag ends, a band is double-clicked or a preset is picked (never mid-drag) and
+  // restored on the 1 Hz tick when the track changes. Untracked tracks keep whatever is current, like speed.
+  let lastEqUrl = null;
+  function rememberEq() {
+    if (!CFG.eqPerTrack) return;
+    try {
+      const href = curTrackHref(); if (!href) return;
+      const map = GET('eq:bytrack', {}) || {};
+      map[href] = { on: !!CFG.eqOn, b: ensureEqBands().slice(), pre: CFG.eqPreamp | 0 };
+      const keys = Object.keys(map);
+      if (keys.length > 250) delete map[keys[0]];   // bound the map, oldest first
+      SET('eq:bytrack', map);
+      lastEqUrl = href;   // we just set it — don't let restore re-fire on this track
+    } catch (e) {}
+  }
+  function restoreTrackEq() {
+    if (!CFG.eqPerTrack) return;
+    try {
+      const href = curTrackHref();
+      if (!href || href === lastEqUrl) return;
+      lastEqUrl = href;
+      const m = (GET('eq:bytrack', {}) || {})[href];
+      if (!m || !Array.isArray(m.b)) return;
+      const b = m.b.slice(0, EQ_FREQS.length).map((x) => Math.max(-12, Math.min(12, Math.round(+x || 0))));
+      while (b.length < EQ_FREQS.length) b.push(0);
+      const pre = Math.max(-12, Math.min(12, m.pre | 0)), cur = ensureEqBands();
+      if (!!m.on === !!CFG.eqOn && pre === (CFG.eqPreamp | 0) && b.every((x, i) => x === (cur[i] | 0))) return;
+      CFG.eqBands = b; CFG.eqOn = !!m.on; CFG.eqPreamp = pre;
+      save(); applyFx();   // the open tab repaints on the curve version bump
+      toast('EQ restored for this track');
     } catch (e) {}
   }
   const SPEEDS = [100, 125, 150, 175, 200, 50, 75];
@@ -12125,7 +12160,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const pre = presetPre(p);
     CFG.eqBands = out; CFG.eqOn = true;
     if (pre != null) CFG.eqPreamp = pre;
-    save(); applyFx();
+    save(); applyFx(); rememberEq();
     if (eqRepaint) eqRepaint();
   }
   // the preset the current curve equals ('b:Name' | 'c:Name' | '' when edited): bands must match,
@@ -12392,6 +12427,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       nRow.append(nIn, okBtn, noBtn); bodyEl.appendChild(nRow);
       // auto-headroom (2.9) closes the EQ block
       toggleRow('Auto-headroom', 'Lowers the volume by your biggest boost so nothing clips', 'eqAutoPre');
+      toggleRow('Remember EQ per track', 'Each track keeps the curve you last gave it', 'eqPerTrack');   // WP10
 
       // ── listening on (2.13): three chips, one tap applies a bundle; the lit one is only a
       //    memory of which bundle was tapped, cleared by any edit of what it set ──
@@ -12648,10 +12684,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const nearest = (x) => { let bi = 0, bd = 1e9; for (let i = 0; i < N; i++) { const d = Math.abs(x - bandX(i)); if (d < bd) { bd = d; bi = i; } } return bi; };
       canvas.addEventListener('pointerdown', (ev) => { const p = evToC(ev); dragBand = nearest(p.x); try { canvas.setPointerCapture(ev.pointerId); } catch (e) {} setBand(dragBand, gainFromY(p.y)); });
       canvas.addEventListener('pointermove', (ev) => { const p = evToC(ev); if (dragBand >= 0) setBand(dragBand, gainFromY(p.y)); else hoverBand = nearest(p.x); });
-      canvas.addEventListener('pointerup', () => { dragBand = -1; });
+      canvas.addEventListener('pointerup', () => { if (dragBand >= 0) rememberEq(); dragBand = -1; });   // per-track memory (WP10): once the hand stops
       canvas.addEventListener('pointercancel', () => { dragBand = -1; });
       canvas.addEventListener('pointerleave', () => { hoverBand = -1; });
-      canvas.addEventListener('dblclick', (ev) => { const p = evToC(ev); setBand(nearest(p.x), 0); });
+      canvas.addEventListener('dblclick', (ev) => { const p = evToC(ev); setBand(nearest(p.x), 0); rememberEq(); });
       // the composite is read from the probe bank only when applyFx changed something (eqCurveVer)
       let drawnVer = -1, curve = null, peqCurve = null, peqAny = false, drawnHover = -2, drawnDrag = -2;
       const refreshCurve = () => { const cd = compositeDb(); curve = cd.userDb; peqCurve = cd.peqDb; peqAny = false; for (let i = 0; i < peqCurve.length; i++) if (Math.abs(peqCurve[i]) > 0.05) { peqAny = true; break; } };
@@ -12858,6 +12894,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           bypass: (v) => setBypass(v), setBand, curveAt: (f) => eqCurveDbAt(f), curveSample: (x) => satCurveAt(x),
           loudMem: () => GET('loud:bytrack', {}) || {},
           loudMemClear: () => SET('loud:bytrack', {}),
+          eqMem: () => GET('eq:bytrack', {}) || {}, eqMemClear: () => { SET('eq:bytrack', {}); lastEqUrl = null; }, rememberEq,
           loud: () => ({ href: lnorm.href, blocks: lnorm.blocks.length, lint: lnorm.lint, trackPeak: lnorm.trackPeak, curGainDb: lnorm.curGainDb, nodeDb: lnorm.nodeDb, dur: lnorm.dur, measuring: lnorm.measuring, src: lnorm.src, pending: lnorm.pending }),
           restoreLoud: () => restoreTrackLoud(),
           ab: (a, b) => { abA = +a; abB = +b; abOn = true; abM = activeMedia(); armAb(); refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
