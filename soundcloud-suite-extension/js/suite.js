@@ -10896,10 +10896,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     fr = fr || PROBE_FREQS;
     const n = fr.length, userDb = new Float32Array(n), peqDb = new Float32Array(n);
     try {
-      const e = [...sceFx].pop(); const p = (e && e.chain && e.chain.probe) || fallbackProbe();
-      if (!p) return { userDb, peqDb };
       const on = (k) => !fxBypass && !!CFG[k];
       const cl = (v, lo, hi) => { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0; };
+      // nothing shapes the response → flat, without building the offline fallback bank
+      const shaping = () => (on('eqOn') && Array.isArray(CFG.eqBands) && CFG.eqBands.some((x) => cl(x, -12, 12) !== 0))
+        || (!fxBypass && (cl(CFG.bassDb, 0, 9) > 0 || cl(CFG.tiltDb, -4, 4) !== 0))
+        || (on('enhanceOn') && cl(CFG.enhanceAmt, 0, 100) > 0) || (on('loudCompOn') && cl(CFG.loudCompAmt, 0, 9) > 0)
+        || (on('peqOn') && Array.isArray(CFG.peq) && CFG.peq.some((f) => { const c = clampPeq(f); return !!(c && c.g); }));
+      const e = [...sceFx].pop(); const p = (e && e.chain && e.chain.probe) || (shaping() ? fallbackProbe() : null);
+      if (!p) return { userDb, peqDb };
       const mag = n === PROBE_N ? _probeMag : new Float32Array(n), ph = n === PROBE_N ? _probePh : new Float32Array(n);
       const add = (node, out) => { try { node.getFrequencyResponse(fr, mag, ph); for (let i = 0; i < n; i++) { const m = mag[i]; if (m > 0 && isFinite(m)) out[i] += 20 * Math.log10(m); } } catch (er) {} };
       const setG = (node, g) => { try { node.gain.value = g; } catch (er) {} };
@@ -11881,7 +11886,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const fmtAuto = () => { const h = Math.round(lastHeadroomDb * 10) / 10; return h > 0 ? ' · auto −' + h : ''; };
       const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB' + fmtAuto(), 0);
       pre.row.style.cssText += ';margin-top:6px;border-top:1px solid rgba(255,255,255,.05)';
-      pre.row.lastChild.style.cssText += ';width:auto;min-width:46px;white-space:nowrap';   // room for the auto part
+      pre.row.lastChild.style.cssText += ';width:auto;min-width:104px;white-space:nowrap';   // a fixed reserve for the auto part, so the track does not shift as it changes
       bodyEl.appendChild(pre.row);
 
       // ── presets (2.27): the select mirrors the curve (blank once it is edited), Save is an inline row ──
@@ -11893,7 +11898,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '10px 0'; delBtn.style.width = '36px'; delBtn.title = 'Delete preset';
       // dirty state: the select shows the preset the curve equals, or nothing once a band or the pre-amp moved
       const syncSel = () => { try { const v = matchEqPreset(); if (sel.value !== v) sel.value = v; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; } catch (e) {} };
-      const repaintAll = () => { eqSw._paint(); pre.paint(); syncSel(); };
+      const repaintAll = () => { eqSw._paint(); try { pre.input.value = CFG.eqPreamp | 0; } catch (e) {} pre.paint(); syncSel(); };
       eqRepaint = repaintAll;
       syncSel();
       sel.addEventListener('change', () => { const v = sel.value; if (!v) { syncSel(); return; } eqPresetHint = v; if (v.charAt(0) === 'b') applyEqPreset(EQ_PRESETS[v.slice(2)]); else { const cu = customPresets(), name = v.slice(2); if (Object.prototype.hasOwnProperty.call(cu, name)) applyEqPreset(cu[name]); else syncSel(); } });
@@ -12005,7 +12010,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         frame++; refreshMeter();
         try {
           const changed = eqCurveVer !== drawnVer;
-          if (changed) { drawnVer = eqCurveVer; refreshCurve(); pre.paint(); syncSel(); }
+          if (changed) { drawnVer = eqCurveVer; refreshCurve(); repaintAll(); }
           // frame skipping: nothing plays and nothing changed → repaint every 4th frame
           let idle = false; try { const m = activeMedia(); idle = !m || m.paused; } catch (e) {}
           if (!changed && idle && hoverBand === drawnHover && dragBand === drawnDrag && (frame & 3)) return;
