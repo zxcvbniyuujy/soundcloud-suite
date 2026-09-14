@@ -9914,6 +9914,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       if (e.altKey || e.ctrlKey || e.metaKey) return; // Alt+S = shuffle, never lyric search
 
+      // the Audio tab owns A (compare) · N (night) · , . (speed): tap-align, the mini bar and lyric nudging keep them elsewhere
+      if (UI.curTab && UI.curTab() === 'audio' && SUITE.audioKey && SUITE.audioKey(e)) { e.preventDefault(); return; }
       if (e.key === 's' || e.key === 'S') { e.preventDefault(); UI.setTab('lyrics'); UI.enterSearch(); return; }
       if (e.key === 'f' || e.key === 'F') { e.preventDefault(); UI.toggleMax(); return; }
       if (e.key === 'k' || e.key === 'K') { e.preventDefault(); UI.toggleFocus(); return; }
@@ -9946,6 +9948,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (e.key === '-' || e.key === '=' || e.key === '+') { e.preventDefault(); UI.bumpFont(e.key === '-' ? -1 : 1); return; }
       if (e.key === '0') { App.nudge(0); return; }
     }, true);
+    // keyup: a held A (compare) on the Audio tab is released here, since the hub owns the keys while open
+    window.addEventListener('keyup', (e) => { try { if (UI.isOpen() && UI.curTab && UI.curTab() === 'audio' && SUITE.audioKey) SUITE.audioKey(e); } catch (e2) {} }, true);
   }
 
   function boot() {
@@ -10624,6 +10628,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
+      // A–B (2.28): a seek, a rate change or a (re)start moves the wrap point — re-aim the timer
+      const abRe = () => { try { if (abOn) armAb(); } catch (e) {} };
+      m.addEventListener('ratechange', abRe); m.addEventListener('seeking', abRe); m.addEventListener('play', abRe);
       syncPitch(m);
       // fades (2.21) are event-driven: `play` arms, `playing` fades in, `timeupdate` schedules the
       // fade-out, `seeking` clears it; pause / ended only track the element's state
@@ -11547,7 +11554,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       applySpeed();   // runs every tick + immediately on cycleSpeed; works even before activeMedia resolves
       try { killUpsellBanners(); } catch (e) {}
-      try { if (sleepUntil) paintSleep(); } catch (e) {}
+      try { if (sleepEls) paintSleep(); } catch (e) {}
       try { if (CFG.speedPerTrack) restoreTrackSpeed(); } catch (e) {}
       try { restoreTrackLoud(); } catch (e) {}
       try { if (fxRouted && !loudTimer) peakTick(); } catch (e) {}
@@ -11565,16 +11572,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (CFG.rememberVol) {
         if (!m.__sceVolRestored) {   // per element: SoundCloud can hand us a fresh <audio> per track
           const sv = parseFloat(GET(VOL_KEY, ''));
-          if (isFinite(sv) && sv >= 0 && sv <= 1) { try { m.volume = sv; } catch (e) {} }
+          if (isFinite(sv) && sv >= 0.02 && sv <= 1) { try { m.volume = sv; } catch (e) {} }   // a stored 0 is ignored: SoundCloud's own level stays
           m.__sceVolRestored = true;
         } else {
           const now = Date.now();
-          if (now - lastVolSaved > 1500 && isFinite(m.volume)) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
+          // never remember a mute (M) or a near-silent level as "the volume": unmuting / the next session would restore silence
+          if (mutedVol == null && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
         }
-      }
-      // A–B loop: jump back to A once we pass B
-      if (abOn && abA != null && abB != null && abB > abA) {
-        try { if (m.currentTime >= abB || m.currentTime < abA - 0.5) { __sceUserSeek = Date.now(); m.currentTime = abA; } } catch (e) {}
       }
     } catch (e) {}
   }
@@ -11583,12 +11587,39 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function abMark() {
     const m = activeMedia();
     if (!m || !isFinite(m.currentTime)) { toast('Play a track first'); return; }
-    if (abA == null || abB != null) { abA = m.currentTime; abB = null; abOn = false; toast('A set — mark B next'); }
-    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; toast('A–B loop on'); }
+    if (abA == null || abB != null) { abA = m.currentTime; abB = null; abOn = false; armAb(); toast('A set — mark B next'); }
+    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
     else { abA = m.currentTime; toast('A moved'); }
     refreshBar();
   }
-  function abClear() { abA = abB = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast('A–B loop cleared'); }
+  // quiet: the loop switched itself off (the user seeked out of it) — a softer toast than an explicit clear
+  function abClear(quiet) { abA = abB = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
+  // 2.28: the wrap is a timer aimed 30 ms of media time before B (rate-aware) plus a 100 ms backstop that survives
+  // seeks and rate changes; the 1 Hz enforce tick no longer takes part, so the loop lands within ~50 ms of B
+  const abAimMs = (m) => ((abB - 0.03 - m.currentTime) / Math.max(0.25, +m.playbackRate || 1)) * 1000;   // wall ms until 30 ms (media) before B
+  function armAb() {
+    try { clearTimeout(abT); clearInterval(abI); } catch (e) {}
+    abT = 0; abI = 0;
+    if (!abOn || abA == null || abB == null) return;
+    const m = activeMedia();
+    if (!m) return;
+    try {
+      abT = setTimeout(abCheck, Math.max(0, abAimMs(m)));
+      abI = setInterval(abCheck, 100);
+    } catch (e) {}
+  }
+  function abCheck() {
+    try {
+      if (!abOn || abA == null || abB == null) { armAb(); return; }
+      const m = activeMedia();
+      if (!m || !isFinite(m.currentTime)) return;
+      const t = m.currentTime;
+      if (t < abA - 0.5 || t > abB + 1) { abClear(true); return; }   // the listener seeked outside the loop (checked first: a seek past B must not wrap)
+      if (t >= abB - 0.05) { __sceUserSeek = Date.now(); m.currentTime = abA; armAb(); return; }
+      // close to B but short of the threshold (the media clock lags the timer a little): re-aim rather than wait for the backstop
+      if (abB - t < 0.3 && !m.paused) { try { clearTimeout(abT); } catch (e) {} abT = setTimeout(abCheck, Math.max(5, abAimMs(m))); }
+    } catch (e) {}
+  }
   function restartTrack() {
     const m = activeMedia();
     try { if (m) { __sceUserSeek = Date.now(); m.currentTime = 0; toast('Restarted'); } } catch (e) {}
@@ -11644,6 +11675,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
           if (CFG.hotkeys) {
             const k = e.key;
+            if (e.repeat && k !== '=' && k !== '+' && k !== '-' && k !== '_') return;   // only the volume keys auto-repeat
+            if (SUITE.audioKey && SUITE.audioKey(e)) { e.preventDefault(); return; }    // A compare · N night · , . speed
             if (k === '/') { const s = D.querySelector('input.headerSearch__input,.headerSearch__input,input[type="search"],.header__searchInput'); if (s) { e.preventDefault(); s.focus(); s.select && s.select(); } }
             else if (k === 'm' || k === 'M') { toggleMute(); }
             else if (k === '=' || k === '+') { bumpVol(0.05); }
@@ -11656,6 +11689,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
         } catch (e2) {}
       }, true);
+      // keyup releases a held A (compare); the hub takes over both edges while it is open (module 2 yields on its Audio tab)
+      W.addEventListener('keyup', (e) => { try { if (!(SUITE.lyricsOpen && SUITE.lyricsOpen()) && SUITE.audioKey) SUITE.audioKey(e); } catch (e2) {} }, true);
     } catch (e) {}
     // back-to-top button
     try {
@@ -11666,38 +11701,47 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function bumpVol(d) { const m = activeMedia(); if (!m) return; const v = Math.min(1, Math.max(0, (m.volume || 0) + d)); m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%'); }
   function toggleMute() { const m = activeMedia(); if (!m) return; if (m.volume > 0) { mutedVol = m.volume; m.volume = 0; toast('Muted'); } else { m.volume = mutedVol || 0.5; mutedVol = null; toast('Unmuted'); } }
 
-  /* ───────── sleep timer — pause playback after N minutes (live, not persisted) ───────── */
-  let sleepMin = 0, sleepUntil = 0, sleepFireT = 0, sleepEls = null;
-  function pauseForSleep() {
+  /* ───────── sleep timer chips (2.29) — one timer for the whole suite: module 1's SUITE.sleep owns the
+     clock, the fade-out and the "after this track" arming; these chips only set / clear it and paint it ───────── */
+  let sleepEls = null, sleepChipMin = 0, sleepChipEnd = 0;   // the chip clicked last (-1 = Track end) and the timer end it set; cleared once the timer is gone
+  function paintSleep(force) {   // force: the Tweaks render paints before its row is attached
     try {
-      const m = activeMedia();
-      if (m && !m.paused) { try { m.pause(); } catch (e) {} }
-      // also click SoundCloud's own button if it still thinks it's playing, so
-      // the native UI state matches (the captured element may be detached)
-      const pc = D.querySelector('.playControls__play');
-      if (pc && pc.classList.contains('playing')) pc.click();
-    } catch (e) {}
-  }
-  function paintSleep() {
-    try {
-      if (!sleepEls || !sleepEls.wrap || !sleepEls.wrap.isConnected) return;
+      if (!sleepEls || !sleepEls.wrap || (!force && !sleepEls.wrap.isConnected)) return;
+      const S = SUITE.sleep;
+      const rem = S ? (S.remainingMs() || 0) : 0, armed = !!(S && S.armed());
+      if (!rem && !armed) { sleepChipMin = 0; sleepChipEnd = 0; }
+      else {
+        // the timer's end moved without a chip click (the hub's Stats tab, module 1's own panel, "after this track"
+        // arming): light the chip whose minutes match, or none
+        const end = armed ? -1 : Date.now() + rem;
+        if (armed ? sleepChipEnd !== -1 : Math.abs(end - sleepChipEnd) > 2000) {
+          const cm = armed ? -1 : Math.ceil(rem / 60000);
+          sleepChipMin = sleepEls.chips.some((c) => +c.dataset.min === cm) ? cm : 0;
+          sleepChipEnd = end;
+        }
+      }
       sleepEls.chips.forEach((c) => {
-        const on = sleepMin > 0 && (+c.dataset.min === sleepMin);
+        const on = sleepChipMin !== 0 && (+c.dataset.min === sleepChipMin);
         c.style.background = on ? 'linear-gradient(135deg,#f50,#ff8a3d)' : 'rgba(255,255,255,.07)';
         c.style.color = on ? '#fff' : '#dcdce2';
       });
-      const rem = sleepUntil ? Math.max(0, Math.ceil((sleepUntil - Date.now()) / 60000)) : 0;
-      sleepEls.label.textContent = sleepUntil ? ('Pausing playback in ~' + rem + ' min') : 'Pause playback automatically';
+      sleepEls.label.textContent = !S ? 'Sleep timer unavailable' : armed ? 'Pausing after this track' : rem ? ('Pausing playback in ~' + Math.max(1, Math.ceil(rem / 60000)) + ' min') : 'Pause playback automatically';
     } catch (e) {}
   }
-  function armSleep(min) {
-    if (sleepFireT) { try { clearTimeout(sleepFireT); } catch (e) {} sleepFireT = 0; }
-    sleepMin = min || 0;
-    if (!min) { sleepUntil = 0; toast('Sleep timer off'); paintSleep(); return; }
-    sleepUntil = Date.now() + min * 60000;
-    sleepFireT = setTimeout(() => { sleepFireT = 0; sleepUntil = 0; sleepMin = 0; pauseForSleep(); toast('💤 Paused — good night'); paintSleep(); }, min * 60000);
-    toast('💤 Sleep timer set · ' + (min >= 60 ? (min / 60) + 'h' : min + ' min'));
-    paintSleep();
+  function sleepChip(min) {
+    try {
+      if (!SUITE.sleep) { toast('Sleep timer unavailable'); return; }
+      if (min === -1) {
+        // fire just before this track ends → the watcher arms "pause after this track" instead of fading mid-song
+        const m = activeMedia();
+        const remS = m && isFinite(m.duration) && m.duration > 0 ? Math.max(5, m.duration - m.currentTime) : 0;
+        if (!remS) { toast('Play something first'); return; }
+        SUITE.sleep.set(Math.max(0.01, remS / 60 - 0.12)); sleepChipMin = -1; toast('Pausing after this track');
+      } else if (min > 0) { SUITE.sleep.set(min); sleepChipMin = min; toast('💤 Sleep timer set · ' + (min >= 60 ? (min / 60) + 'h' : min + ' min')); }
+      else { SUITE.sleep.clear(); sleepChipMin = 0; toast('Sleep timer off'); }
+      sleepChipEnd = sleepChipMin ? Date.now() + (SUITE.sleep.remainingMs() || 0) : 0;
+      paintSleep();
+    } catch (e) {}
   }
   function likeCurrent() {
     const b = D.querySelector('.playControls .sc-button-like, .playbackSoundBadge__actions .sc-button-like, .playControls__soundBadge .sc-button-like, button.sc-button-like');
@@ -11956,6 +12000,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         [['I'], 'Track info, download & embed'],
         [['/'], 'Focus the SoundCloud search'],
       ]],
+      ['Audio', [
+        [['A'], 'Hold to compare with the original'],
+        [['N'], 'Night mode on / off'],
+        [[',', '.'], 'Speed −5 % / +5 %'],
+      ], 'Also work inside the hub on the Audio tab'],
       ['Suite', [
         [['?'], 'Show / hide this sheet'],
       ]],
@@ -11969,13 +12018,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + '<div style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:#f50;font-size:15px">⌨</div>'
       + '<div><div style="font-size:16px;font-weight:800;letter-spacing:-.3px">Keyboard shortcuts</div>'
       + '<div style="font-size:11px;color:#9a9aa2">Global keys — anywhere on SoundCloud</div></div></div>';
-    for (const [title, rows] of groups) {
+    for (const [title, rows, note] of groups) {
       html += '<div style="font-size:9.5px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:#7e7e88;margin:16px 0 5px">' + esc(title) + '</div>';
       for (const [keys, desc] of rows) {
         html += '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">'
           + '<div style="flex:none;min-width:92px">' + keys.map(chip).join('') + '</div>'
           + '<div style="flex:1;color:#cfcfd6;font-size:12px">' + esc(desc) + '</div></div>';
       }
+      if (note) html += '<div style="font-size:10px;color:#7e7e88;margin-top:5px">' + esc(note) + '</div>';
     }
     html += '<div style="margin-top:14px;padding:10px 12px;border-radius:11px;background:rgba(255,90,0,.08);font-size:11.5px;color:#cdb6a6;line-height:1.45">Open the <b style="color:#ffb083">lyrics hub</b> (♪ in the player bar) and press <b style="color:#fff">?</b> inside it for 20+ lyric, sync & navigation keys.</div>';
     html += '<div style="text-align:center;font-size:10px;color:#6a6a72;margin-top:12px;letter-spacing:.03em">Esc or click away to close · enable keys under Settings → Player</div>';
@@ -12604,6 +12654,39 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   try { SUITE.audioRender = audioRender; } catch (e) {}
   try { SUITE.audioTabActive = (on) => { audioTabOn = !!on; if (!on) setBypass(false); try { applyFx(); } catch (e) {} }; } catch (e) {}
+  // audio hotkeys (2.23): one dispatcher for a keydown OR keyup; returns true when it consumed the key. Two callers —
+  // module 3's own window listeners (hub closed) and the hub's hotkeys() on its Audio tab (hub open) — so A/N/,/.
+  // never reach tap-align, the mini bar or lyric nudging while the listener is looking at the Audio tab
+  function stepSpeed(d) {
+    CFG.speed = Math.max(50, Math.min(200, (CFG.speed | 0) + d));
+    save(); rememberSpeed(); enforce(); refreshBar();
+    try { if (eqRepaint) eqRepaint(); } catch (e) {}   // the Audio tab's Speed row and chips follow
+    toast('Speed ' + (CFG.speed / 100) + '×');
+  }
+  function toggleNight() {
+    CFG.nightOn = !CFG.nightOn;
+    save(); applyFx();
+    try { if (eqRepaint) eqRepaint(); } catch (e) {}
+    toast('Night mode ' + (CFG.nightOn ? 'on' : 'off'));
+  }
+  try {
+    SUITE.audioKey = (e) => {
+      try {
+        if (!CFG.hotkeys || !e || e.repeat) return false;
+        if (e.altKey || e.ctrlKey || e.metaKey) return false;
+        const t = (e.composedPath ? e.composedPath()[0] : null) || e.target, ae = D.activeElement;
+        const typing = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+        if (typing(t) || typing(ae)) return false;
+        const k = e.key, down = e.type === 'keydown';
+        if (k === 'a' || k === 'A') { setBypass(down); return true; }   // hold to compare: down sets, up clears
+        if (!down) return false;
+        if (k === 'n' || k === 'N') { toggleNight(); return true; }
+        if (k === ',') { stepSpeed(-5); return true; }
+        if (k === '.') { stepSpeed(5); return true; }
+      } catch (e2) {}
+      return false;
+    };
+  } catch (e) {}
   // expose the captured audio element's clock + the AudioContext output latency
   // so the lyrics engine can sync the highlight to what's HEARD, not just decoded
   try { SUITE.audioClock = () => { try {
@@ -12694,7 +12777,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           loudMemClear: () => SET('loud:bytrack', {}),
           loud: () => ({ href: lnorm.href, blocks: lnorm.blocks.length, lint: lnorm.lint, trackPeak: lnorm.trackPeak, curGainDb: lnorm.curGainDb, nodeDb: lnorm.nodeDb, dur: lnorm.dur, measuring: lnorm.measuring, src: lnorm.src, pending: lnorm.pending }),
           restoreLoud: () => restoreTrackLoud(),
-          ab: (a, b) => { abA = +a; abB = +b; abOn = true; refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
+          ab: (a, b) => { abA = +a; abB = +b; abOn = true; armAb(); refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
+          sleep: () => ({ rem: SUITE.sleep ? SUITE.sleep.remainingMs() : -1, armed: !!(SUITE.sleep && SUITE.sleep.armed()), chip: sleepChipMin }),
+          muted: () => mutedVol != null,
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
           fade: () => fadeCtl.state(), restartTrack, nudgeSeek, seekPct, applySpeed, status: () => audioStatus(),
           toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
@@ -12923,7 +13008,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['rememberVol', 'toggle', 'Remember volume', 'Restore it next time'],
     ['volScroll', 'toggle', 'Scroll = volume', 'Scroll over the player bar'],
     ['keySeek', 'toggle', 'Number-key seeking', '0–9 jump · [ ] = ∓10s'],
-    ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info'],
+    ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
@@ -13225,14 +13310,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const chips = [];
           const mkChip = (min, txt) => {
             const b = D.createElement('button'); b.type = 'button'; b.dataset.min = String(min); b.textContent = txt;
-            b.style.cssText = 'flex:1;min-width:40px;background:rgba(255,255,255,.07);border:0;border-radius:8px;color:#dcdce2;font:700 11px inherit;padding:7px 4px;cursor:pointer;transition:background .14s,color .14s';
-            b.addEventListener('click', () => armSleep(min));
+            b.style.cssText = 'flex:1 0 auto;min-width:40px;white-space:nowrap;background:rgba(255,255,255,.07);border:0;border-radius:8px;color:#dcdce2;font:700 11px inherit;padding:7px 4px;cursor:pointer;transition:background .14s,color .14s';
+            b.addEventListener('click', () => sleepChip(min));
             chipRow.appendChild(b); chips.push(b);
           };
-          mkChip(15, '15m'); mkChip(30, '30m'); mkChip(45, '45m'); mkChip(60, '1h'); mkChip(90, '1.5h'); mkChip(0, 'Off');
+          mkChip(15, '15m'); mkChip(30, '30m'); mkChip(45, '45m'); mkChip(60, '1h'); mkChip(90, '1.5h'); mkChip(-1, 'Track end'); mkChip(0, 'Off');
           wrap.appendChild(chipRow);
           sleepEls = { wrap, chips, label: sm };
-          paintSleep();
+          paintSleep(true);
           (curGrp || container).appendChild(wrap);
           meta.push({ el: wrap, text: 'sleep timer pause auto stop bedtime night playback', sec: curSec });
         }
