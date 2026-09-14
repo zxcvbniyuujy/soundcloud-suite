@@ -50,12 +50,17 @@ entirely, so SoundCloud plays exactly as it does without the extension.
 - **Tone** — Bass (with an automatic sub-25 Hz rumble filter), Vocals softer
   or lifted, a loudness contour for low volume, Tilt (warm ↔ bright), and a
   harmonic bass for small speakers.
-- **Enhance** — clarity, warmth and punch, level-matched so it never wins by
-  simply being louder.
+- **Enhance** — a five-stage tone shape (sub, warmth, a mud dip, presence,
+  air), 4×-oversampled saturation, a harmonic exciter that rebuilds the top
+  end a lossy stream lost, and a three-band compressor for punch. It takes
+  its own headroom so nothing clips, and its level is measured offline on a
+  music clip and cancelled, so it never wins by simply being louder.
 - **Loudness & dynamics** — K-weighted, gated loudness normalization with a
   Quiet / Normal / Loud target and a per-track memory; Night mode; Volume
-  boost up to 300 %; and a **Clip guard** limiter that engages automatically
-  whenever something boosts.
+  boost up to 300 %; and a **Clip guard** — a true-peak brick-wall limiter
+  (an AudioWorklet with 5 ms look-ahead, ceiling −1 dBTP; a compressor stands
+  in where the worklet can't load) that engages automatically whenever
+  something boosts or Enhance is on.
 - **Stereo** — width 0–200 %, headphone crossfeed (Subtle / Natural /
   Strong), balance, mono, swap left / right.
 - **Headphone correction** — paste an AutoEQ profile for your headphones.

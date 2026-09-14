@@ -7275,7 +7275,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ['🎚️', 'A complete Audio tab', 'Loudness normalize that measures like the streaming services (with a per-track memory), a clip guard, volume boost to 300 %, Night mode, hold-to-compare, headphone correction from AutoEQ, bass, vocals, tilt, crossfeed, balance, mono, tempo chips, pitch-follows-speed, fades — every control an exact passthrough when off.'],
           ['🎯', 'Pinpoint lyric sync', 'Synced lyrics auto-stretch to THIS upload’s real length (SoundCloud is full of sped-up / edited versions), and a phase-locked clock makes the highlight glide exactly with the audio — locked to the track that’s actually playing, no more creeping out by the last chorus. For tracks with no synced lyrics anywhere, the timing is estimated — tap the 🎤 prompt (or ⋯ → Calibrate sync) and tap each line as you hear it to lock it perfectly.'],
           ['🌐', 'Lyric translation', 'Lyrics ⋯ menu → Translate: each line gets a dimmed translation in your language, right under the original.'],
-          ['🚀', 'One-tap recommended setup', 'First run offers a “Use recommended” option — a dark theme, the audio enhancer, loudness leveling & a tuned EQ, all in one tap. Or set it up yourself.'],
+          ['🚀', 'One-tap recommended setup', 'First run offers a “Use recommended” option — a dark theme, the audio enhancer, loudness leveling & a touch of stereo width, all in one tap. Or set it up yourself.'],
           ['✨', 'Enhance audio + stereo width', 'Audio tab → Enhance: restores high-end clarity, warmth & punch, plus a stereo-width slider for a fuller, more “HQ” sound.'],
           ['🎛️', 'Interactive equalizer', 'A drag-the-curve 10-band EQ — pull the dots over a glowing live spectrum, just like a pro plugin, with presets you can save.'],
           ['🔊', 'Loudness & fade', 'Also in the Audio tab: auto-level quiet vs. loud uploads and fade tracks in/out. All experimental & instantly reversible.'],
@@ -10725,13 +10725,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   // what the chain adds on top of the device latency, in ms. Chromium's
   // DynamicsCompressor has a fixed pre-delay of floor(0.006·sr) frames (≈ 6 ms at
-  // every rate) even at ratio 1; the chain carries two (comp + clip guard) → 12 ms
-  // whenever routed. The WaveShaper's 2× oversampling adds 128 samples while
-  // Enhance is on (Compare leaves oversample alone, so key on CFG.enhanceOn only).
+  // every rate) even at ratio 1; the chain carries two stages of it (the comp ‖ bank
+  // crossfade, then the clip guard) → 12 ms whenever routed. The WaveShapers' 4×
+  // oversampling adds 192 samples while Enhance is on (Compare leaves oversample
+  // alone, so key on CFG.enhanceOn only).
   function fxLatencyMs() {
     if (!fxRouted) return 0;
     const sr = (sceLastCtx && sceLastCtx.sampleRate) || 48000;
-    return 12 + (CFG.enhanceOn ? Math.round(128000 / sr) : 0);
+    return 12 + (CFG.enhanceOn ? Math.round(192000 / sr) : 0);
   }
   // Compare: a parameter-level bypass (routing stays, so no click and the
   // spectrum keeps running). Live state only — never persisted.
@@ -10803,10 +10804,414 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * nothing enabled the routed chain is a passthrough (plus the two compressors'
    * fixed 6 ms pre-delay); the chain is detached entirely when fxOn() is false.
    *   input → [taps] → preamp → rumble → tiltLo/Hi → lcLo/Hi → bands[10] → peq[10] → bass →
-   *   warm → air → shaper → comp → compTrim → M/S (width + vocal band) → crossfeed →
-   *   matrix → analyser → makeup → boost → lim → limTrim → [tap] → output
+   *   Enhance (pre → sub/warm/mud/pres/air → shaper ‖ exciter → sum) → (comp ‖ 3-band bank) →
+   *   compTrim → M/S (width + vocal band) → crossfeed → matrix → analyser → makeup → boost →
+   *   (lim ‖ true-peak limiter) → limTrim → [tap] → output
    * Highpass/lowpass biquads cannot be made inert by parameters, so they are either
    * swapped to `peaking` 0 dB (rumble) or live only on paths whose gain is 0. */
+  // The clip guard's true-peak leg: a brick-wall limiter as a Blob-URL AudioWorklet (the
+  // extension ships no web-accessible files; soundcloud.com serves no CSP, and load() answers
+  // false instead of throwing if that ever changes, leaving the compressor leg in charge).
+  // TP_LIMITER = { source, load, create }.
+  //
+  //   await TP_LIMITER.load(ctx)      → true | false (never throws; one addModule per context)
+  //   const lim = TP_LIMITER.create(ctx)   → AudioWorkletNode or null (if not loaded)
+  //   lim.parameters.get('ceiling').value = -1     // dBTP  (default -1, range -40..0)
+  //   lim.parameters.get('release').value = 0.08   // s     (default 0.08, range 0.005..2)
+  //   lim.parameters.get('bypass').value  = 1      // 1 = delayed dry signal, unchanged
+  //   lim.latencySamples / lim.latencyMs           // look-ahead delay (5 ms, rounded to samples)
+  //   lim.gainReduction                            // dB of reduction (>= 0), refreshed <= 10×/s
+  //   lim.port 'message' events: { gr: <dB of reduction, >= 0> }, at most 10 per second
+  //
+  // Processor design (sce-tp-limiter), per sample n, per channel c (stereo-linked gain):
+  //   ring[n]   = x[n]                        delay line; also the T=16-sample FIR history
+  //   tp[n]     = max_c( |x[n-8]|, |ph0..ph3| ), ph_p = Σ_i H[p][i]·x[n-i]: the 4× over-sampled
+  //               inter-sample values between x[n-8] and x[n-7] (polyphase windowed-sinc, see H)
+  //   tg[n]     = tp > C ? C / tp : 1         target gain, C = 10^(ceiling/20)
+  //   gmin[n]   = min( tg[n-W+1 .. n] )       sliding-window minimum (monotonic deque, O(1))
+  //   grel[n]   = min( gmin[n], grel[n-1] + (1 - grel[n-1])·α )   exponential release,
+  //               α = 1 - exp(-1 / (τ·fs)),  τ = release · (1 + 3·min(1, hold/0.3 s))
+  //               (program-dependent: τ stretches from 1× to 4× while gain reduction has been
+  //                continuously active for up to 300 ms; `hold` decays 4× faster once recovered)
+  //   g[n]      = mean( grel[n-A+1 .. n] )    box average → linear attack ramp of A samples
+  //   y[n]      = ring[n-D] · g[n]            D = round(0.005·fs) (look-ahead = latency),
+  //                                           A = D - 16 (ramp), W = D + 1 (min window)
+  // Guarantee: every grel that enters the average of g[n] is ≤ tg[j] for all j in
+  // [n-D, n-D+16], i.e. the gain applied to the delayed sample x[n-D] is never above
+  // C / (detector peak anywhere in x[n-D-8 .. n-D+9)). The sample peak is part of tp, so output
+  // samples never exceed C either. Residual: gain changes inside a downstream meter's own
+  // interpolator span (second-order; measured ≤ 0.1 dB, see tp-limiter-test.js).
+  // Exactness: when no sample within the FIR span exceeds C / ‖H‖₁ the FIR is skipped and
+  // tg = 1; when nothing in the box window is < 1 the gain is exactly 1 (and the running sum
+  // is re-anchored, so no float drift). A -20 dBFS signal therefore passes bit-exactly.
+  // Channels: 1 or 2 input channels (mono is duplicated to both outputs); with no input the
+  // delay line is flushed and the node then idles (silence, no per-sample work).
+  // Cost per sample: ≤ 16 ring reads + 64 MACs per channel + ~20 scalar ops; the FIR only runs
+  // while the signal is within ‖H‖₁ (≈ 6 dB) of the ceiling. Measured (OfflineAudioContext
+  // render time as a proxy, 60 s of dense stereo noise at 48 kHz, Chromium 141): 0.79 % of real
+  // time while limiting (0.61 % net of the graph baseline), 0.39 % (0.20 % net) below threshold.
+  // Meter dependence (honest numbers from tp-limiter-test.js): the ceiling holds within 0.1 dB
+  // on the ITU-R BS.1770 4× meter, an ideal 4× interpolator and the sample peak for material
+  // band-limited to ≤ 20 kHz and for square waves ≤ 3 kHz; full-band white noise or naive
+  // 5–7 kHz squares (energy at Nyquist, where any 4× meter under-reads) can read up to ≈ 0.4 dB
+  // higher on an ideal interpolator while the BS.1770 meter still shows ≤ the ceiling.
+  const TP_LIMITER = {
+    name: 'sce-tp-limiter',
+    lookaheadSec: 0.005,
+    lastError: null,
+
+    // AudioWorkletProcessor code, loaded via a Blob URL (no web-accessible files needed).
+    source: `'use strict';
+  // Detector FIR H: 4× polyphase interpolator derived here (no table to trust):
+  //   prototype h[k] = sinc((k - c)/4) · Kaiser(β = 5),  k = 0..4T-1,  T = 16 taps per phase,
+  //   c = (4T-1)/2 = 31.5 quarter-samples;  phase p, tap i = h[4i + p] multiplies x[n-i];
+  //   each phase is normalised to Σ taps = 10^(0.1/20) (unity DC gain, +0.1 dB calibration).
+  // Response: flat within 0.02 dB to 15 kHz, -0.2 dB at 20 kHz (48 kHz rate), ≈ -33 dB stop band.
+  // The four phases at step n sit at n - 7.875, -7.625, -7.375, -7.125, i.e. between x[n-8] and
+  // x[n-7]; |x[n-8]| is added so the sample peak is always covered.
+  // Why not the raw ITU-R BS.1770-4 Annex 2 table: its phases 1-2 sum to 0.973 (-0.24 dB), so it
+  // under-reads mid-phase inter-sample peaks; an ideal interpolator read a BS.1770-limited output
+  // +0.14..0.21 dB over the ceiling. With this filter and the +0.1 dB calibration both the standard
+  // BS.1770 4× meter and an ideal (64-tap Kaiser β=10) 4× interpolator stay within 0.1 dB of the
+  // ceiling on band-limited material (≤ 20 kHz) and on square waves ≤ 3 kHz (see tp-limiter-test.js).
+  var T = 16, DET_GAIN_DB = 0.1, KAISER_BETA = 5;
+  function I0(x) { var s = 1, t = 1, k; for (k = 1; k < 80; k++) { t *= (x / 2 / k) * (x / 2 / k); s += t; } return s; }
+  function deriveH() {
+    var N4 = 4 * T, c = (N4 - 1) / 2, g = Math.pow(10, DET_GAIN_DB / 20), i0b = I0(KAISER_BETA);
+    var h = new Float64Array(N4), k, r, t, x, p, i, ph, s, out = [];
+    for (k = 0; k < N4; k++) {
+      r = 2 * k / (N4 - 1) - 1; t = (k - c) / 4; x = Math.PI * t;
+      h[k] = (Math.abs(t) < 1e-9 ? 1 : Math.sin(x) / x) * I0(KAISER_BETA * Math.sqrt(Math.max(0, 1 - r * r))) / i0b;
+    }
+    for (p = 0; p < 4; p++) {
+      ph = new Float64Array(T); s = 0;
+      for (i = 0; i < T; i++) { ph[i] = h[4 * i + p]; s += ph[i]; }
+      for (i = 0; i < T; i++) ph[i] *= g / s;
+      out.push(ph);
+    }
+    return out;
+  }
+  var H = deriveH();
+  class SceTpLimiter extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+      return [
+        { name: 'ceiling', defaultValue: -1,   minValue: -40,   maxValue: 0, automationRate: 'k-rate' },
+        { name: 'release', defaultValue: 0.08, minValue: 0.005, maxValue: 2, automationRate: 'k-rate' },
+        { name: 'bypass',  defaultValue: 0,    minValue: 0,     maxValue: 1, automationRate: 'k-rate' }
+      ];
+    }
+    constructor(options) {
+      super(options);
+      var fs = sampleRate;
+      var D = Math.max(T + 8, Math.round(0.005 * fs));    // look-ahead = delay = latency (5 ms)
+      this.D = D; this.G = T >> 1;                        // detector centre offset (8 samples)
+      this.A = Math.max(1, D - T);                        // attack ramp length (box average)
+      this.W = this.A + T + 1;                            // sliding-min window (= D + 1)
+      var n = 1; while (n < D + T + 4) n <<= 1;           // ring holds D + FIR history
+      this.mask = n - 1;
+      this.rL = new Float32Array(n); this.rR = new Float32Array(n); this.w = 0;
+      var q = 1; while (q < this.W + 2) q <<= 1;          // monotonic deque capacity
+      this.qm = q - 1; this.qv = new Float64Array(q); this.qi = new Float64Array(q);
+      this.qh = 0; this.qt = 0; this.t = 0;
+      this.box = new Float64Array(this.A); this.box.fill(1); this.bi = 0;
+      this.sum = this.A; this.nBelow = 0; this.invA = 1 / this.A;
+      this.grel = 1; this.hold = 0; this.loud = 0;
+      this.h0 = H[0]; this.h1 = H[1]; this.h2 = H[2]; this.h3 = H[3];
+      var l1 = 0, p, i, s;
+      for (p = 0; p < 4; p++) { s = 0; for (i = 0; i < T; i++) s += Math.abs(H[p][i]); if (s > l1) l1 = s; }
+      this.L1 = l1;                                       // max phase L1 norm (≈ 2.04): |FIR out| ≤ L1·max|x|
+      this.ceilDb = NaN; this.C = 1; this.thr = 1;
+      this.relS = NaN; this.tauMul = 0; this.alpha = 0;
+      this.idle = 0; this.zeros = null; this.scratch = null;
+      this.repEvery = Math.max(1, Math.round(fs / 10)); this.repCount = 0; this.gMinRep = 1; this.lastGr = 0;
+    }
+    process(inputs, outputs, params) {
+      var out = outputs[0];
+      if (!out || !out.length) return true;
+      var oL = out[0], N = oL.length;
+      if (!this.scratch || this.scratch.length !== N) { this.scratch = new Float32Array(N); this.zeros = new Float32Array(N); }
+      var oR = out.length > 1 ? out[1] : this.scratch;
+      var inp = inputs[0], nIn = inp ? inp.length : 0;
+      if (nIn === 0) {
+        if (this.idle >= this.D + T + 4) {                // delay line already flushed → silence, no work
+          oL.fill(0); oR.fill(0);
+          if (this.lastGr !== 0) { this.lastGr = 0; this.gMinRep = 1; this.repCount = 0; this.port.postMessage({ gr: 0 }); }
+          return true;
+        }
+        this.idle += N;                                   // keep running on zeros to flush the tail
+      } else this.idle = 0;
+      var iL = nIn ? inp[0] : this.zeros, stereo = nIn > 1, iR = stereo ? inp[1] : iL;
+      // k-rate parameters (recomputed only on change)
+      var cdb = params.ceiling[0];
+      if (cdb !== this.ceilDb) { this.ceilDb = cdb; this.C = Math.pow(10, cdb / 20); this.thr = this.C / this.L1; }
+      var tauMul = 1 + 3 * Math.min(1, this.hold / 0.3), relS = params.release[0];
+      if (relS !== this.relS || tauMul !== this.tauMul) { this.relS = relS; this.tauMul = tauMul; this.alpha = 1 - Math.exp(-1 / (relS * tauMul * sampleRate)); }
+      var bypass = params.bypass[0] >= 0.5;
+      var rL = this.rL, rR = this.rR, m = this.mask, D = this.D, G = this.G, W = this.W, A = this.A, C = this.C, thr = this.thr, alpha = this.alpha;
+      var h0 = this.h0, h1 = this.h1, h2 = this.h2, h3 = this.h3, qv = this.qv, qi = this.qi, qm = this.qm, box = this.box, invA = this.invA;
+      var w = this.w, t = this.t, qh = this.qh, qt = this.qt, loud = this.loud, grel = this.grel, bi = this.bi, sum = this.sum, nBelow = this.nBelow, gMinRep = this.gMinRep;
+      var limCount = 0;
+      for (var n = 0; n < N; n++) {
+        var xL = iL[n], xR = iR[n];
+        rL[w] = xL; rR[w] = xR;
+        var aL = xL < 0 ? -xL : xL, aR = xR < 0 ? -xR : xR; if (aR > aL) aL = aR;
+        if (aL > thr) loud = T; else if (loud > 0) loud--;  // FIR needed only while a loud sample is within its span
+        var tg = 1;
+        if (loud > 0) {
+          var pk = rL[(w - G) & m]; if (pk < 0) pk = -pk;
+          var s0 = 0, s1 = 0, s2 = 0, s3 = 0, i, v;
+          for (i = 0; i < T; i++) { v = rL[(w - i) & m]; s0 += h0[i] * v; s1 += h1[i] * v; s2 += h2[i] * v; s3 += h3[i] * v; }
+          if (s0 < 0) s0 = -s0; if (s0 > pk) pk = s0;
+          if (s1 < 0) s1 = -s1; if (s1 > pk) pk = s1;
+          if (s2 < 0) s2 = -s2; if (s2 > pk) pk = s2;
+          if (s3 < 0) s3 = -s3; if (s3 > pk) pk = s3;
+          if (stereo) {
+            v = rR[(w - G) & m]; if (v < 0) v = -v; if (v > pk) pk = v;
+            s0 = 0; s1 = 0; s2 = 0; s3 = 0;
+            for (i = 0; i < T; i++) { v = rR[(w - i) & m]; s0 += h0[i] * v; s1 += h1[i] * v; s2 += h2[i] * v; s3 += h3[i] * v; }
+            if (s0 < 0) s0 = -s0; if (s0 > pk) pk = s0;
+            if (s1 < 0) s1 = -s1; if (s1 > pk) pk = s1;
+            if (s2 < 0) s2 = -s2; if (s2 > pk) pk = s2;
+            if (s3 < 0) s3 = -s3; if (s3 > pk) pk = s3;
+          }
+          if (pk > C) tg = C / pk;
+        }
+        // sliding-window minimum of tg over the last W samples (monotonic deque)
+        while (qt > qh && qv[(qt - 1) & qm] >= tg) qt--;
+        qv[qt & qm] = tg; qi[qt & qm] = t; qt++;
+        while (qi[qh & qm] <= t - W) qh++;
+        var gmin = qv[qh & qm];
+        if (gmin < 1) limCount++;
+        // exponential release (never above the window minimum)
+        var cand = grel + (1 - grel) * alpha;
+        grel = gmin < cand ? gmin : cand;
+        if (grel > 0.99999) grel = 1;                      // snap once within 1e-5 (-0.0001 dB): exact unity, no drift
+        // box average → linear attack ramp; exact 1 and drift-free when idle
+        var old = box[bi]; box[bi] = grel; if (++bi === A) bi = 0;
+        if (old < 1) nBelow--; if (grel < 1) nBelow++;
+        sum += grel - old;
+        var g;
+        if (nBelow === 0) { g = 1; sum = A; } else { g = sum * invA; if (g > 1) g = 1; }
+        if (bypass) g = 1;
+        if (g < gMinRep) gMinRep = g;
+        var rp = (w - D) & m;
+        oL[n] = rL[rp] * g; oR[n] = rR[rp] * g;
+        w = (w + 1) & m; t++;
+      }
+      this.w = w; this.t = t; this.qh = qh; this.qt = qt; this.loud = loud; this.grel = grel; this.bi = bi; this.sum = sum; this.nBelow = nBelow;
+      // program-dependent release bookkeeping
+      if (limCount > 0) this.hold = Math.min(1, this.hold + limCount / sampleRate);
+      else if (grel > 0.99) this.hold = Math.max(0, this.hold - 4 * N / sampleRate);
+      // gain-reduction report, at most 10 per second, only when the value changes
+      this.repCount += N;
+      if (this.repCount >= this.repEvery) {
+        this.repCount = 0;
+        var gr = gMinRep >= 1 ? 0 : Math.round(-2000 * Math.log10(gMinRep)) / 100;
+        if (gr !== this.lastGr) { this.lastGr = gr; this.port.postMessage({ gr: gr }); }
+        this.gMinRep = 1;
+      } else this.gMinRep = gMinRep;
+      return true;
+    }
+  }
+  registerProcessor('sce-tp-limiter', SceTpLimiter);
+  `,
+
+    // Adds the processor module to ctx.audioWorklet from a Blob URL, once per context.
+    // Resolves true on success, false on any failure (CSP, unsupported, closed context); never throws.
+    load(ctx) {
+      try {
+        if (!ctx || !ctx.audioWorklet || typeof AudioWorkletNode === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) return Promise.resolve(false);
+        if (ctx.__sceTpLimiterLoad) return ctx.__sceTpLimiterLoad;
+        var p = (async function () {
+          var url = '';
+          try {
+            url = URL.createObjectURL(new Blob([TP_LIMITER.source], { type: 'application/javascript' }));
+            await ctx.audioWorklet.addModule(url);
+            ctx.__sceTpLimiterOk = true;
+            return true;
+          } catch (e) {
+            TP_LIMITER.lastError = e;
+            ctx.__sceTpLimiterOk = false;
+            ctx.__sceTpLimiterLoad = null;              // allow a later retry
+            return false;
+          } finally {
+            if (url) { try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ } }
+          }
+        })();
+        ctx.__sceTpLimiterLoad = p;
+        return p;
+      } catch (e) { TP_LIMITER.lastError = e; return Promise.resolve(false); }
+    },
+
+    // Returns a configured AudioWorkletNode (1 in, 1 out, stereo out) or null when the module
+    // is not loaded in this context. Attaches latencySamples / latencyMs / gainReduction.
+    create(ctx) {
+      if (!ctx || ctx.__sceTpLimiterOk !== true) return null;
+      try {
+        var node = new AudioWorkletNode(ctx, 'sce-tp-limiter', {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+          channelCount: 2, channelCountMode: 'clamped-max', channelInterpretation: 'speakers'
+        });
+        node.latencySamples = Math.max(24, Math.round(0.005 * ctx.sampleRate));
+        node.latencyMs = node.latencySamples / ctx.sampleRate * 1000;
+        node.gainReduction = 0;
+        node.port.addEventListener('message', function (ev) { if (ev.data && typeof ev.data.gr === 'number') node.gainReduction = ev.data.gr; });
+        node.port.start();
+        return node;
+      } catch (e) { TP_LIMITER.lastError = e; return null; }
+    }
+  };
+  const TP_CEIL = -1;   // dBTP — the true-peak leg's ceiling (the compressor leg holds −3 dBFS sample peaks)
+  /* Enhance (spec §2.25, v2). One block definition serves the live chain and the offline
+   * level calibration, so what is measured is exactly what plays. At intensity a ∈ [0, 1]:
+   *   pre    −ENH_HEAD·a dB — the block's own headroom: the tone's biggest boost (the sub and
+   *          warm shelves overlap) comes off first, so the shaper never clamps a full-scale
+   *          master. The trim gives it back after the dynamics.
+   *   tone   sub 55 Hz +2a · warm 90 Hz +1.5a · mud 280 Hz −1.5a (Q 1.4) · presence 3 kHz +2a
+   *          (Q 1) · air 8.5 kHz +3a
+   *   shaper the unity-gain cubic (satCurve), 4× oversampled while Enhance is on
+   *   exciter HP 4 kHz (×2) → tanh(3x)/tanh(3) (4×) → HP 6.5 kHz (×2) → 0.22a, summed with the
+   *          shaper: new harmonics above 6.5 kHz from the 4–9 kHz band, where a lossy stream
+   *          has rolled off. The two shapers share one oversample setting so both legs of the
+   *          sum carry the same resampler delay.
+   *   bank   LR4 crossovers 150 / 2500 Hz; lo thr −16−4a ratio 1+0.6a att 30 ms rel 200 ms;
+   *          mid −14−4a, 1+0.5a, 12 / 150 ms; hi −18−6a, 1+0.7a, 5 / 100 ms; knee 12. Thresholds
+   *          follow the pre-gain (−ENH_HEAD·a) so the bands work the same programme level the
+   *          bench tuned them on. The bank is inert (ratio 1, thr 0) and its input gain 0 off.
+   * Every stage is an exact identity at a = 0; mbG 0 / cpG 1 hands the signal to the wideband
+   * compressor path. */
+  const ENH = { sub: 2.0, warm: 1.5, mud: -1.5, pres: 2.0, air: 3.0, exMix: 0.22 };
+  const ENH_HEAD = ENH.sub + ENH.warm;   // dB per unit intensity: the two low shelves stack fully below 55 Hz (enhToneMaxDb checks it)
+  ENH.lo = { thr: -16, thrA: 4 + ENH_HEAD, ratio: 0.6, att: 0.03, rel: 0.2 };
+  ENH.mid = { thr: -14, thrA: 4 + ENH_HEAD, ratio: 0.5, att: 0.012, rel: 0.15 };
+  ENH.hi = { thr: -18, thrA: 6 + ENH_HEAD, ratio: 0.7, att: 0.005, rel: 0.1 };
+  function buildEnhanceBlock(ctx) {
+    const biq = (type, f, q, g) => { const b = ctx.createBiquadFilter(); b.type = type; try { b.frequency.value = f; if (q != null) b.Q.value = q; b.gain.value = g || 0; } catch (e) {} return b; };
+    const gain = (g) => { const n = ctx.createGain(); n.gain.value = g; return n; };
+    const BW = -3.01;
+    const pre = gain(1);
+    const sub = biq('lowshelf', 55, null, 0), warm = biq('lowshelf', 90, null, 0), mud = biq('peaking', 280, 1.4, 0), pres = biq('peaking', 3000, 1.0, 0), air = biq('highshelf', 8500, null, 0);
+    // saturation: curve null + oversample 'none' = passthrough with 0 latency
+    const shaper = ctx.createWaveShaper(); try { shaper.oversample = 'none'; } catch (e) {}
+    // exciter branch: Butterworth pairs (Q −3.01 dB) either side of a fixed tanh curve; only exGain moves
+    const exHp1 = biq('highpass', 4000, BW, 0), exHp2 = biq('highpass', 4000, BW, 0), exHp3 = biq('highpass', 6500, BW, 0), exHp4 = biq('highpass', 6500, BW, 0);
+    const exShape = ctx.createWaveShaper();
+    try { exShape.oversample = 'none'; const N = 2048, c = new Float32Array(N), d = 3, t = Math.tanh(d); for (let i = 0; i < N; i++) c[i] = Math.tanh(d * (i * 2 / (N - 1) - 1)) / t; exShape.curve = c; } catch (e) {}
+    const exGain = gain(0), sum = gain(1);
+    // three-band bank: LR4 = two cascaded Butterworth biquads per edge
+    const lp = (f) => { const x = biq('lowpass', f, BW, 0), y = biq('lowpass', f, BW, 0); x.connect(y); return { i: x, o: y }; };
+    const hp = (f) => { const x = biq('highpass', f, BW, 0), y = biq('highpass', f, BW, 0); x.connect(y); return { i: x, o: y }; };
+    const comp = () => { const c = ctx.createDynamicsCompressor(); try { c.threshold.value = 0; c.knee.value = 12; c.ratio.value = 1; c.attack.value = 0.01; c.release.value = 0.1; } catch (e) {} return c; };
+    const mbG = gain(0), mbOut = gain(1);
+    const lo = lp(150), midHp = hp(150), midLp = lp(2500), hi = hp(2500);
+    const mbLo = comp(), mbMid = comp(), mbHi = comp();
+    // wiring
+    pre.connect(sub); sub.connect(warm); warm.connect(mud); mud.connect(pres); pres.connect(air); air.connect(shaper); shaper.connect(sum);
+    air.connect(exHp1); exHp1.connect(exHp2); exHp2.connect(exShape); exShape.connect(exHp3); exHp3.connect(exHp4); exHp4.connect(exGain); exGain.connect(sum);
+    mbG.connect(lo.i); lo.o.connect(mbLo); mbLo.connect(mbOut);
+    mbG.connect(midHp.i); midHp.o.connect(midLp.i); midLp.o.connect(mbMid); mbMid.connect(mbOut);
+    mbG.connect(hi.i); hi.o.connect(mbHi); mbHi.connect(mbOut);
+    return { enhPre: pre, sub, warm, mud, pres, air, shaper, exShape, exGain, sum, mbG, mbOut, mbLo, mbMid, mbHi };
+  }
+  // the node values for intensity a (0 = every stage inert) with the bank on or off (Night mode
+  // keeps the tone and takes the dynamics); `w(param, value, seconds)` is the writer (applyFx
+  // ramps a routed chain, the calibration and a detached chain write .value)
+  function setEnhanceParams(b, a, bank, w, db2g) {
+    w(b.enhPre.gain, db2g(-ENH_HEAD * a));
+    w(b.sub.gain, ENH.sub * a); w(b.warm.gain, ENH.warm * a); w(b.mud.gain, ENH.mud * a); w(b.pres.gain, ENH.pres * a); w(b.air.gain, ENH.air * a);
+    w(b.exGain.gain, ENH.exMix * a, 0.05);
+    w(b.mbG.gain, bank ? 1 : 0, 0.05);
+    for (const [c, k] of [[b.mbLo, ENH.lo], [b.mbMid, ENH.mid], [b.mbHi, ENH.hi]]) {
+      w(c.threshold, bank ? k.thr - k.thrA * a : 0, 0.05); w(c.ratio, bank ? 1 + k.ratio * a : 1, 0.05); w(c.knee, 12, 0.05);
+      w(c.attack, k.att, 0.05); w(c.release, k.rel, 0.05);
+    }
+  }
+  // the tone's biggest boost (dB) at intensity a — the sub and warm shelves overlap below 90 Hz
+  // (≈ 3.3 dB at a = 1, measured on the probe bank); this is what `pre` takes off up front
+  function enhToneMaxDb(a) {
+    let m = 0;
+    try { const cd = compositeDb(PROBE_FREQS, a); for (let i = 0; i < cd.enhDb.length; i++) if (cd.enhDb[i] > m) m = cd.enhDb[i]; } catch (e) {}
+    return m > 0 ? m : ENH_HEAD * a;
+  }
+  /* Level match, measured: the whole block (pre-gain, tone, saturation, exciter, bank with
+   * Chromium's per-band auto-makeup) rendered offline over 4 s of a music-like clip (kick,
+   * snare, hats, saw bass, pad, a vocal band, a 9 kHz codec roll-off) mastered the way most
+   * uploads are — +4 dB into a hard clip at −1 dBFS, ≈ −11.6 LUFS, 11 dB crest. The bank's
+   * gain depends on the programme (it works harder on a brickwalled master, less on a dynamic
+   * one); this middle sits within ±0.9 dB of both ends at full intensity. The K-weighted mean
+   * power out vs in is the block's gain, and compTrim cancels it. Cached per intensity (5 %
+   * steps) and sample rate; until the render lands (~100 ms, on the audio thread) the bench's
+   * table stands in, interpolated. Same shape as calibrateComp: returns the estimate now,
+   * calls applyFx() once when the exact figure arrives. */
+  const ENH_GAIN_TABLE = [[0, 0], [0.25, -0.12], [0.5, -0.22], [0.75, -0.36], [1, -0.56]];   // [a, block gain dB] — bench, 48 kHz
+  const _enhCalib = new Map(); let _enhCalibBusy = false, _enhCalibNext = null;
+  function enhGainTable(a) {
+    const T = ENH_GAIN_TABLE;
+    for (let i = 1; i < T.length; i++) if (a <= T[i][0]) { const t = (a - T[i - 1][0]) / (T[i][0] - T[i - 1][0]); return T[i - 1][1] + (T[i][1] - T[i - 1][1]) * t; }
+    return T[T.length - 1][1];
+  }
+  function enhClip(ctx, sr) {   // 4 s, mono, deterministic (LCG), mastered to −1 dBFS
+    const n = Math.round(4 * sr), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    let seed = 1; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+    const beat = 60 / 96, notes = [55, 55, 65.4, 73.4, 55, 55, 49, 65.4];
+    for (let i = 0; i < n; i++) {
+      const t = i / sr, tb = t % beat, bar = Math.floor(t / beat);
+      const kick = Math.sin(2 * Math.PI * (48 + 90 * Math.exp(-tb * 18)) * tb) * Math.exp(-tb * 7) * 0.9;
+      const ts = (t + beat) % (2 * beat);
+      const snare = ts < 0.25 ? (rnd() * Math.exp(-ts * 22) * 0.55 + Math.sin(2 * Math.PI * 190 * ts) * Math.exp(-ts * 30) * 0.4) : 0;
+      const th = t % (beat / 2), hat = rnd() * Math.exp(-th * 90) * 0.18;
+      const f0 = notes[bar % notes.length], saw = 2 * ((t * f0) % 1) - 1, pf = f0 * 4;
+      const pad = (2 * ((t * pf * 1.003) % 1) - 1 + 2 * ((t * pf * 0.997) % 1) - 1) * 0.12;
+      const vEnv = Math.max(0, Math.sin(2 * Math.PI * t / 4)) * 0.35;
+      const voc = vEnv * (Math.sin(2 * Math.PI * 220 * t) + 0.6 * Math.sin(2 * Math.PI * 440 * t) + 0.5 * Math.sin(2 * Math.PI * 660 * t) + 0.35 * Math.sin(2 * Math.PI * 1100 * t) + 0.2 * Math.sin(2 * Math.PI * 2600 * t)) * 0.4;
+      d[i] = kick + snare + hat + pad + voc + saw * 0.45 + rnd() * 0.01;
+    }
+    let y = 0; const k = Math.exp(-2 * Math.PI * 9000 / sr);
+    for (let i = 0; i < n; i++) { y = k * y + (1 - k) * d[i]; d[i] = y; }
+    let pk = 0; for (let i = 0; i < n; i++) { const v = Math.abs(d[i]); if (v > pk) pk = v; }
+    const g = pk > 0 ? Math.pow(10, 3 / 20) / pk : 1, c = Math.pow(10, -1 / 20);   // −1 dBFS peak, then +4 dB into the clip
+    for (let i = 0; i < n; i++) { const v = d[i] * g; d[i] = v > c ? c : v < -c ? -c : v; }
+    return buf;
+  }
+  function calibrateEnhance(a) {
+    const sr = (sceLastCtx && sceLastCtx.sampleRate) || 48000;
+    const key = Math.round(a * 20) + '|' + sr;   // the slider steps by 5 %
+    const hit = _enhCalib.get(key);
+    if (hit) return hit.db;
+    const ent = { db: enhGainTable(a), exact: false }; _enhCalib.set(key, ent);
+    _enhCalibNext = { key, a, sr, ent };
+    enhCalibRun();
+    return ent.db;
+  }
+  function enhCalibRun() {   // one render at a time; a newer request replaces a queued one
+    if (_enhCalibBusy || !_enhCalibNext) return;
+    const job = _enhCalibNext; _enhCalibNext = null;
+    try {
+      const OAC = W.OfflineAudioContext || W.webkitOfflineAudioContext;
+      if (!OAC) return;
+      const sr = job.sr, len = Math.round(4 * sr);
+      const oc = new OAC(2, len, sr);
+      const src = oc.createBufferSource(); src.buffer = enhClip(oc, sr);
+      const blk = buildEnhanceBlock(oc);
+      const bank = oc.createDynamicsCompressor(); try { bank.threshold.value = 0; bank.knee.value = 0; bank.ratio.value = 1; } catch (e) {}   // the dry leg gets the same fixed pre-delay
+      setEnhanceParams(blk, job.a, true, (p, v) => { try { p.value = v; } catch (e) {} }, (db) => Math.pow(10, db / 20));
+      try { blk.shaper.curve = satCurve(job.a); blk.shaper.oversample = '4x'; blk.exShape.oversample = '4x'; } catch (e) {}
+      const k = kCoeffs(sr), kDry = oc.createIIRFilter(k.b, k.a), kWet = oc.createIIRFilter(k.b, k.a), merge = oc.createChannelMerger(2);
+      src.connect(bank); bank.connect(kDry); kDry.connect(merge, 0, 0);
+      src.connect(blk.enhPre); blk.sum.connect(blk.mbG); blk.mbOut.connect(kWet); kWet.connect(merge, 0, 1);
+      merge.connect(oc.destination); src.start(0);
+      _enhCalibBusy = true;
+      oc.startRendering().then((out) => {
+        _enhCalibBusy = false;
+        try {
+          const x = out.getChannelData(0), y = out.getChannelData(1), from = Math.round(0.3 * sr);
+          let sx = 0, sy = 0; for (let i = from; i < x.length; i++) { sx += x[i] * x[i]; sy += y[i] * y[i]; }
+          if (sx > 0 && sy > 0) { const db = 10 * Math.log10(sy / sx); if (isFinite(db) && Math.abs(db) < 12) { job.ent.db = db; job.ent.exact = true; applyFx(); } }
+        } catch (e) {}
+        enhCalibRun();
+      }).catch(() => { _enhCalibBusy = false; enhCalibRun(); });
+    } catch (e) { _enhCalibBusy = false; }
+  }
   // the probe bank: a never-connected copy of every linear user stage. Its params are
   // written with .value (no ramp to lag behind), so getFrequencyResponse gives the true
   // composite curve for auto-headroom and the canvas. Unconnected nodes cost no render time.
@@ -10814,7 +11219,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const biq = (type, f, q, g) => { const b = ctx.createBiquadFilter(); b.type = type; try { b.frequency.value = f; if (q != null) b.Q.value = q; b.gain.value = g || 0; } catch (e) {} return b; };
     const bands = EQ_NODE_FREQS.map((f, i) => (i === 0 ? biq('lowshelf', f, null, 0) : i === EQ_NODE_FREQS.length - 1 ? biq('highshelf', f, null, 0) : biq('peaking', f, 1.4, 0)));
     const peq = []; for (let i = 0; i < 10; i++) peq.push(biq('peaking', 1000, 1, 0));
-    return { bands, peq, bass: biq('lowshelf', 100, null, 0), warm: biq('lowshelf', 90, null, 0), air: biq('highshelf', 8500, null, 0),
+    return { bands, peq, bass: biq('lowshelf', 100, null, 0),
+      sub: biq('lowshelf', 55, null, 0), warm: biq('lowshelf', 90, null, 0), mud: biq('peaking', 280, 1.4, 0), pres: biq('peaking', 3000, 1.0, 0), air: biq('highshelf', 8500, null, 0),
       tiltLo: biq('lowshelf', 700, null, 0), tiltHi: biq('highshelf', 700, null, 0), lcLo: biq('lowshelf', 100, null, 0), lcHi: biq('highshelf', 8000, null, 0) };
   }
   // before the first play there is no chain (SoundCloud builds its graph on play): a bank on a
@@ -10885,14 +11291,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const hShape = ctx.createWaveShaper();
     try { hShape.oversample = 'none'; const HN = 1025, hc = new Float32Array(HN); for (let i = 0; i < HN; i++) { const x = (i / (HN - 1)) * 2 - 1; hc[i] = x * Math.abs(x) * 0.8 + 0.2 * x; } hShape.curve = hc; } catch (e) {}
     hLP.connect(hShape); hShape.connect(hBP); hBP.connect(hGain); hGain.connect(bassSum);
-    const warm = biq('lowshelf', 90, null, 0), air = biq('highshelf', 8500, null, 0);
-    // 10. Enhance saturation: curve null + oversample 'none' = passthrough with 0 latency
-    const shaper = ctx.createWaveShaper(); try { shaper.oversample = 'none'; } catch (e) {}
-    // 11. Enhance punch / Night mode compressor (arbitrated) + a trim that replaces
-    //     Chromium's auto-makeup with peak-detector-aware makeup. Inert: thr 0, ratio 1.
+    // 9. Enhance (see buildEnhanceBlock): headroom → tone → saturation ‖ exciter → sum, then
+    //    its multiband bank in parallel with the wideband compressor below
+    const enh = buildEnhanceBlock(ctx);
+    // 11. Night mode / Enhance dynamics, arbitrated by two crossfade gains that always sum to 1:
+    //     cpG → the wideband compressor (Night; inert thr 0 / ratio 1 when nothing uses it),
+    //     mbG → Enhance's three-band bank. Both paths carry the compressor's fixed pre-delay,
+    //     so the crossfade is a plain mix (no comb filter) and the chain's latency never moves.
+    //     compTrim replaces Chromium's auto-makeup with programme-aware makeup (Night) or the
+    //     measured level match (Enhance).
     const comp = ctx.createDynamicsCompressor();
     try { comp.threshold.value = 0; comp.knee.value = 0; comp.ratio.value = 1; comp.attack.value = 0.003; comp.release.value = 0.25; } catch (e) {}
-    const compTrim = gain(1);
+    const cpG = gain(1), compTrim = gain(1);
+    enh.sum.connect(cpG); cpG.connect(comp); comp.connect(compTrim);
+    enh.sum.connect(enh.mbG); enh.mbOut.connect(compTrim);
     // 12. M/S block: width on the side bus, the vocal band on the mid bus. width = 1
     //     reconstructs L/R bit-exactly; the merger rebuilds a clean stereo pair.
     const wIn = stereo(1);
@@ -10946,25 +11358,38 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     rvWet.connect(analyser);
     const makeup = gain(1);
     const boost = gain(1);
-    // 18. clip guard (inert: thr 0, ratio 1) + trim · 18b. output tap = what reaches the speakers
+    // 18. clip guard: two aligned legs behind gA / gB (they always sum to 1). gA → `lim`, a
+    //     DynamicsCompressor (thr −3 / ratio 20, inert thr 0 / ratio 1) — the leg every context
+    //     has; gB → `tpl`, the true-peak limiter (attached by attachGuard once its module has
+    //     loaded) → tplAlign, an integer-sample delay padding its 5 ms look-ahead out to the
+    //     compressor's fixed floor(0.006·sr) pre-delay, so swapping legs is a plain crossfade
+    //     and the chain's latency never moves. limTrim cancels the compressor's auto-makeup
+    //     (1 on the true-peak leg). 18b. output tap = what reaches the speakers.
     const lim = ctx.createDynamicsCompressor();
     try { lim.threshold.value = 0; lim.knee.value = 0; lim.ratio.value = 1; lim.attack.value = 0.001; lim.release.value = 0.08; } catch (e) {}
+    const gA = gain(1), gB = gain(0), tplAlign = ctx.createDelay(0.05);
+    try { tplAlign.delayTime.value = Math.max(0, Math.floor(0.006 * sr) - Math.max(24, Math.round(0.005 * sr))) / sr; } catch (e) {}
     const limTrim = gain(1);
     const oSplit = ctx.createChannelSplitter(2), oL = tap(), oR = tap();
     limTrim.connect(oSplit); oSplit.connect(oL, 0); oSplit.connect(oR, 1);
     // 19. output (fade) — after the limiter so a fade never triggers gain reduction; reroute connects it to SC's destinations
     const output = gain(1);
     // the audio path
-    const path = [input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi].concat(bands, peq, [bass, bassSum, warm, air, shaper, comp, compTrim, wIn]);
+    const path = [input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi].concat(bands, peq, [bass, bassSum, enh.enhPre]);
     for (let i = 0; i < path.length - 1; i++) path[i].connect(path[i + 1]);
+    compTrim.connect(wIn);
     wMerge.connect(cfIn); cfMerge.connect(mxIn); mxMerge.connect(analyser);
-    analyser.connect(makeup); makeup.connect(boost); boost.connect(lim); lim.connect(limTrim); limTrim.connect(output);
+    analyser.connect(makeup); makeup.connect(boost);
+    boost.connect(gA); gA.connect(lim); lim.connect(limTrim);          // compressor leg
+    boost.connect(gB); tplAlign.connect(limTrim); limTrim.connect(output);   // true-peak leg: gB → tpl → tplAlign, once attached
     // probe bank — a second, never-connected copy of every linear user stage (see buildProbeBank)
     const probe = buildProbeBank(ctx);
     return {
-      input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, bassSum, hLP, hShape, hBP, hGain, harmOn: false, warm, air, shaper, comp, compTrim,
+      input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, bassSum, hLP, hShape, hBP, hGain, harmOn: false,
+      enhPre: enh.enhPre, sub: enh.sub, warm: enh.warm, mud: enh.mud, pres: enh.pres, air: enh.air, shaper: enh.shaper, exShape: enh.exShape, exGain: enh.exGain, enhSum: enh.sum,
+      mbG: enh.mbG, mbLo: enh.mbLo, mbMid: enh.mbMid, mbHi: enh.mbHi, cpG, comp, compTrim,
       widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR, mxMerge, conv, rvWet, rvOn: false,
-      analyser, kL, kR, pL, pR, oL, oR, makeup, boost, lim, limTrim, output, probe,
+      analyser, kL, kR, pL, pR, oL, oR, makeup, boost, gA, gB, lim, tpl: null, tplReady: false, tplAlign, limTrim, output, probe,
       rumbleOn: false,   // the rumble filter's current type (edge-triggered by applyFx)
       freq: new Uint8Array(analyser.frequencyBinCount), buf: new Float32Array(analyser.fftSize),
       bufKL: new Float32Array(kL.fftSize), bufKR: new Float32Array(kR.fftSize), bufPL: new Float32Array(pL.fftSize), bufPR: new Float32Array(pR.fftSize),
@@ -10972,11 +11397,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     };
   }
   // composite response of the user stages from the newest chain's probe bank, in dB at
-  // `fr` (default: the 160-point log grid): userDb = bands + bass + tilt + warm + air +
-  // contour (each only while active), peqDb = the AutoEQ bank while it is on
-  function compositeDb(fr) {
+  // `fr` (default: the 160-point log grid): userDb = bands + bass + tilt + contour (each only
+  // while active), enhDb = Enhance's tone (its own block takes the headroom for it, so the
+  // auto-headroom leaves it out; the canvas draws it), peqDb = the AutoEQ bank while it is on.
+  // `enhA` overrides the intensity (enhToneMaxDb asks for the tone at a given a).
+  function compositeDb(fr, enhA) {
     fr = fr || PROBE_FREQS;
-    const n = fr.length, userDb = new Float32Array(n), peqDb = new Float32Array(n);
+    const n = fr.length, userDb = new Float32Array(n), peqDb = new Float32Array(n), enhDb = new Float32Array(n);
     try {
       const on = (k) => !fxBypass && !!CFG[k];
       const cl = (v, lo, hi) => { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0; };
@@ -10985,8 +11412,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         || (!fxBypass && (cl(CFG.bassDb, 0, 9) > 0 || cl(CFG.tiltDb, -4, 4) !== 0))
         || (on('enhanceOn') && cl(CFG.enhanceAmt, 0, 100) > 0) || (on('loudCompOn') && cl(CFG.loudCompAmt, 0, 9) > 0)
         || (on('peqOn') && Array.isArray(CFG.peq) && CFG.peq.some((f) => { const c = clampPeq(f); return !!(c && c.g); }));
-      const e = [...sceFx].pop(); const p = (e && e.chain && e.chain.probe) || (shaping() ? fallbackProbe() : null);
-      if (!p) return { userDb, peqDb };
+      const e = [...sceFx].pop(); const p = (e && e.chain && e.chain.probe) || (shaping() || enhA > 0 ? fallbackProbe() : null);
+      if (!p) return { userDb, peqDb, enhDb };
       const mag = n === PROBE_N ? _probeMag : new Float32Array(n), ph = n === PROBE_N ? _probePh : new Float32Array(n);
       const add = (node, out) => { try { node.getFrequencyResponse(fr, mag, ph); for (let i = 0; i < n; i++) { const m = mag[i]; if (m > 0 && isFinite(m)) out[i] += 20 * Math.log10(m); } } catch (er) {} };
       const setG = (node, g) => { try { node.gain.value = g; } catch (er) {} };
@@ -10995,7 +11422,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       for (let i = 0; i < p.bands.length; i++) { const g = eqOn ? cl(bands[i], -12, 12) : 0; setG(p.bands[i], g); if (g) add(p.bands[i], userDb); }
       const bassG = fxBypass ? 0 : cl(CFG.bassDb, 0, 9); setG(p.bass, bassG); if (bassG) add(p.bass, userDb);
       const t = fxBypass ? 0 : cl(CFG.tiltDb, -4, 4); setG(p.tiltLo, -t); setG(p.tiltHi, t); if (t) { add(p.tiltLo, userDb); add(p.tiltHi, userDb); }
-      const a = on('enhanceOn') ? cl(CFG.enhanceAmt, 0, 100) / 100 : 0; setG(p.warm, a * 1.5); setG(p.air, a * 3); if (a) { add(p.warm, userDb); add(p.air, userDb); }
+      const a = enhA != null ? cl(enhA, 0, 1) : on('enhanceOn') ? cl(CFG.enhanceAmt, 0, 100) / 100 : 0;
+      setG(p.sub, ENH.sub * a); setG(p.warm, ENH.warm * a); setG(p.mud, ENH.mud * a); setG(p.pres, ENH.pres * a); setG(p.air, ENH.air * a);
+      if (a) for (const nd of [p.sub, p.warm, p.mud, p.pres, p.air]) add(nd, enhDb);
       const k = on('loudCompOn') ? contourK * cl(CFG.loudCompAmt, 0, 9) : 0; setG(p.lcLo, k); setG(p.lcHi, k / 3); if (k) { add(p.lcLo, userDb); add(p.lcHi, userDb); }
       if (on('peqOn') && Array.isArray(CFG.peq)) {
         for (let i = 0; i < p.peq.length; i++) {
@@ -11006,18 +11435,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
       }
     } catch (e) {}
-    return { userDb, peqDb };
+    return { userDb, peqDb, enhDb };
   }
-  // does anything upstream push the level up? Boost above 100 % engages the guard even
-  // with the switch off (the row text says so). During Compare only the kept stages
-  // (loudness gain, boost) count, so the original is not guarded when nothing kept needs it.
+  // does anything upstream push the level up? Boost above 100 % and Enhance engage the guard
+  // even with the switch off (the row text says so): Enhance's bank lets transients through
+  // above the input's peaks (that is the punch) and relies on the guard to hold them. During
+  // Compare only the kept stages (loudness gain, boost) count, so the original is not guarded
+  // when nothing kept needs it.
   function needsLimiter() {
     const on = (k) => !fxBypass && !!CFG[k];
     const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
     const eqBoosting = on('eqOn') && ((+CFG.eqPreamp || 0) > 0 || Math.max(0, ...bands.map((x) => +x || 0)) > 0);
     const boosting = eqBoosting || on('peqOn') || !!CFG.loudnessOn || on('enhanceOn') || on('nightOn') || on('loudCompOn')
       || (!fxBypass && ((CFG.stereoWidth | 0) > 100 || (+CFG.bassDb || 0) > 0 || (+CFG.bassHarm || 0) > 0 || (+CFG.reverbAmt || 0) > 0 || (+CFG.tiltDb || 0) !== 0 || (+CFG.vocalAmt || 0) > 0));
-    return (!!CFG.limiterOn && boosting) || (CFG.boostAmt | 0) > 100;
+    return (!!CFG.limiterOn && boosting) || (CFG.boostAmt | 0) > 100 || on('enhanceOn');
   }
   // Chromium's DynamicsCompressor applies an automatic makeup gain that depends on
   // threshold / knee / ratio: 0.6 × the static curve's gain at 0 dBFS. The hard-knee
@@ -11119,8 +11550,24 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // SC reuses one source node in practice; if it ever makes fresh ones per
       // track, keep the iterated set bounded (oldest entry = stalest/dead source)
       if (sceFx.size > 6) { try { sceFx.delete(sceFx.values().next().value); } catch (e) {} }
+      if (ctx.__sceTpLimiterOk === true) attachGuard(entry); else loadGuard(ctx);
       applyFx();
     } catch (e) { Log.err('installFx', e); }
+  }
+  // the true-peak leg: once the worklet module has loaded in a chain's context, create the node,
+  // wire gB → tpl → tplAlign, and — after its delay line has filled (120 ms; it starts empty) —
+  // let applyFx crossfade the legs. Until then the leg stays bypassed and silent (gB = 0).
+  function attachGuard(e) {
+    try {
+      const c = e.chain; if (!c || c.tpl) return;
+      const t = TP_LIMITER.create(e.ctx); if (!t) return;
+      try { t.parameters.get('ceiling').value = TP_CEIL; t.parameters.get('bypass').value = 1; } catch (er) {}
+      c.gB.connect(t); t.connect(c.tplAlign); c.tpl = t;
+      setTimeout(() => { try { c.tplReady = true; applyFx(); } catch (er) {} }, 120);
+    } catch (er) {}
+  }
+  function loadGuard(ctx) {
+    try { TP_LIMITER.load(ctx).then((ok) => { if (ok) sceFx.forEach((e) => { if (e.ctx === ctx) attachGuard(e); }); }).catch(() => {}); } catch (er) {}
   }
   /* applyFx — the one place CFG becomes node parameters. Reads and clamps CFG once,
    * takes the auto-headroom from the composite response, then writes every stage of
@@ -11179,14 +11626,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const thr = -24 - 12 * nightAmt, ratio = 2 + 2 * nightAmt;
         const mk = Math.min(22, Math.max(0, -8 - thr) * (1 - 1 / ratio));
         cp = { thr, knee: 24, ratio, att: 0.02, rel: 0.5, trim: db2g(mk - calibrateComp(thr, 24, ratio)) };
-      } else if (enhOn) {
-        const thr = -8 - 6 * enhAmt, ratio = 1.5 + 0.5 * enhAmt;
-        const mk = Math.max(0, -4 - thr) * (1 - 1 / ratio);
-        cp = { thr, knee: 12, ratio, att: 0.015, rel: 0.25, trim: db2g(mk - calibrateComp(thr, 12, ratio)) };
       }
-      // ── clip guard: −3 dB ceiling, 20:1, its auto-makeup trimmed back out ──
+      // ── Enhance (2.25 v2): tone + saturation + exciter at intensity enhA; its three-band bank
+      //    takes the dynamics unless Night holds the wideband compressor. The trim is the measured
+      //    level match (bank on) — with Night, its trim stands and only the block's pre-gain is
+      //    given back (the tone then reads as a small, honest lift) ──
+      const enhA = enhOn ? enhAmt : 0, bank = enhA > 0 && !nightOn;
+      const compTrimG = bank ? db2g(-calibrateEnhance(enhA)) : cp ? cp.trim * db2g(ENH_HEAD * enhA) : 1;
+      // ── clip guard: the true-peak leg (ceiling TP_CEIL, bypass exact when nothing boosts) where it
+      //    is attached and filled, else the compressor leg (−3 dB, 20:1, its auto-makeup trimmed back
+      //    out — calibrated only when a chain actually uses it) ──
       const L = needsLimiter();
-      const limTrimGain = L ? db2g(-calibrateComp(-3, 0, 20)) : 1;
+      let limTrimComp = null; const limTrimFor = () => (limTrimComp == null ? (limTrimComp = L ? db2g(-calibrateComp(-3, 0, 20)) : 1) : limTrimComp);
       // ── vocals: 1 = LP + HP + band = mid exactly; softer floors at 0.1, lift ≤ +4 dB ──
       if (!vocal) { monoSince = 0; monoLow = 0; meter.monoSrc = false; }   // the mono-upload verdict lives only while the knob is in use
       const vG = (vocal === 0 || meter.monoSrc) ? 1 : vocal < 0 ? Math.max(0.1, 1 - 0.9 * Math.abs(vocal)) : db2g(4 * vocal);
@@ -11223,18 +11674,21 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           c.harmOn = harm > 0;
           try { if (c.harmOn) c.bass.connect(c.hLP); else setTimeout(() => { try { if (!c.harmOn) { c.hGain.gain.cancelScheduledValues(0); c.hGain.gain.value = 0; c.bass.disconnect(c.hLP); } } catch (er) {} }, 250); } catch (er) {}
         }
-        w(c.warm.gain, enhOn ? enhAmt * 1.5 : 0); w(c.air.gain, enhOn ? enhAmt * 3 : 0);
+        setEnhanceParams(c, enhA, bank, w, db2g);
         try {
-          const curve = enhOn ? satCurve(enhAmt) : null;
+          const curve = enhA > 0 ? satCurve(enhA) : null;
           if (c.shaper.curve !== curve) c.shaper.curve = curve;
-          // the resampler (and its 128-sample latency) follows the REAL toggle only:
-          // Compare nulls the curve but leaves oversample, so the lyric clock stays put
-          const os = CFG.enhanceOn ? '2x' : 'none';
+          // the resamplers (and their 192-sample latency) follow the REAL toggle only: Compare
+          // nulls the curve but leaves oversample, so the lyric clock stays put. Both shapers
+          // switch together — the exciter leg must carry the same delay as the shaper it sums with.
+          const os = CFG.enhanceOn ? '4x' : 'none';
           if (c.shaper.oversample !== os) c.shaper.oversample = os;
+          if (c.exShape.oversample !== os) c.exShape.oversample = os;
         } catch (er) {}
+        w(c.cpG.gain, bank ? 0 : 1, 0.05);
         w(c.comp.threshold, cp ? cp.thr : 0, 0.05); w(c.comp.knee, cp ? cp.knee : 0, 0.05); w(c.comp.ratio, cp ? cp.ratio : 1, 0.05);
         if (cp) { w(c.comp.attack, cp.att, 0.05); w(c.comp.release, cp.rel, 0.05); }
-        w(c.compTrim.gain, cp ? cp.trim : 1, 0.05);
+        w(c.compTrim.gain, compTrimG, 0.05);
         w(c.widener.gain, width, 0.05);
         w(c.vGain.gain, vG, 0.05);
         w(c.cfFeedL.gain, cfF, 0.05); w(c.cfFeedR.gain, cfF, 0.05); w(c.cfNegL.gain, -cfF, 0.05); w(c.cfNegR.gain, -cfF, 0.05);
@@ -11249,9 +11703,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
         if (!keep('loudnessOn')) w(c.makeup.gain, 1, 0.05);   // Compare never touches the loudness gain
         w(c.boost.gain, boost, 0.05);
-        w(c.lim.threshold, L ? -3 : 0); w(c.lim.knee, 0); w(c.lim.ratio, L ? 20 : 1);
+        const tp = !!(c.tpl && c.tplReady);
+        w(c.gA.gain, tp ? 0 : 1, 0.05); w(c.gB.gain, tp ? 1 : 0, 0.05);
+        w(c.lim.threshold, !tp && L ? -3 : 0); w(c.lim.knee, 0); w(c.lim.ratio, !tp && L ? 20 : 1);
         try { c.lim.attack.value = 0.001; c.lim.release.value = 0.08; } catch (er) {}
-        w(c.limTrim.gain, limTrimGain);
+        w(c.limTrim.gain, tp ? 1 : limTrimFor());
+        if (c.tpl) {   // bypass is a hard flip inside the worklet: engage at once, release 100 ms later so a ramping boost can settle first
+          try {
+            const bp = c.tpl.parameters.get('bypass'); c.tpl.parameters.get('ceiling').value = TP_CEIL;
+            bp.cancelScheduledValues(0);
+            if (!tp || !L) { if (want && tp) bp.setValueAtTime(1, now + 0.1); else bp.value = 1; } else bp.setValueAtTime(0, want ? now : 0);
+          } catch (er) {}
+        }
         if (!keep('fadeOn') && !sleepFadeOn) { try { c.output.gain.cancelScheduledValues(now); c.output.gain.setValueAtTime(1, now); c.output.gain.value = 1; } catch (er) {} }
       });
       if (!keep('fadeOn')) fadeCtl.reset();
@@ -11314,7 +11777,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       meter.outDb = ms > 1e-12 ? 10 * Math.log10(ms) : -120;
       const sl = rd(c.pL, c.bufPL), sr = rd(c.pR, c.bufPR), spk = Math.max(sl.pk, sr.pk);
       meter.srcPeak = spk > 1e-6 ? 20 * Math.log10(spk) : -120;
-      try { meter.gr = c.comp.reduction; meter.limGr = c.lim.reduction; } catch (er) {}
+      try { meter.gr = c.comp.reduction; meter.limGr = (c.tpl && c.tplReady) ? -(+c.tpl.gainReduction || 0) : c.lim.reduction; } catch (er) {}
       // stereo correlation (WP10): Pearson r of the source taps (NaN on silence — no verdict). A mono upload (r > 0.98
       // for 3 s) has no side signal, so softening the vocal band would only dip the whole mix: while the Vocals knob is
       // in use the guard forces vGain to 1 and the row reads "Mono upload", until a stereo track (r ≤ 0.98) arrives.
@@ -11572,7 +12035,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (AC && !AC.prototype.__sceHooked) {
         AC.prototype.__sceHooked = true;
         const oMES = AC.prototype.createMediaElementSource;
-        if (oMES) AC.prototype.createMediaElementSource = function (el) { try { captureMedia(el); } catch (e) {} try { sceLastCtx = this; } catch (e) {} const node = oMES.apply(this, arguments); try { installFx(this, node); } catch (e) {} return node; };
+        if (oMES) AC.prototype.createMediaElementSource = function (el) { try { captureMedia(el); } catch (e) {} try { sceLastCtx = this; loadGuard(this); } catch (e) {} const node = oMES.apply(this, arguments); try { installFx(this, node); } catch (e) {} return node; };
         const oBS = AC.prototype.createBufferSource;
         if (oBS) AC.prototype.createBufferSource = function () {
           const node = oBS.apply(this, arguments);
@@ -12631,7 +13094,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       boostR = sliderRow('Volume boost', 100, 300, 5, () => cl(CFG.boostAmt | 0, 100, 300), (x) => { CFG.boostAmt = x | 0; saveSoon(); applyFx(); paintBoost(); }, (x) => (x | 0) + '%', 100);
       paintBoost(); bodyEl.appendChild(boostR.row);
       // clip guard (2.1): the description gains a live gain-reduction suffix while it works
-      const GUARD_DESC = 'Stops boosts from distorting · on automatically when boosting';
+      const GUARD_DESC = 'Stops boosts from distorting · on automatically when boosting or enhancing';
       const guard = toggleRow('Clip guard', GUARD_DESC, 'limiterOn');
 
       // ── stereo ──
@@ -12764,7 +13227,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       canvas.addEventListener('dblclick', (ev) => { const p = evToC(ev); setBand(nearest(p.x), 0); rememberEq(); });
       // the composite is read from the probe bank only when applyFx changed something (eqCurveVer)
       let drawnVer = -1, curve = null, peqCurve = null, peqAny = false, drawnHover = -2, drawnDrag = -2;
-      const refreshCurve = () => { const cd = compositeDb(); curve = cd.userDb; peqCurve = cd.peqDb; peqAny = false; for (let i = 0; i < peqCurve.length; i++) if (Math.abs(peqCurve[i]) > 0.05) { peqAny = true; break; } };
+      const refreshCurve = () => { const cd = compositeDb(); curve = cd.userDb; for (let i = 0; i < curve.length; i++) curve[i] += cd.enhDb[i]; peqCurve = cd.peqDb; peqAny = false; for (let i = 0; i < peqCurve.length; i++) if (Math.abs(peqCurve[i]) > 0.05) { peqAny = true; break; } };
       const plot = (arr) => { cx.beginPath(); for (let i = 0; i < PROBE_N; i++) { const x = freqX(PROBE_FREQS[i]), y = gainToY(arr[i]); if (i) cx.lineTo(x, y); else cx.moveTo(x, y); } };
       // spectrum bars: 64 over the same axis, each the max of the FFT bins it spans (recomputed per sample rate)
       const BARS = 64, barLo = new Int32Array(BARS), barHi = new Int32Array(BARS); let barsSr = 0;
@@ -12908,7 +13371,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   } catch (e) {}
   // composite user response at one frequency (dB), from the probe bank (2.26)
   function eqCurveDbAt(f) {
-    try { return compositeDb(new Float32Array([+f || 1000])).userDb[0] || 0; } catch (e) { return 0; }
+    try { const r = compositeDb(new Float32Array([+f || 1000])); return (r.userDb[0] + r.enhDb[0]) || 0; } catch (e) { return 0; }
   }
   // the saturation curve's value at x ∈ [−1, 1] for the current Enhance intensity,
   // interpolated between table points exactly as the WaveShaper does
@@ -12951,7 +13414,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const snapshot = () => {
         const e = [...sceFx].pop(); if (!e || !e.chain) return null;
         const out = snapAny(e.chain, 0) || {};
-        try { out.shaperOversample = e.chain.shaper.oversample; } catch (er) {}
+        try { out.shaperOversample = e.chain.shaper.oversample; out.exOversample = e.chain.exShape.oversample; } catch (er) {}
         return out;
       };
       SUITE.audioDebug = () => {
@@ -12964,9 +13427,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           dests: e ? [...e.dests].map((kv) => [kv[0], kv[1][0], kv[1][1]]) : [],
           headroomDb: lastHeadroomDb, curveVer: eqCurveVer, needsLimiter: needsLimiter(),
           branches: e ? { harm: !!e.chain.harmOn, reverb: !!e.chain.rvOn } : null, nodes: () => (e ? e.chain : null),
+          guard: (() => { try { const c = e && e.chain; if (!c) return null; const tp = !!(c.tpl && c.tplReady); let bypass = null; try { if (c.tpl) bypass = c.tpl.parameters.get('bypass').value; } catch (er) {}
+            return { mode: tp ? 'tp' : 'comp', on: needsLimiter(), ceiling: tp ? TP_CEIL : c.lim.threshold.value, bypass, attached: !!c.tpl, gr: meter.limGr, alignSamples: Math.round(c.tplAlign.delayTime.value * e.ctx.sampleRate), latencySamples: c.tpl ? c.tpl.latencySamples : null, loadErr: TP_LIMITER.lastError ? String(TP_LIMITER.lastError) : null }; } catch (er) { return null; } })(),
           ir: (() => { try { const b = e && e.chain.conv.buffer; if (!b) return null; const a0 = b.getChannelData(0), a1 = b.getChannelData(1); let s01 = 0, s00 = 0, s11 = 0; for (let i = 0; i < a0.length; i++) { s01 += a0[i] * a1[i]; s00 += a0[i] * a0[i]; s11 += a1[i] * a1[i]; } return { sec: b.duration, ch: b.numberOfChannels, corr: s01 / Math.sqrt(s00 * s11) }; } catch (er) { return null; } })(),
           meterTick: () => { peakTick(true); return Object.assign({}, meter); },
-          composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb) }; },
+          composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb), enhDb: Array.from(r.enhDb) }; },
+          enhCalib: () => { const o = {}; _enhCalib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; }, enhToneMaxDb,
           calib: () => { const o = {}; _calib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
           set: (k, v) => { CFG[k] = v; save(); applyFx(); }, get: (k) => CFG[k], cfg: () => Object.assign({}, CFG),
           bypass: (v) => setBypass(v), setBand, curveAt: (f) => eqCurveDbAt(f), curveSample: (x) => satCurveAt(x),
@@ -13670,11 +14136,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function applyRecommended() {
     try {
       if (DARK_THEMES && DARK_THEMES.dark) { CFG.theme = 'dark'; CFG.autoDark = false; }
-      CFG.eqOn = true;
-      CFG.eqBands = [3, 2, 1, 0, 0, 0, 1, 2, 3, 3];   // gentle bass + presence + air "smile" (auto-headroom takes the +3 off the pre-amp)
+      // Enhance is the sound: its own sub / warmth / presence / air shape replaces the old "smile"
+      // EQ (the two together doubled the highs), leveling keeps tracks even, a touch of width
+      CFG.eqOn = false; CFG.eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
       CFG.loudnessOn = true;
-      CFG.enhanceOn = true; CFG.enhanceAmt = 55;
-      CFG.stereoWidth = 122;
+      CFG.enhanceOn = true; CFG.enhanceAmt = 60;
+      CFG.stereoWidth = 112;
       CFG.hideUpsell = true;
       save();
       try { applyAll(); } catch (e) {}
@@ -13692,7 +14159,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     card.addEventListener('click', (e) => e.stopPropagation());
     card.innerHTML = '<div style="width:54px;height:54px;margin:0 auto 14px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:27px;background:linear-gradient(135deg,#ff8a3d,#f50);box-shadow:0 12px 30px -8px rgba(255,90,0,.7)">✨</div>'
       + '<div style="font-size:19px;font-weight:800;letter-spacing:-.4px">Welcome to SuperSuite</div>'
-      + '<div style="font-size:12.5px;color:#a8a8b0;margin:8px auto 20px;max-width:330px;line-height:1.5">Want me to set up the recommended look &amp; sound — a clean dark theme, the audio enhancer, loudness leveling and a tuned EQ? Or set it all up yourself.</div>';
+      + '<div style="font-size:12.5px;color:#a8a8b0;margin:8px auto 20px;max-width:330px;line-height:1.5">Want me to set up the recommended look &amp; sound — a clean dark theme, the audio enhancer, loudness leveling and a touch of stereo width? Or set it all up yourself.</div>';
     const rec = D.createElement('button'); rec.type = 'button'; rec.textContent = '✨  Use recommended';
     rec.style.cssText = 'display:block;width:100%;border:0;border-radius:13px;padding:13px;font:800 13px inherit;cursor:pointer;background:linear-gradient(135deg,#f50,#ff8a3d);color:#fff;box-shadow:0 10px 26px -8px rgba(255,90,0,.6);transition:filter .14s';
     rec.addEventListener('mouseenter', () => { rec.style.filter = 'brightness(1.08)'; });

@@ -69,6 +69,13 @@ const FIXTURE_SRC = `
     // E: 997 Hz bed at −26 dBFS with 10 ms bursts at −3 dBFS every 400 ms, 12 s (≈ −18.2 LUFS, peak 0.708):
     //    the normalizer's source-peak clamp binds before the Loud target does
     E: () => wav((t) => sine(t) * Math.pow(10, ((t % 0.4) < 0.01 ? -3 : -26) / 20), 12),
+    // M: a music-like stereo clip (kick, snare, hats, saw bass, pad, a vocal band, 9 kHz roll-off) mastered like an
+    //    upload — +4 dB into a hard clip at −1 dBFS (≈ −11.6 LUFS, 11 dB crest), 12 s: the Enhance level-match programme
+    M: () => { const n = Math.round(SR * 12), L = new Float32Array(n), R = new Float32Array(n); let seed = 1; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; }; const beat = 60 / 96, notes = [55, 55, 65.4, 73.4, 55, 55, 49, 65.4];
+      for (let i = 0; i < n; i++) { const t = i / SR, tb = t % beat, bar = Math.floor(t / beat); const kick = Math.sin(2 * Math.PI * (48 + 90 * Math.exp(-tb * 18)) * tb) * Math.exp(-tb * 7) * 0.9; const ts = (t + beat) % (2 * beat); const snare = ts < 0.25 ? (rnd() * Math.exp(-ts * 22) * 0.55 + Math.sin(2 * Math.PI * 190 * ts) * Math.exp(-ts * 30) * 0.4) : 0; const th = t % (beat / 2), hat = rnd() * Math.exp(-th * 90) * 0.18; const f0 = notes[bar % notes.length], saw = 2 * ((t * f0) % 1) - 1, pf = f0 * 4; const pad = (2 * ((t * pf * 1.003) % 1) - 1 + 2 * ((t * pf * 0.997) % 1) - 1) * 0.12; const vEnv = Math.max(0, Math.sin(2 * Math.PI * t / 4)) * 0.35; const voc = vEnv * (Math.sin(2 * Math.PI * 220 * t) + 0.6 * Math.sin(2 * Math.PI * 440 * t) + 0.5 * Math.sin(2 * Math.PI * 660 * t) + 0.35 * Math.sin(2 * Math.PI * 1100 * t) + 0.2 * Math.sin(2 * Math.PI * 2600 * t)) * 0.4; const m = kick + snare + hat + pad + voc, bass = saw * 0.5; L[i] = m + bass * 0.9 + rnd() * 0.01; R[i] = m * 0.96 + bass * 0.9 - rnd() * 0.01 + pad * 0.3; }
+      const k = Math.exp(-2 * Math.PI * 9000 / SR); for (const d of [L, R]) { let y = 0; for (let i = 0; i < n; i++) { y = k * y + (1 - k) * d[i]; d[i] = y; } }
+      let pk = 0; for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(L[i]), Math.abs(R[i])); const g = Math.pow(10, 3 / 20) / pk, c = Math.pow(10, -1 / 20), clip = (v) => (v > c ? c : v < -c ? -c : v);
+      return wav((t, i) => clip(L[i] * g), 12, (t, i) => clip(R[i] * g)); },
     // F: a real stereo pair — 997 Hz left, 1237 Hz right, both −20 dBFS, 10 s (correlation ≈ 0)
     F: () => wav((t) => sine(t) * 0.1, 10, (t) => Math.sin(2 * Math.PI * 1237 * t) * 0.1),
     // L: a 9-minute track (8 kHz mono 8-bit, 440 Hz at −20 dBFS) — long enough that the sleep timer fades instead of
@@ -173,7 +180,11 @@ const FIXTURE_SRC = `
   // every audible param is ramped (≤ 50 ms), so a read right after a write would see the ramp in flight
   const set = async (k, v) => { const r = await dbg(`d.set(${JSON.stringify(k)}, ${JSON.stringify(v)}); return d.get(${JSON.stringify(k)});`); await sleep(90); return r; };
   const get = (k) => dbg(`return d.get(${JSON.stringify(k)});`);
-  const snap = () => dbg(`return { routed: d.routed, bypassed: d.bypassed, chains: d.chains, latencyMs: d.latencyMs, outLatMs: d.outLatMs, tabOn: d.tabOn, sampleRate: d.sampleRate, params: d.params, shaperHasCurve: d.shaperHasCurve, loudTimer: d.loudTimer, meter: d.meter, latency: d.latency(), rate: d.rate() };`);
+  // the clip guard has two legs: 'tp' (the true-peak worklet, ceiling −1 dBTP, bypass exact) or 'comp' (thr −3 / ratio 20)
+  const guardOn = (s) => (s.guard ? s.guard.on : s.params.lim.ratio === 20);
+  const guardCeil = (s) => (s.guard && s.guard.mode === 'tp' ? -1 : -3);
+  const guardTrim = (s) => (s.guard && s.guard.mode === 'tp' ? 1 : 0.821);
+  const snap = () => dbg(`return { routed: d.routed, bypassed: d.bypassed, chains: d.chains, latencyMs: d.latencyMs, outLatMs: d.outLatMs, tabOn: d.tabOn, sampleRate: d.sampleRate, params: d.params, guard: d.guard, shaperHasCurve: d.shaperHasCurve, loudTimer: d.loudTimer, meter: d.meter, latency: d.latency(), rate: d.rate() };`);
   const fixtures = () => page.evaluate(FIXTURE_SRC);
   const play = async (kind, opts) => { await fixtures(); const r = await page.evaluate(([k, o]) => window.__afx.play(k, o), [kind, opts || {}]); await sleep(400); return r; };
   const stopPlay = () => page.evaluate(() => window.__afx && window.__afx.stop());
@@ -305,9 +316,13 @@ const FIXTURE_SRC = `
       eq(p.bands[0].type, 'lowshelf', label + ' band 0 type'); eq(p.bands[9].type, 'highshelf', label + ' band 9 type');
       eq(p.peq.length, 10, label + ' ten peq filters');
       for (let i = 0; i < p.peq.length; i++) { eq(p.peq[i].gain, 0, label + ' peq ' + i); eq(p.peq[i].type, 'peaking', label + ' peq type ' + i); }
-      eq(p.bass.gain, 0, label + ' bass'); eq(p.warm.gain, 0, label + ' warm'); eq(p.air.gain, 0, label + ' air');
-      eq(p.air.frequency, 8500, label + ' air corner');
+      eq(p.bass.gain, 0, label + ' bass');
+      eq(p.enhPre.gain, 1, label + ' enhPre'); eq(p.sub.gain, 0, label + ' sub'); eq(p.warm.gain, 0, label + ' warm'); eq(p.mud.gain, 0, label + ' mud'); eq(p.pres.gain, 0, label + ' pres'); eq(p.air.gain, 0, label + ' air');
+      eq(p.sub.frequency, 55, label + ' sub corner'); eq(p.mud.frequency, 280, label + ' mud centre'); eq(p.pres.frequency, 3000, label + ' presence centre'); eq(p.air.frequency, 8500, label + ' air corner');
       eq(p.shaper.hasCurve, false, label + ' shaper curve null'); eq(p.shaperOversample, 'none', label + ' shaper oversample');
+      eq(p.exShape.hasCurve, true, label + ' exciter curve fixed'); eq(p.exOversample, 'none', label + ' exciter oversample'); eq(p.exGain.gain, 0, label + ' exGain');
+      eq(p.cpG.gain, 1, label + ' cpG'); eq(p.mbG.gain, 0, label + ' mbG');
+      for (const k of ['mbLo', 'mbMid', 'mbHi']) { eq(p[k].ratio, 1, label + ' ' + k + '.ratio'); eq(p[k].threshold, 0, label + ' ' + k + '.threshold'); }
       eq(p.comp.ratio, 1, label + ' comp.ratio'); eq(p.comp.threshold, 0, label + ' comp.threshold'); eq(p.compTrim.gain, 1, label + ' compTrim');
       eq(p.widener.gain, 1, label + ' widener'); eq(p.vGain.gain, 1, label + ' vGain');
       eq(p.cfFeedL.gain, 0, label + ' cfFeedL'); eq(p.cfFeedR.gain, 0, label + ' cfFeedR'); eq(p.cfNegL.gain, 0, label + ' cfNegL'); eq(p.cfNegR.gain, 0, label + ' cfNegR');
@@ -315,6 +330,7 @@ const FIXTURE_SRC = `
       eq(p.gLL.gain, 1, label + ' gLL'); eq(p.gLR.gain, 0, label + ' gLR'); eq(p.gRL.gain, 0, label + ' gRL'); eq(p.gRR.gain, 1, label + ' gRR');
       eq(p.makeup.gain, 1, label + ' makeup'); eq(p.boost.gain, 1, label + ' boost');
       eq(p.lim.ratio, 1, label + ' lim.ratio'); eq(p.lim.threshold, 0, label + ' lim.threshold'); eq(p.limTrim.gain, 1, label + ' limTrim');
+      approx(p.gA.gain + p.gB.gain, 1, 1e-6, label + ' guard legs sum to 1');
       eq(p.output.gain, 1, label + ' output');
       eq(p.kL.fftSize, 32768, label + ' K tap size'); eq(p.pL.fftSize, 32768, label + ' peak tap size'); eq(p.oL.fftSize, 32768, label + ' output tap size');
       eq(p.analyser.fftSize, 2048, label + ' spectrum analyser');
@@ -390,19 +406,19 @@ const FIXTURE_SRC = `
     // volume boost + clip guard (2.1 / 2.2): boost above 100 % engages the guard even with the switch off
     await set('boostAmt', 200); s = await snap();
     approx(s.params.boost.gain, 2, 0.001, 'boost 200 % → gain 2');
-    eq(s.params.lim.ratio, 20, 'guard ratio'); approx(s.params.lim.threshold, -3, 0.001, 'guard threshold');
-    approx(s.params.limTrim.gain, 0.821, 0.03, 'guard trim ≈ 0.821 (analytic or calibrated)');
+    eq(guardOn(s), true, 'guard ratio'); eq(s.guard.ceiling, guardCeil(s), 'guard ceiling');
+    approx(s.params.limTrim.gain, guardTrim(s), 0.03, 'guard trim (1 on the true-peak leg, ≈ 0.821 on the compressor leg)');
     eq(s.routed, true, 'routed while boosting');
     await set('limiterOn', false); s = await snap();
-    eq(s.params.lim.ratio, 20, 'boost > 100 keeps the guard on with the switch off');
+    eq(guardOn(s), true, 'boost > 100 keeps the guard on with the switch off');
     await set('boostAmt', 100); s = await snap();
-    eq(s.params.lim.ratio, 1, 'guard off'); eq(s.params.lim.threshold, 0, 'guard threshold 0'); eq(s.params.limTrim.gain, 1, 'guard trim 1');
+    eq(guardOn(s), false, 'guard off'); eq(s.params.lim.threshold, 0, 'guard threshold 0'); eq(s.params.limTrim.gain, 1, 'guard trim 1');
     eq(s.params.boost.gain, 1, 'boost 1'); eq(s.routed, false, 'detached again');
     await set('limiterOn', true);
     // bass shelf + automatic rumble filter (2.10)
     await set('bassDb', 4); s = await snap();
     approx(s.params.bass.gain, 4, 0.001, 'bass +4'); eq(s.params.rumble.type, 'highpass', 'rumble engaged'); eq(s.params.rumble.frequency, 25, 'rumble 25 Hz'); approx(s.params.rumble.Q, -3.01, 0.001, 'rumble Butterworth');
-    eq(s.params.lim.ratio, 20, 'bass boost engages the guard'); eq(s.routed, true, 'routed');
+    eq(guardOn(s), true, 'bass boost engages the guard'); eq(s.routed, true, 'routed');
     await set('bassDb', 0); s = await snap();
     eq(s.params.bass.gain, 0, 'bass 0'); eq(s.params.rumble.type, 'peaking', 'rumble back to identity'); eq(s.params.rumble.gain, 0, 'rumble gain 0'); eq(s.routed, false, 'detached');
     // tilt (2.11), clamped to ±4
@@ -431,31 +447,48 @@ const FIXTURE_SRC = `
     await set('balance', 0); await set('monoOn', true); s = await snap();
     for (const k of ['gLL', 'gLR', 'gRL', 'gRR']) approx(s.params[k].gain, 0.5, 0.001, 'mono ' + k);
     await set('monoOn', false); s = await snap(); eq(s.params.gLL.gain, 1, 'identity LL'); eq(s.params.gLR.gain, 0, 'identity LR'); eq(s.routed, false, 'detached');
-    // Enhance level-matched (2.25): shelves, unity-gain cubic, gentle compressor, oversample only from the real toggle
+    // Enhance v2 (2.25): its own headroom, five tone stages, the unity-gain cubic + exciter at 4×, the three-band
+    // bank in place of the wideband compressor (cpG 0 / mbG 1), the measured level match on compTrim
     await set('enhanceOn', true); await set('enhanceAmt', 100); s = await snap();
-    eq(s.params.air.frequency, 8500, 'air 8.5 kHz'); approx(s.params.air.gain, 3, 0.001, 'air +3'); approx(s.params.warm.gain, 1.5, 0.001, 'warm +1.5');
-    approx(s.params.comp.threshold, -14, 0.001, 'comp thr −14'); approx(s.params.comp.ratio, 2, 0.001, 'comp ratio 2'); approx(s.params.comp.knee, 12, 0.001, 'comp knee 12');
-    approx(s.params.comp.attack, 0.015, 0.001, 'comp attack'); approx(s.params.comp.release, 0.25, 0.001, 'comp release');
-    eq(s.shaperHasCurve, true, 'shaper has a curve'); eq(s.params.shaperOversample, '2x', 'oversample 2x'); eq(s.latencyMs, 12 + Math.round(128000 / s.sampleRate), 'latency + shaper');
+    approx(s.params.enhPre.gain, Math.pow(10, -3.5 / 20), 0.001, 'pre-gain −3.5 dB (sub + warm stacked)');
+    approx(s.params.sub.gain, 2, 0.001, 'sub +2'); approx(s.params.warm.gain, 1.5, 0.001, 'warm +1.5'); approx(s.params.mud.gain, -1.5, 0.001, 'mud −1.5'); approx(s.params.pres.gain, 2, 0.001, 'presence +2');
+    eq(s.params.air.frequency, 8500, 'air 8.5 kHz'); approx(s.params.air.gain, 3, 0.001, 'air +3');
+    const tm = await dbg(`return d.enhToneMaxDb(1);`); assert(tm > 3.3 && tm <= 3.5, 'the tone never boosts past the pre-gain (max ' + tm + ' dB)');
+    approx(s.params.exGain.gain, 0.22, 0.001, 'exciter mix 0.22'); eq(s.params.exOversample, '4x', 'exciter 4×');
+    eq(s.params.comp.ratio, 1, 'wideband comp inert'); eq(s.params.comp.threshold, 0, 'comp thr 0'); eq(s.params.cpG.gain, 0, 'cpG 0'); eq(s.params.mbG.gain, 1, 'mbG 1');
+    approx(s.params.mbLo.threshold, -23.5, 0.001, 'lo thr −23.5'); approx(s.params.mbLo.ratio, 1.6, 0.001, 'lo ratio 1.6'); approx(s.params.mbLo.attack, 0.03, 0.001, 'lo attack'); approx(s.params.mbLo.release, 0.2, 0.001, 'lo release');
+    approx(s.params.mbMid.threshold, -21.5, 0.001, 'mid thr −21.5'); approx(s.params.mbMid.ratio, 1.5, 0.001, 'mid ratio 1.5'); approx(s.params.mbMid.attack, 0.012, 0.001, 'mid attack'); approx(s.params.mbMid.release, 0.15, 0.001, 'mid release');
+    approx(s.params.mbHi.threshold, -27.5, 0.001, 'hi thr −27.5'); approx(s.params.mbHi.ratio, 1.7, 0.001, 'hi ratio 1.7'); approx(s.params.mbHi.attack, 0.005, 0.001, 'hi attack'); approx(s.params.mbHi.release, 0.1, 0.001, 'hi release');
+    for (const k of ['mbLo', 'mbMid', 'mbHi']) approx(s.params[k].knee, 12, 0.001, k + ' knee 12');
+    eq(s.shaperHasCurve, true, 'shaper has a curve'); eq(s.params.shaperOversample, '4x', 'oversample 4x'); eq(s.latencyMs, 12 + Math.round(192000 / s.sampleRate), 'latency + shapers');
     approx(await dbg(`return d.curveSample(0.01);`), 0.01, 1e-4, 'unity small-signal gain'); approx(await dbg(`return d.curveSample(1);`), 0.88, 0.01, 'curve ≤ 0.88 at full scale');
+    // the level match: the bench's table stands in until the offline render lands, then the exact figure takes over
+    const enhKey = '20|' + s.sampleRate, tableDb = -0.56;   // the bench's figure at 100 % — the stand-in until the render lands
+    let ec = (await dbg(`return d.enhCalib();`))[enhKey]; assert(ec, enhKey + ' not in the Enhance calibration map');
+    for (let i = 0; i < 30 && !ec.exact; i++) { await sleep(100); ec = (await dbg(`return d.enhCalib();`))[enhKey]; }
+    assert(ec.exact, 'the offline level calibration landed'); assert(Math.abs(ec.db - tableDb) < 0.5, 'the measured block gain agrees with the bench table (' + ec.db.toFixed(2) + ' vs ' + tableDb + ' dB)');
+    await sleep(120); s = await snap(); approx(s.params.compTrim.gain, Math.pow(10, -ec.db / 20), 0.005, 'compTrim = −(block gain ' + ec.db.toFixed(2) + ' dB)');
+    console.log('  Enhance calibration: ' + JSON.stringify(await dbg(`const c = d.enhCalib(); const o = {}; for (const k in c) o[k] = +c[k].db.toFixed(2) + (c[k].exact ? '' : ' (table)'); return o;`)));
     // trim = makeup − Chromium's auto-makeup. The suite's synchronous estimate replicates Chromium's static-curve
     // maths (chromium-makeup.js here does the same); the offline calibration must agree with it within 0.3 dB.
     const expTrim = async (makeupDb, key, chromiumDb) => { const cal = await dbg(`return d.calib();`); const c = cal[key]; assert(c, key + ' not in the calibration map'); assert(Math.abs(c.db - chromiumDb) < 0.3, key + ' auto-makeup ' + c.db.toFixed(2) + ' dB (exact=' + c.exact + ') disagrees with Chromium\'s static curve ' + chromiumDb); return Math.pow(10, (makeupDb - c.db) / 20); };
-    approx(s.params.compTrim.gain, await expTrim(5, '-14|12|2', 2.31), 0.01, 'compTrim = makeup 5 dB − auto-makeup 2.31 dB');
-    assert(s.params.compTrim.gain > 1, 'Enhance makeup exceeds Chromium\'s auto-makeup (got ' + s.params.compTrim.gain + ')');
-    eq(s.params.lim.ratio, 20, 'Enhance engages the guard');
+    eq(guardOn(s), true, 'Enhance engages the guard');
     await dbg(`d.bypass(true);`); await sleep(100); s = await snap();
-    eq(s.shaperHasCurve, false, 'Compare nulls the curve'); eq(s.params.shaperOversample, '2x', 'Compare leaves oversample alone'); eq(s.params.air.gain, 0, 'Compare nulls air'); eq(s.params.comp.ratio, 1, 'Compare nulls the comp');
+    eq(s.shaperHasCurve, false, 'Compare nulls the curve'); eq(s.params.shaperOversample, '4x', 'Compare leaves oversample alone'); eq(s.params.exOversample, '4x', 'exciter oversample too');
+    eq(s.params.air.gain, 0, 'Compare nulls air'); eq(s.params.sub.gain, 0, 'Compare nulls sub'); eq(s.params.enhPre.gain, 1, 'Compare nulls the pre-gain'); eq(s.params.exGain.gain, 0, 'Compare nulls the exciter');
+    eq(s.params.mbG.gain, 0, 'Compare parks the bank'); eq(s.params.cpG.gain, 1, 'cpG back to 1'); eq(s.params.mbLo.ratio, 1, 'bank inert'); eq(s.params.compTrim.gain, 1, 'compTrim 1');
     eq(s.params.rumble.type, 'highpass', 'Compare never flips the rumble filter');
     await dbg(`d.bypass(false);`); await sleep(100);
     // Night mode wins the compressor (2.7)
     await set('nightOn', true); await set('nightAmt', 50); await sleep(150); s = await snap();   // the calibration promise re-ramps the trim once it lands
     approx(s.params.comp.threshold, -30, 0.001, 'night thr −30'); approx(s.params.comp.ratio, 3, 0.001, 'night ratio 3'); approx(s.params.comp.knee, 24, 0.001, 'night knee 24');
     approx(s.params.comp.attack, 0.02, 0.001, 'night attack'); approx(s.params.comp.release, 0.5, 0.001, 'night release');
-    approx(s.params.compTrim.gain, await expTrim(14.7, '-30|24|3', 6.03), 0.02, 'night compTrim = makeup 14.7 dB − auto-makeup 6.03 dB');
+    // Enhance (still on at 100 %) keeps its tone under Night; its −3.5 dB pre-gain is given back on the trim
+    approx(s.params.compTrim.gain, (await expTrim(14.7, '-30|24|3', 6.03)) * Math.pow(10, 3.5 / 20), 0.03, 'night compTrim = makeup 14.7 dB − auto-makeup 6.03 dB + Enhance pre-gain 3.5 dB');
+    eq(s.params.cpG.gain, 1, 'Night takes the wideband leg'); eq(s.params.mbG.gain, 0, 'the bank idles under Night'); approx(s.params.air.gain, 3, 0.001, 'Enhance tone stays');
     console.log('  calibration: ' + JSON.stringify(await dbg(`const c = d.calib(); const o = {}; for (const k in c) o[k] = +c[k].db.toFixed(2) + (c[k].exact ? '' : ' (analytic)'); return o;`)));
     await set('nightOn', false); await set('enhanceOn', false); s = await snap();
-    eq(s.params.comp.ratio, 1, 'comp inert'); eq(s.params.comp.threshold, 0, 'comp thr 0'); eq(s.params.compTrim.gain, 1, 'compTrim 1'); eq(s.params.shaperOversample, 'none', 'oversample none'); eq(s.routed, false, 'detached');
+    eq(s.params.comp.ratio, 1, 'comp inert'); eq(s.params.comp.threshold, 0, 'comp thr 0'); eq(s.params.compTrim.gain, 1, 'compTrim 1'); eq(s.params.shaperOversample, 'none', 'oversample none'); eq(s.params.exOversample, 'none', 'exciter oversample none'); eq(s.routed, false, 'detached');
     // headphone-correction bank (2.8, DSP part) + auto-headroom folding peqPreamp in
     await set('peq', [{ t: 'PK', f: 105, g: 3.1, q: 0.7 }, { t: 'HSC', f: 10000, g: -2, q: 0.7 }]); await set('peqPreamp', -6); await set('peqOn', true); s = await snap();
     eq(s.params.peq[0].frequency, 105, 'peq 0 freq'); approx(s.params.peq[0].gain, 3.1, 0.001, 'peq 0 gain'); approx(s.params.peq[0].Q, 0.7, 0.001, 'peq 0 Q'); eq(s.params.peq[1].type, 'highshelf', 'peq 1 type');
@@ -485,14 +518,17 @@ const FIXTURE_SRC = `
     await set('loudCompOn', true); s = await snap(); eq(s.params.lcLo.gain, 0, 'contour shelves stay 0 at k = 0'); eq(s.params.rumble.type, 'highpass', 'contour engages the rumble filter'); eq(s.routed, true, 'contour routes');
     await set('loudCompOn', false);
     await set('eqOn', false); await set('eqAutoPre', true);
-    await set('loudnessOn', true); s = await snap(); eq(s.loudTimer, true, 'loudness timer runs while routed'); eq(s.params.lim.ratio, 20, 'loudness engages the guard');
+    await set('loudnessOn', true); s = await snap(); eq(s.loudTimer, true, 'loudness timer runs while routed'); eq(guardOn(s), true, 'loudness engages the guard');
     await set('loudnessOn', false); s = await snap(); eq(s.loudTimer, false, 'loudness timer stopped'); eq(s.params.makeup.gain, 1, 'makeup back to 1'); eq(s.routed, false, 'detached');
     // the calibration promise landed and refined the guard trim
     await set('boostAmt', 150); await sleep(400); s = await snap();
     const cal = await dbg(`return d.calib();`);
-    assert(cal['-3|0|20'] && cal['-3|0|20'].exact === true, 'guard makeup calibrated offline');
-    approx(s.params.limTrim.gain, Math.pow(10, -cal['-3|0|20'].db / 20), 0.002, 'limTrim uses the calibrated value');
-    approx(cal['-3|0|20'].db, 1.71, 0.5, 'calibrated auto-makeup near the analytic 1.71 dB (got ' + cal['-3|0|20'].db.toFixed(2) + ')');
+    if (s.guard.mode === 'tp') eq(s.params.limTrim.gain, 1, 'true-peak leg: no makeup to cancel');
+    else {
+      assert(cal['-3|0|20'] && cal['-3|0|20'].exact === true, 'guard makeup calibrated offline');
+      approx(s.params.limTrim.gain, Math.pow(10, -cal['-3|0|20'].db / 20), 0.002, 'limTrim uses the calibrated value');
+      approx(cal['-3|0|20'].db, 1.71, 0.5, 'calibrated auto-makeup near the analytic 1.71 dB (got ' + cal['-3|0|20'].db.toFixed(2) + ')');
+    }
     await set('boostAmt', 100);
     await stopPlay();
   });
@@ -528,22 +564,22 @@ const FIXTURE_SRC = `
   });
 
   scenario('latency-accounting', async () => {
-    // SUITE.audioLatency = device latency + chain latency: 12 ms when routed (two compressors, rate-independent),
-    // + round(128000/sr) while Enhance is on; 0 when detached. SUITE.audioRate follows the speed.
+    // SUITE.audioLatency = device latency + chain latency: 12 ms when routed (two compressor stages, rate-independent),
+    // + round(192000/sr) while Enhance is on (two 4× shapers in parallel legs); 0 when detached. SUITE.audioRate follows the speed.
     await play('A', { loop: true, sampleRate: 48000 });
     await audioTab();
     let s = await snap();
     eq(s.sampleRate, 48000, 'context at 48 kHz');
     eq(s.latency - s.outLatMs, 12, 'routed @48k');
     await set('enhanceOn', true); s = await snap();
-    eq(s.latency - s.outLatMs, 15, 'routed + Enhance @48k');
+    eq(s.latency - s.outLatMs, 16, 'routed + Enhance @48k');
     await set('enhanceOn', false);
     await play('A', { loop: true, sampleRate: 44100 });
     s = await snap();
     eq(s.sampleRate, 44100, 'context at 44.1 kHz');
     eq(s.latency - s.outLatMs, 12, 'routed @44.1k');
     await set('enhanceOn', true); s = await snap();
-    eq(s.latency - s.outLatMs, 15, 'routed + Enhance @44.1k');
+    eq(s.latency - s.outLatMs, 16, 'routed + Enhance @44.1k');
     await set('enhanceOn', false);
     await closeHub(); await sleep(300);
     s = await snap();
@@ -642,19 +678,23 @@ const FIXTURE_SRC = `
     await audioTab();
     await sleep(2600);   // the fixture opens with 2 s of silence
     let s = await snap();
-    eq(s.params.lim.ratio, 1, 'guard inert with nothing on'); eq(s.params.boost.gain, 1, 'boost 1');
+    eq(guardOn(s), false, 'guard inert with nothing on'); eq(s.params.boost.gain, 1, 'boost 1');
     let rs = await meterReads(12, 250);
     approx(Math.max(...rs.map((m) => m.peak)), 0, 0.2, 'post-limiter tap reads the 0 dBFS bursts with boost 100 % and nothing on');
     await set('boostAmt', 300); await sleep(800);   // the ramp + a full tap buffer
     s = await snap();
-    eq(s.params.lim.ratio, 20, 'boost 300 % engages the guard'); approx(s.params.lim.threshold, -3, 0.001, 'ceiling −3 dB'); approx(s.params.boost.gain, 3, 0.001, 'boost ×3');
-    approx(s.params.limTrim.gain, 0.821, 0.03, 'guard trim ≈ 0.821');
+    eq(guardOn(s), true, 'boost 300 % engages the guard');
+    eq(s.guard.mode, 'tp', 'the true-peak limiter leg is in the chain'); eq(s.guard.bypass, 0, 'and engaged (bypass 0)');
+    eq(s.guard.latencySamples, Math.round(0.005 * s.sampleRate), '5 ms look-ahead'); eq(s.guard.alignSamples, Math.floor(0.006 * s.sampleRate) - s.guard.latencySamples, 'padded to the compressor pre-delay');
+    approx(s.params.gA.gain, 0, 1e-6, 'compressor leg silent'); approx(s.params.gB.gain, 1, 1e-6, 'true-peak leg live');
+    console.log('  guard: ' + JSON.stringify(s.guard)); eq(s.guard.ceiling, guardCeil(s), 'ceiling (−1 dBTP true-peak leg / −3 dB compressor leg)'); approx(s.params.boost.gain, 3, 0.001, 'boost ×3');
+    approx(s.params.limTrim.gain, guardTrim(s), 0.03, 'guard trim');
     rs = await meterReads(12, 250);
     const worst = Math.max(...rs.map((m) => m.peak));
     assert(worst <= -1.0, 'boost 300 %: every post-limiter peak ≤ −1.0 dBFS over 3 s (worst ' + worst.toFixed(2) + ')');
     assert(rs.some((m) => m.limGr < -0.3), 'the guard reports gain reduction during the bursts');
     // the row: last in Loudness & dynamics; its description gains the live GR suffix while limiting (bursts are 100 ms, so poll)
-    const base = 'Stops boosts from distorting · on automatically when boosting';
+    const base = 'Stops boosts from distorting · on automatically when boosting or enhancing';
     let seenGr = null, seenSub = null;
     for (let i = 0; i < 30 && !(seenGr && seenSub); i++) { const d = await toggleDesc('Clip guard'); assert(d && d.indexOf(base) === 0, 'Clip guard description (got ' + d + ')'); if (/· −\d+\.\d dB$/.test(d)) seenGr = d; const sub = await subLine(); if (/guard −\d+\.\d dB/.test(sub)) seenSub = sub; await sleep(100); }
     assert(seenGr, 'live GR suffix on the Clip guard row while limiting');
@@ -671,7 +711,7 @@ const FIXTURE_SRC = `
     eq(await get('limiterOn'), false, 'clicking the switch turns the guard off');
     eq(await guardSw(`return b.getAttribute('aria-checked');`), 'false', 'switch reflects limiterOn');
     s = await snap();
-    eq(s.params.lim.ratio, 1, 'guard off'); eq(s.params.lim.threshold, 0, 'threshold 0'); eq(s.params.limTrim.gain, 1, 'trim 1');
+    eq(guardOn(s), false, 'guard off'); eq(s.params.lim.threshold, 0, 'threshold 0'); eq(s.params.limTrim.gain, 1, 'trim 1');
     // lim.reduction is a meter with its own ~325 ms release, so the suffix decays away within ~1.5 s of the guard disengaging
     let cleared = false;
     for (let i = 0; i < 30 && !cleared; i++) { await sleep(100); if ((await toggleDesc('Clip guard')) === base) cleared = true; }
@@ -688,7 +728,7 @@ const FIXTURE_SRC = `
     await set('boostAmt', 250);
     await audioTab(); await sleep(500);
     let s = await snap();
-    approx(s.params.boost.gain, 2.5, 0.001, 'boost 250 % → gain 2.5'); eq(s.routed, true, 'routed'); eq(s.params.lim.ratio, 20, 'guard engaged');
+    approx(s.params.boost.gain, 2.5, 0.001, 'boost 250 % → gain 2.5'); eq(s.routed, true, 'routed'); eq(guardOn(s), true, 'guard engaged');
     let sub = await subLine();
     assert(/boost 250 %/.test(sub), 'header sub-text contains the boost (got ' + sub + ')');
     const pk = /peak (−?\d+\.\d) dB/.exec(sub); assert(pk, 'header sub-text carries the post-limiter peak (got ' + sub + ')');
@@ -705,7 +745,7 @@ const FIXTURE_SRC = `
     await sliderDbl(300); await sleep(400);
     eq(await get('boostAmt'), 100, 'label double-click resets to 100');
     row = await sliderByMax(300); eq(row.val, '100%', 'value text at 100'); eq(row.color, 'rgb(134, 134, 142)', 'value text back to grey at 100 %');
-    s = await snap(); eq(s.params.boost.gain, 1, 'gain 1'); eq(s.params.lim.ratio, 1, 'guard disengaged');
+    s = await snap(); eq(s.params.boost.gain, 1, 'gain 1'); eq(guardOn(s), false, 'guard disengaged');
     eq(await subLine(), '10-band · drag the curve · double-click resets', 'hint back');
     // the row sits in Loudness & dynamics (section 4: Loudness normalize · Night mode · Strength · Volume boost · Clip guard)
     const seq = await abody(`return [...a.querySelectorAll('input[type=range], button[role=switch]')].map((el) => el.type === 'range' ? el.parentElement.firstChild.textContent : el.previousElementSibling.firstChild.textContent);`);
@@ -735,8 +775,8 @@ const FIXTURE_SRC = `
     await dbg(`d.bypass(true);`); await sleep(120);
     s = await snap();
     eq(s.params.bands[0].gain, 0, 'band 0 nulled'); eq(s.params.preamp.gain, 1, 'preamp 1');
-    approx(s.params.makeup.gain, mk, 0.03, 'loudness gain unchanged'); eq(s.params.shaperOversample, '2x', 'oversample stays 2x'); eq(s.shaperHasCurve, false, 'curve nulled');
-    eq(s.routed, true, 'routing untouched'); eq(s.params.lim.ratio, 20, 'guard stays for the kept loudness gain');
+    approx(s.params.makeup.gain, mk, 0.03, 'loudness gain unchanged'); eq(s.params.shaperOversample, '4x', 'oversample stays 4x'); eq(s.shaperHasCurve, false, 'curve nulled');
+    eq(s.routed, true, 'routing untouched'); eq(guardOn(s), true, 'guard stays for the kept loudness gain');
     eq(await subLine(), 'Comparing · original tone', 'held sub-line');
     let b = await cmpBtn(); assert(b, 'Compare button in the header'); eq(b.bg, TINT.bg, 'tinted while comparing'); eq(b.color, TINT.color, 'tinted text');
     eq(parseFloat(await bodyOpacity()), 0.45, 'body dimmed');
@@ -780,24 +820,26 @@ const FIXTURE_SRC = `
   });
 
   scenario('enhance-level-match', async () => {
-    // 2.25: the row copy, and the level match on fixture D (≈ −13 LUFS bursts, −3 dBFS peaks — a modern-master stand-in):
-    // post-limiter mean power with Enhance 100 % vs off differs by < 1.5 dB
+    // 2.25: the row copy, and the level match on fixture M (the mastered music-like clip the offline calibration
+    // renders too): post-limiter mean power over one full 12 s loop with Enhance 100 % vs off differs by < 1 dB
     await dbg(`d.gm('enh:vol', '1');`);   // the remembered volume lands on the fixture element at its first enforce tick
-    await play('D', { loop: true, sampleRate: 48000 });
+    await play('M', { loop: true, sampleRate: 48000 });
     await audioTab();
     const desc = await abody(`const d = [...a.querySelectorAll('div')].find((x) => x.textContent === 'Enhance audio'); return d ? d.nextElementSibling.textContent : null;`);
     eq(desc, 'Clarity, warmth & punch — level-matched, no loudness trick', 'Enhance description');
     const intOpacity = () => abody(`const r = [...a.querySelectorAll('input[type=range]')].find((x) => x.parentElement.firstChild.textContent === 'Intensity'); return r.parentElement.style.opacity;`);
     eq(await intOpacity(), '0.45', 'Intensity dimmed while Enhance is off');
     await sleep(1000);
-    const off = powerAvg((await meterReads(12, 250)).map((m) => m.outDb));
-    await set('enhanceOn', true); await set('enhanceAmt', 100); await sleep(800);
+    const off = powerAvg((await meterReads(24, 500)).map((m) => m.outDb));   // 24 × 500 ms: one whole loop of the clip
+    await set('enhanceOn', true); await set('enhanceAmt', 100);
+    let ec = null; for (let i = 0; i < 30; i++) { await sleep(100); ec = (await dbg(`return d.enhCalib();`))['20|48000']; if (ec && ec.exact) break; }
+    assert(ec && ec.exact, 'the offline level calibration landed'); await sleep(500);
     const s = await snap();
-    eq(s.shaperHasCurve, true, 'curve set'); approx(s.params.comp.threshold, -14, 0.001, 'comp thr −14'); approx(s.params.air.gain, 3, 0.001, 'air +3');
-    const rs = await meterReads(12, 250);
+    eq(s.shaperHasCurve, true, 'curve set'); approx(s.params.mbMid.threshold, -21.5, 0.001, 'mid band thr −21.5'); eq(s.params.comp.ratio, 1, 'wideband comp idle'); approx(s.params.air.gain, 3, 0.001, 'air +3');
+    const rs = await meterReads(24, 500);
     const on = powerAvg(rs.map((m) => m.outDb));
-    console.log('  level match: off ' + off.toFixed(2) + ' dB, on ' + on.toFixed(2) + ' dB, comp GR min ' + Math.min(...rs.map((m) => m.gr)).toFixed(2) + ' dB');
-    assert(Math.abs(on - off) < 1.5, 'Enhance on vs off within 1.5 dB (off ' + off.toFixed(2) + ', on ' + on.toFixed(2) + ')');
+    console.log('  level match: off ' + off.toFixed(2) + ' dB, on ' + on.toFixed(2) + ' dB, block gain ' + ec.db.toFixed(2) + ' dB, guard GR min ' + Math.min(...rs.map((m) => m.limGr)).toFixed(2) + ' dB');
+    assert(Math.abs(on - off) < 1.0, 'Enhance on vs off within 1 dB (off ' + off.toFixed(2) + ', on ' + on.toFixed(2) + ')');
     await abody(`const r = [...a.querySelectorAll('button[role=switch]')].find((b) => b.previousElementSibling.firstChild.textContent === 'Enhance audio'); r.click();`);
     await sleep(150);
     eq(await get('enhanceOn'), false, 'switch turns Enhance off'); eq(await intOpacity(), '0.45', 'Intensity dims again');
@@ -1068,7 +1110,7 @@ const FIXTURE_SRC = `
     await play('A', { loop: true, href: '/test/ln-a' });
     await set('loudnessOn', true);
     let s = await snap();
-    eq(s.routed, true, 'routed'); eq(s.loudTimer, true, 'loudness timer running'); eq(s.params.lim.ratio, 20, 'loudness engages the guard');
+    eq(s.routed, true, 'routed'); eq(s.loudTimer, true, 'loudness timer running'); eq(guardOn(s), true, 'loudness engages the guard');
     let ls = await loudState(); eq(ls.href, '/test/ln-a', 'measuring this track'); eq(ls.src, '', 'no gain source yet'); eq(ls.measuring, true, 'measuring');
     await sleep(2000);   // ≈ 2.1 s: four blocks
     s = await snap();
@@ -1139,9 +1181,9 @@ const FIXTURE_SRC = `
     await set('loudTarget', -14); await sleep(200);
     s = await snap(); approx(s.meter.gainDb, -14 - s.meter.i, 0.6, 'Normal: the target wins'); assert(s.meter.gainDb < clampDb - 0.8, 'below the clamp');
     await set('limiterOn', false); await set('loudTarget', -11); await sleep(200);
-    s = await snap(); approx(s.meter.gainDb, clampDb - 3, 0.6, 'guard off: no limiting budget'); eq(s.params.lim.ratio, 1, 'guard inert');
+    s = await snap(); approx(s.meter.gainDb, clampDb - 3, 0.6, 'guard off: no limiting budget'); eq(guardOn(s), false, 'guard inert');
     await set('limiterOn', true); await sleep(200);
-    s = await snap(); approx(s.meter.gainDb, clampDb, 0.6, 'guard on: budget back'); eq(s.params.lim.ratio, 20, 'guard engaged');
+    s = await snap(); approx(s.meter.gainDb, clampDb, 0.6, 'guard on: budget back'); eq(guardOn(s), true, 'guard engaged');
     approx(s.params.makeup.gain, Math.pow(10, clampDb / 20), 0.1, 'makeup follows the re-target at once');
     // fixture D at Loud, as the spec states it
     await play('D', { loop: true, href: '/test/ln-d', sampleRate: 48000 });
@@ -1315,7 +1357,7 @@ const FIXTURE_SRC = `
     approx(s.params.lcLo.gain, 3.33, 0.2, 'lcLo ≈ +3.3 dB at volume 0.2 within ~3 s');
     approx(s.params.lcHi.gain, 1.11, 0.1, 'lcHi a third of it');
     eq(s.params.rumble.type, 'highpass', 'the contour engages the rumble filter');
-    eq(s.params.lim.ratio, 20, 'the contour engages the guard');
+    eq(guardOn(s), true, 'the contour engages the guard');
     eq(s.routed, true, 'routed');
     approx(await dbg(`return d.contourK();`), 0.5556, 0.01, 'k = (0.45 − 0.2) / 0.45');
     const hd = await dbg(`return d.headroomDb;`); assert(hd > 2.8 && hd < 3.6, 'the contour counts in the auto-headroom (got ' + hd + ')');
@@ -1496,7 +1538,7 @@ const FIXTURE_SRC = `
     let s = await snap();
     approx(s.params.comp.threshold, -30, 0.001, 'thr −30'); approx(s.params.comp.ratio, 3, 0.001, 'ratio 3'); approx(s.params.comp.knee, 24, 0.001, 'knee 24');
     approx(s.params.comp.attack, 0.02, 0.001, 'attack 0.02'); approx(s.params.comp.release, 0.5, 0.001, 'release 0.5');
-    eq(s.params.lim.ratio, 20, 'Night engages the guard'); eq(s.routed, true, 'routed');
+    eq(guardOn(s), true, 'Night engages the guard'); eq(s.routed, true, 'routed');
     const trimFor = async (makeupDb, key) => { const cal = await dbg(`return d.calib();`); const c = cal[key]; assert(c, key + ' not in the calibration map'); return { g: Math.pow(10, (makeupDb - c.db) / 20), db: c.db, exact: c.exact }; };
     let t = await trimFor(MK50, '-30|24|3');
     approx(s.params.compTrim.gain, t.g, 0.02, 'compTrim = makeup ' + MK50.toFixed(2) + ' dB − auto-makeup ' + t.db.toFixed(2) + ' dB');
@@ -1541,9 +1583,11 @@ const FIXTURE_SRC = `
     s = await snap(); approx(s.params.comp.threshold, -32.4, 0.001, 'thr at 70 %'); approx(s.params.comp.ratio, 3.4, 0.001, 'ratio at 70 %');
     // Night wins over Enhance; Night off hands the comp back to Enhance (2.25 keeps its level match — its own scenario re-runs it)
     await set('enhanceOn', true); s = await snap(); approx(s.params.comp.threshold, -32.4, 0.001, 'Night keeps the comp with Enhance on');
-    await set('nightOn', false); s = await snap(); approx(s.params.comp.threshold, -11, 0.001, 'Enhance 50 % takes the comp back (thr −11)'); approx(s.params.comp.knee, 12, 0.001, 'Enhance knee');
+    eq(s.params.cpG.gain, 1, 'Night: the wideband path'); eq(s.params.mbG.gain, 0, 'Night parks the bank'); eq(s.params.mbLo.ratio, 1, 'bank inert under Night'); approx(s.params.air.gain, 1.5, 0.001, 'Enhance tone stays under Night');
+    await set('nightOn', false); s = await snap(); eq(s.params.comp.ratio, 1, 'Night off: Enhance 50 % takes its bank back (comp idle)'); eq(s.params.comp.threshold, 0, 'comp thr 0');
+    eq(s.params.cpG.gain, 0, 'cpG 0'); eq(s.params.mbG.gain, 1, 'mbG 1'); approx(s.params.mbLo.threshold, -19.75, 0.001, 'lo band thr at 50 %'); approx(s.params.mbLo.ratio, 1.3, 0.001, 'lo band ratio at 50 %'); approx(s.params.mbLo.knee, 12, 0.001, 'bank knee');
     await set('enhanceOn', false); await set('nightAmt', 50); s = await snap();
-    eq(s.params.comp.ratio, 1, 'both off: ratio 1'); eq(s.params.comp.threshold, 0, 'threshold 0'); eq(s.params.compTrim.gain, 1, 'compTrim 1');
+    eq(s.params.comp.ratio, 1, 'both off: ratio 1'); eq(s.params.comp.threshold, 0, 'threshold 0'); eq(s.params.compTrim.gain, 1, 'compTrim 1'); eq(s.params.cpG.gain, 1, 'cpG 1'); eq(s.params.mbG.gain, 0, 'mbG 0');
     await closeHub(); await sleep(150); s = await snap(); eq(s.routed, false, 'nothing on → detached');
     await stopPlay();
   });
@@ -1590,7 +1634,7 @@ const FIXTURE_SRC = `
     for (let i = 2; i < 10; i++) { eq(s.params.peq[i].gain, 0, 'peq[' + i + '] inert'); eq(s.params.peq[i].type, 'peaking', 'peq[' + i + '] peaking'); }
     eq(await dbg(`return d.headroomDb;`), 0, 'a profile carrying its own preamp needs no extra headroom');
     approx(s.params.preamp.gain, Math.pow(10, -6 / 20), 0.002, 'preamp = 10^(−6/20)');
-    eq(s.params.lim.ratio, 20, 'the guard is engaged while peqOn'); eq(s.routed, true, 'routed');
+    eq(guardOn(s), true, 'the guard is engaged while peqOn'); eq(s.routed, true, 'routed');
     const c = await dbg(`return d.composite(105);`); approx(c.peqDb[0], 3.1, 0.4, 'probe bank: the AutoEQ composite at 105 Hz');
     eq(await toggleDesc('Headphone correction'), 'AutoEQ profile · 2 filters (shelf Q ignored)', 'row shows the profile (a shelf → its Q is ignored)');
     eq(await switchState('Headphone correction'), 'true', 'switch repainted on'); eq(await btnDisplay('Clear'), '', 'Clear shown');
@@ -1607,7 +1651,7 @@ const FIXTURE_SRC = `
     // peqOn off: every filter reads 0 dB, the preamp fold goes with it, the profile stays loaded
     await set('peqOn', false); s = await snap();
     for (let i = 0; i < 10; i++) eq(s.params.peq[i].gain, 0, 'peq[' + i + '] gain 0 with peqOn off');
-    eq(s.params.preamp.gain, 1, 'preamp back to unity'); eq(s.params.lim.ratio, 1, 'guard released');
+    eq(s.params.preamp.gain, 1, 'preamp back to unity'); eq(guardOn(s), false, 'guard released');
     eq(await switchState('Headphone correction'), 'false', 'switch repainted off'); eq((await get('peq')).length, 10, 'profile kept');
     await set('peqOn', true); s = await snap(); approx(s.params.peq[9].gain, 5, 0.01, 'back on');
     // the tab: Paste AutoEQ opens the box (Apply / Cancel under it), Cancel closes it, junk is refused and keeps it open
@@ -1888,10 +1932,10 @@ const FIXTURE_SRC = `
     // context's rate, the output latency and fxLatencyMs, refreshed every 60 frames; the footer buttons sit right above it
     await play('A', { loop: true });
     await audioTab();
-    const RE = /^(\d+) kHz · (\d+) ms delay \((\d+) ms output \+ (0|12|13|15) ms effects\) · These shape SoundCloud’s audio in real time; turn them off and playback returns to normal instantly\. Crossfade and higher bitrates aren’t possible in the browser; the system volume is invisible to the loudness contour\.$/;
+    const RE = /^(\d+) kHz · (\d+) ms delay \((\d+) ms output \+ (0|12|14|16) ms effects\) · These shape SoundCloud’s audio in real time; turn them off and playback returns to normal instantly\. Crossfade and higher bitrates aren’t possible in the browser; the system volume is invisible to the loudness contour\.$/;
     let t = await noteText(), m = RE.exec(t);
     assert(m, 'footnote matches the engine format (got ' + JSON.stringify(t) + ')');
-    assert(/\d+ kHz · \d+ ms delay \(\d+ ms output \+ (0|12|13|15) ms effects\)/.test(t), 'the spec regex');
+    assert(/\d+ kHz · \d+ ms delay \(\d+ ms output \+ (0|12|14|16) ms effects\)/.test(t), 'the spec regex');
     let s = await snap();
     eq(+m[1], Math.round(s.sampleRate / 1000), 'the rate of the context SoundCloud routes through (' + s.sampleRate + ')'); eq(+m[2], +m[3] + +m[4], 'total = output + effects'); eq(+m[4], s.latencyMs, 'effects = fxLatencyMs'); eq(+m[3], s.outLatMs, 'output = the smoothed output latency');
     eq(+m[4], 12, '12 ms effects (two compressors)'); assert(s.sampleRate === 44100 || s.sampleRate === 48000, 'a default-rate context');
@@ -1902,14 +1946,14 @@ const FIXTURE_SRC = `
     const ft = await abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Copy settings'); return { css: b.parentElement.style.cssText, btns: [...b.parentElement.children].map((c) => c.textContent).join(','), weight: getComputedStyle(b).fontWeight, size: getComputedStyle(b).fontSize, radius: b.style.borderRadius, bg: b.style.background, ref: (() => { const c = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Save'); return c ? getComputedStyle(c).fontWeight + '/' + getComputedStyle(c).fontSize + '/' + c.style.borderRadius + '/' + c.style.background : null; })() };`);
     eq(ft.btns, 'Copy settings,Paste settings,Reset all audio', 'the three footer buttons'); assert(/display: flex/.test(ft.css) && /gap: 8px/.test(ft.css) && /margin-top: 18px/.test(ft.css), 'footer row style (got ' + ft.css + ')');
     eq(ft.weight + '/' + ft.size + '/' + ft.radius + '/' + ft.bg, ft.ref, 'the footer buttons wear exactly what the preset Save button wears (mkBtn)');
-    // Enhance adds the shaper's 128 samples (3 ms at 48 kHz → 15); the line follows within 60 frames
+    // Enhance adds the 4× shapers' 192 samples (4 ms at 48 kHz → 16); the line follows within 60 frames
     await set('enhanceOn', true); await sleep(1600); t = await noteText(); m = RE.exec(t);
-    assert(m && +m[4] === 15, '15 ms effects with Enhance (got ' + JSON.stringify(t) + ')'); eq(+m[2], +m[3] + 15, 'total follows');
+    assert(m && +m[4] === 16, '16 ms effects with Enhance (got ' + JSON.stringify(t) + ')'); eq(+m[2], +m[3] + 16, 'total follows');
     await set('enhanceOn', false); await sleep(1600); t = await noteText(); m = RE.exec(t); assert(m && +m[4] === 12, 'back to 12 ms');
-    // a 96 kHz context: the rate line follows the context SoundCloud routes through (13 ms with Enhance)
+    // a 96 kHz context: the rate line follows the context SoundCloud routes through (14 ms with Enhance)
     await play('A', { loop: true, sampleRate: 96000 }); await sleep(1600); t = await noteText(); m = RE.exec(t);
     assert(m && +m[1] === 96, '96 kHz (got ' + JSON.stringify(t) + ')');
-    await set('enhanceOn', true); await sleep(1600); t = await noteText(); m = RE.exec(t); assert(m && +m[4] === 13, '13 ms effects at 96 kHz with Enhance (got ' + JSON.stringify(t) + ')');
+    await set('enhanceOn', true); await sleep(1600); t = await noteText(); m = RE.exec(t); assert(m && +m[4] === 14, '14 ms effects at 96 kHz with Enhance (got ' + JSON.stringify(t) + ')');
     await set('enhanceOn', false);
     await closeHub(); await sleep(150); s = await snap(); eq(s.routed, false, 'detached');
     await stopPlay();
