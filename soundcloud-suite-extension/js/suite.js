@@ -10142,6 +10142,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     vinylMode: false,
     fadeIn: 0.6, fadeOut: 2.5,           // 0..3 s, 0..8 s
     skipSilence: false,     // end-of-track silence trim (WP10): the last 30 s only, never mid-track
+    reverbAmt: 0,           // 0..100 → wet 0..0.35 through a generated 1.6 s IR (WP10 "Slowed + reverb")
     // ── toolbar buttons ──
     barSpeed: true, barCopy: true, barRestart: true, barAB: false, barInfo: true,
   };
@@ -10270,12 +10271,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // every audio key: what Copy/Paste/Reset walk, and what the import clamps cover
   const AUDIO_KEYS = ['speed', 'speedPerTrack', 'eqOn', 'eqBands', 'eqPreamp', 'eqCustom', 'eqAutoPre', 'eqPerTrack', 'peqOn', 'peq', 'peqPreamp', 'peqName',
     'bassDb', 'bassHarm', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR',
-    'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'skipSilence', 'loopTrack', 'rememberVol'];
+    'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'skipSilence', 'reverbAmt', 'loopTrack', 'rememberVol'];
   // numeric ranges [min, max, step], string caps { max }, enums { one: [...] }
   const AUDIO_CLAMP = {
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
-    fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1],
+    fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1], reverbAmt: [0, 100, 5],
     peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
   };
   const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
@@ -10748,7 +10749,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || CFG.peqOn || CFG.nightOn || CFG.loudCompOn
       || CFG.crossfeedOn || CFG.monoOn || CFG.swapLR
       || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0
-      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (+CFG.bassHarm || 0) > 0 || (CFG.boostAmt | 0) > 100 || CFG.skipSilence);   // the trim listens through the source taps
+      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (+CFG.bassHarm || 0) > 0 || (+CFG.reverbAmt || 0) > 0 || (CFG.boostAmt | 0) > 100 || CFG.skipSilence);   // the trim listens through the source taps
   }
   function fxOn() { return fxUserOn() || audioTabOn; }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -10820,6 +10821,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (_probeFallback) return _probeFallback;
     try { const OAC = W.OfflineAudioContext || window.OfflineAudioContext; if (OAC) _probeFallback = buildProbeBank(new OAC(1, 128, 48000)); } catch (e) { _probeFallback = null; }
     return _probeFallback;
+  }
+  // reverb IR (WP10): 1.6 s of decorrelated noise (two independent channels), −60 dB at the end; built on first use
+  function reverbIr(ctx) {
+    const sr = ctx.sampleRate || 48000, n = Math.round(1.6 * sr), buf = ctx.createBuffer(2, n, sr);
+    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-6.9 * i / n); }
+    return buf;
   }
   function buildFxChain(ctx) {
     const sr = ctx.sampleRate || 48000;
@@ -10923,8 +10930,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     mxSplit.connect(gLR, 0); gLR.connect(mxMerge, 0, 1);
     mxSplit.connect(gRL, 1); gRL.connect(mxMerge, 0, 0);
     mxSplit.connect(gRR, 1); gRR.connect(mxMerge, 0, 1);
+    // 14b. reverb (WP10): a parallel convolver off the matrix output, wet 0..0.35 into the analyser alongside the
+    //      dry path. Its IR is built on first use and applyFx disconnects it at 0: the default is an exact identity.
+    const conv = ctx.createConvolver(), rvWet = gain(0);
     // 15. spectrum analyser (the canvas only) · 16. loudness gain · 17. volume boost
     const analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.82;
+    rvWet.connect(analyser);
     const makeup = gain(1);
     const boost = gain(1);
     // 18. clip guard (inert: thr 0, ratio 1) + trim · 18b. output tap = what reaches the speakers
@@ -10944,7 +10955,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const probe = buildProbeBank(ctx);
     return {
       input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, bassSum, hLP, hShape, hBP, hGain, harmOn: false, warm, air, shaper, comp, compTrim,
-      widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR,
+      widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR, mxMerge, conv, rvWet, rvOn: false,
       analyser, kL, kR, pL, pR, oL, oR, makeup, boost, lim, limTrim, output, probe,
       rumbleOn: false,   // the rumble filter's current type (edge-triggered by applyFx)
       freq: new Uint8Array(analyser.frequencyBinCount), buf: new Float32Array(analyser.fftSize),
@@ -10997,7 +11008,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const bands = Array.isArray(CFG.eqBands) ? CFG.eqBands : [];
     const eqBoosting = on('eqOn') && ((+CFG.eqPreamp || 0) > 0 || Math.max(0, ...bands.map((x) => +x || 0)) > 0);
     const boosting = eqBoosting || on('peqOn') || !!CFG.loudnessOn || on('enhanceOn') || on('nightOn') || on('loudCompOn')
-      || (!fxBypass && ((CFG.stereoWidth | 0) > 100 || (+CFG.bassDb || 0) > 0 || (+CFG.bassHarm || 0) > 0 || (+CFG.tiltDb || 0) !== 0 || (+CFG.vocalAmt || 0) > 0));
+      || (!fxBypass && ((CFG.stereoWidth | 0) > 100 || (+CFG.bassDb || 0) > 0 || (+CFG.bassHarm || 0) > 0 || (+CFG.reverbAmt || 0) > 0 || (+CFG.tiltDb || 0) !== 0 || (+CFG.vocalAmt || 0) > 0));
     return (!!CFG.limiterOn && boosting) || (CFG.boostAmt | 0) > 100;
   }
   // Chromium's DynamicsCompressor applies an automatic makeup gain that depends on
@@ -11122,6 +11133,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const peq = (peqOn && Array.isArray(CFG.peq)) ? CFG.peq.slice(0, 10).map(clampPeq) : [];
       const bassDb = fxBypass ? 0 : cl(CFG.bassDb, 0, 9);
       const harm = fxBypass ? 0 : cl(CFG.bassHarm, 0, 100) / 100 * 0.5;
+      const rv = fxBypass ? 0 : cl(CFG.reverbAmt, 0, 100) / 100 * 0.35;
       const tilt = fxBypass ? 0 : cl(CFG.tiltDb, -4, 4);
       const vocal = fxBypass ? 0 : cl(CFG.vocalAmt, -100, 100) / 100;
       const lcDb = on('loudCompOn') ? contourK * cl(CFG.loudCompAmt, 0, 9) : 0;
@@ -11219,6 +11231,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         w(c.vGain.gain, vG, 0.05);
         w(c.cfFeedL.gain, cfF, 0.05); w(c.cfFeedR.gain, cfF, 0.05); w(c.cfNegL.gain, -cfF, 0.05); w(c.cfNegR.gain, -cfF, 0.05);
         w(c.gLL.gain, mx[0]); w(c.gLR.gain, mx[1]); w(c.gRL.gain, mx[2]); w(c.gRR.gain, mx[3]);
+        w(c.rvWet.gain, rv, 0.05);
+        if ((rv > 0) !== !!c.rvOn) {
+          c.rvOn = rv > 0;
+          try {
+            if (c.rvOn) { if (!c.conv.buffer) c.conv.buffer = reverbIr(e.ctx); c.mxMerge.connect(c.conv); c.conv.connect(c.rvWet); }
+            else setTimeout(() => { try { if (!c.rvOn) { c.mxMerge.disconnect(c.conv); c.conv.disconnect(c.rvWet); } } catch (er) {} }, 80);
+          } catch (er) {}
+        }
         if (!keep('loudnessOn')) w(c.makeup.gain, 1, 0.05);   // Compare never touches the loudness gain
         w(c.boost.gain, boost, 0.05);
         w(c.lim.threshold, L ? -3 : 0); w(c.lim.knee, 0); w(c.lim.ratio, L ? 20 : 1);
@@ -12496,7 +12516,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const semis = () => { const st = 12 * Math.log2(wantedRate()); return Math.abs(st) < 0.05 ? '' : ' · ' + (st < 0 ? '−' : '+') + Math.abs(st).toFixed(1) + ' semitones'; };
       const paintVinyl = () => { const t = VINYL_DESC + semis(); if (vinR.desc.textContent !== t) vinR.desc.textContent = t; };
       // (no click handler of its own: toggleRow's switch saves and runs applyFx, which syncs preservesPitch)
-      paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); };
+      // reverb (WP10) + the "Slowed + reverb" chip: speed 85 · pitch follows speed · reverb 25, lit while all three hold; a second tap undoes it
+      const rvR = sliderRow('Reverb', 0, 100, 5, () => num('reverbAmt', 0, 100), (x) => { CFG.reverbAmt = cl(x | 0, 0, 100); saveSoon(); applyFx(); }, (x) => ((x | 0) ? (x | 0) + '%' : 'Off'), 0);
+      rvR.row.firstChild.title = 'A little room around the track · double-click resets'; bodyEl.appendChild(rvR.row);
+      const slowRow = D.createElement('div'); slowRow.style.cssText = 'display:flex;gap:6px';
+      const slowChip = mkBtn('Slowed + reverb'); slowChip.style.padding = '8px 14px';
+      const slowOn = () => (CFG.speed | 0) === 85 && !!CFG.vinylMode && (CFG.reverbAmt | 0) === 25;
+      const tintSlow = () => { const lit = slowOn(); slowChip.style.background = lit ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; slowChip.style.color = lit ? '#ffb083' : '#c4c4ca'; };
+      slowChip.addEventListener('mouseenter', () => { if (slowOn()) tintSlow(); }); slowChip.addEventListener('mouseleave', () => { if (slowOn()) tintSlow(); });
+      slowChip.addEventListener('click', () => {
+        const lit = slowOn(); CFG.vinylMode = !lit; CFG.reverbAmt = lit ? 0 : 25; setSpeed(lit ? 100 : 85); save(); applyFx();
+        try { spdR.input.value = CFG.speed; } catch (e) {} spdR.paint(); paintSpeed(); toast(lit ? 'Slowed + reverb off' : 'Slowed + reverb · 0.85×, pitch follows, a little room');
+      });
+      slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
+      paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
       // fade in / out (2.21): the lengths dim while off and wake the switch like Intensity does
       const fadeRow = toggleRow('Fade in / out', 'Smooth the gap between tracks', 'fadeOn');
@@ -12510,7 +12543,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       fadeRow.sw.addEventListener('click', paintFade);
       paintFade(); bodyEl.append(fiR.row, foR.row);
       const skipRow = toggleRow('Skip silent endings', 'Jumps to the end when the last 30 s of a track go quiet · never mid-track', 'skipSilence');   // WP10
-      liveSync.push(syncSlider(spdR, () => cl(CFG.speed | 0, 50, 200)), () => { paintSpeed(); vinR.sw._paint(); },
+      liveSync.push(syncSlider(spdR, () => cl(CFG.speed | 0, 50, 200)), syncSlider(rvR, () => num('reverbAmt', 0, 100)), () => { paintSpeed(); vinR.sw._paint(); },
         syncSlider(fiR, () => num('fadeIn', 0, 3)), syncSlider(foR, () => num('fadeOut', 0, 8)), () => { fadeRow.sw._paint(); skipRow.sw._paint(); paintFade(); });
 
       // ── tone (2.10 – 2.14): Bass · Vocals · Loudness contour · Tilt. No master switch — the
@@ -12917,7 +12950,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           params: snapshot(), shaperHasCurve: hasCurve, loudTimer: !!loudTimer, meter: Object.assign({}, meter),
           dests: e ? [...e.dests].map((kv) => [kv[0], kv[1][0], kv[1][1]]) : [],
           headroomDb: lastHeadroomDb, curveVer: eqCurveVer, needsLimiter: needsLimiter(),
-          branches: e ? { harm: !!e.chain.harmOn } : null, nodes: () => (e ? e.chain : null),
+          branches: e ? { harm: !!e.chain.harmOn, reverb: !!e.chain.rvOn } : null, nodes: () => (e ? e.chain : null),
+          ir: (() => { try { const b = e && e.chain.conv.buffer; if (!b) return null; const a0 = b.getChannelData(0), a1 = b.getChannelData(1); let s01 = 0, s00 = 0, s11 = 0; for (let i = 0; i < a0.length; i++) { s01 += a0[i] * a1[i]; s00 += a0[i] * a0[i]; s11 += a1[i] * a1[i]; } return { sec: b.duration, ch: b.numberOfChannels, corr: s01 / Math.sqrt(s00 * s11) }; } catch (er) { return null; } })(),
           meterTick: () => { peakTick(); return Object.assign({}, meter); },
           composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb) }; },
           calib: () => { const o = {}; _calib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
