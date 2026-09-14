@@ -11547,9 +11547,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } catch (e) { try { return oDisconnect.apply(src, arguments); } catch (e2) {} }
       };
       sceFx.add(entry);
-      // SC reuses one source node in practice; if it ever makes fresh ones per
-      // track, keep the iterated set bounded (oldest entry = stalest/dead source)
-      if (sceFx.size > 6) { try { sceFx.delete(sceFx.values().next().value); } catch (e) {} }
+      // SC reuses one source node in practice; if it ever makes fresh ones per track, keep
+      // the iterated set bounded (oldest entry = stalest/dead source) AND take the evicted
+      // chain out of the graph: routed back to passthrough, its input and its worklet leg
+      // disconnected, nothing of it is reachable from the destination, so it costs no
+      // render time (a limiter left connected would keep processing silence forever)
+      if (sceFx.size > 6) {
+        try {
+          const old = sceFx.values().next().value; sceFx.delete(old);
+          old.routed = false; try { old.reroute(); } catch (e) {}
+          try { old.chain.input.disconnect(); } catch (e) {}
+          try { old.chain.gB.disconnect(); } catch (e) {}
+        } catch (e) {}
+      }
       if (ctx.__sceTpLimiterOk === true) attachGuard(entry); else loadGuard(ctx);
       applyFx();
     } catch (e) { Log.err('installFx', e); }

@@ -2259,7 +2259,10 @@ const FIXTURE_SRC = `
     // the verdict needs 3 s of high reads after the first tick; poll up to 10 s for it (a busy machine ticks late)
     let tv = 0; for (; tv < 100; tv++) { await sleep(100); s = await snap(); if (s.meter.monoSrc) break; }
     assert(tv >= 15, 'no verdict inside the first 2 s (came at ' + ((tv + 6) / 10).toFixed(1) + ' s)');
-    assert(s.meter.corr > 0.98, 'dual-mono fixture: r > 0.98 (got ' + s.meter.corr + ')'); eq(s.meter.monoSrc, true, 'mono upload detected within 10 s');
+    // r comes from two tap reads that a render quantum can straddle (the engine's verdict votes over three ticks for
+    // exactly that reason): read fresh ticks until one is clean, up to three
+    let corr = s.meter.corr; for (let i = 0; i < 3 && !(corr > 0.98); i++) { await sleep(150); corr = (await dbg(`return d.meterTick();`)).corr; }
+    assert(corr > 0.98, 'dual-mono fixture: r > 0.98 (got ' + corr + ')'); eq(s.meter.monoSrc, true, 'mono upload detected within 10 s');
     await sleep(200); s = await snap();   // the verdict's 50 ms gain ramp
     approx(s.params.vGain.gain, 1, 0.01, 'vGain forced to 1'); eq((await sliderByLabel('Vocals')).val, 'Mono upload', 'the Vocals value reads Mono upload');
     eq(await get('vocalAmt'), -100, 'the setting itself is untouched');
@@ -2404,7 +2407,7 @@ const FIXTURE_SRC = `
     eq(s.params.hBP.type, 'bandpass', 'bandpass'); eq(s.params.hBP.frequency, 180, '180 Hz'); approx(s.params.hBP.Q, 0.9, 0.001, 'Q 0.9');
     eq(s.params.hShape.hasCurve, true, 'shaper curve'); eq(s.params.hShape.oversample, 'none', 'no oversampling');
     eq(await dbg(`return d.branches.harm;`), true, 'branch connected'); eq(s.latencyMs, 12, 'no latency added');
-    eq(await dbg(`return d.needsLimiter;`), true, 'the clip guard engages'); approx(s.params.lim.threshold, -3, 0.01, 'guard at −3');
+    eq(await dbg(`return d.needsLimiter;`), true, 'the clip guard engages'); eq(s.guard.ceiling, guardCeil(s), 'guard ceiling'); eq(guardOn(s), true, 'guard on');
     await sleep(400); const onDb = await dbg(`return d.meterTick().outDb;`); approx(onDb, offDb, 0.1, 'a 997 Hz tone: the direct level is untouched');
     assert((await branchPk()) < -60, 'a 997 Hz tone yields nothing in the branch');
     // sub-bass: the branch carries harmonics
