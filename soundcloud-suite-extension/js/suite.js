@@ -1246,21 +1246,27 @@
     function fadeOutAndPause() {
         const m = activeMedia();
         const pc = q('playControl');
-        if (!m || fading) { if (pc && pc.classList.contains('playing')) clickIt(pc); return; }
+        if (fading) { if (pc && pc.classList.contains('playing')) clickIt(pc); return; }
+        // Through the enhancer's audio chain when it is routed (SoundCloud's own player element never enters the
+        // DOM, so that is the path that actually fades there and the volume slider stays put); otherwise the
+        // element's volume in 50 ms steps. Either way 8 s, then the pause click, then a quiet restore.
+        let viaChain = false;
+        try { viaChain = !!(SUITE.audioFadeOut && SUITE.audioFadeOut(8)); } catch (e) {}
+        if (!viaChain && !m) { if (pc && pc.classList.contains('playing')) clickIt(pc); return; }
         fading = true;
-        const v0 = m.volume;
+        const v0 = m ? m.volume : 1;
         let step = 0;
         const t = makeTicker(() => {
             step++;
-            try { m.volume = Math.max(0, v0 * (1 - step / 20)); } catch (e) {}
-            if (step >= 20) {
+            if (!viaChain) { try { m.volume = Math.max(0, v0 * (1 - step / 160)); } catch (e) {} }
+            if (step >= 160) {
                 t.stop();
                 fading = false;
                 const p = q('playControl');
                 if (p && p.classList.contains('playing')) clickIt(p);
-                setTimeout(() => { try { m.volume = v0; } catch (e) {} }, 600);
+                setTimeout(() => { try { if (viaChain) SUITE.audioFadeOut(0); else m.volume = v0; } catch (e) {} }, 600);
             }
-        }, 400);
+        }, 50);
     }
     function sleepRemainingMs() { return sleepAt ? Math.max(0, sleepAt - Date.now()) : 0; }
     function clearSleep() { sleepAt = 0; sleepArmed = false; SS.del('bh_sc_sleep'); }
@@ -10676,6 +10682,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * any failure falls back to the original connect. */
   const sceFx = new Set();   // { ctx, src, chain, dests, reroute }
   let fxRouted = false, audioTabOn = false, fxBypass = false;
+  let sleepFadeOn = false;   // a sleep-timer fade is riding output.gain (WP10): applyFx must not reset it
   let paintCmp = null;     // set by audioRender (the Compare button's painter); null until the tab has rendered
   let loudTimer = 0;       // the loudness measurement interval (started/stopped by applyFx)
   const meter = {};        // live meter values { m, s, i, peak, outDb, gainDb, gr, limGr, corr, monoSrc } — filled by the meter loops
@@ -11201,7 +11208,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         w(c.lim.threshold, L ? -3 : 0); w(c.lim.knee, 0); w(c.lim.ratio, L ? 20 : 1);
         try { c.lim.attack.value = 0.001; c.lim.release.value = 0.08; } catch (er) {}
         w(c.limTrim.gain, limTrimGain);
-        if (!keep('fadeOn')) { try { c.output.gain.cancelScheduledValues(now); c.output.gain.setValueAtTime(1, now); c.output.gain.value = 1; } catch (er) {} }
+        if (!keep('fadeOn') && !sleepFadeOn) { try { c.output.gain.cancelScheduledValues(now); c.output.gain.setValueAtTime(1, now); c.output.gain.value = 1; } catch (er) {} }
       });
       if (!keep('fadeOn')) fadeCtl.reset();
       try { sceMediaEls.forEach(syncPitch); } catch (er) {}   // vinyl mode (2.20) is an element property
@@ -12768,6 +12775,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.audioLatency = () => { try { const c = sceLastCtx; if (c) { const l = (c.outputLatency || c.baseLatency || 0); const raw = (l > 0 && l < 0.6) ? Math.round(l * 1000) : 0; if (raw > 0 && Math.abs(raw - sceLatMs) >= 5) sceLatMs = raw; } return sceLatMs + fxLatencyMs(); } catch (e) { return sceLatMs; } }; } catch (e) {}
   // the hub converts that latency from output seconds to media seconds
   try { SUITE.audioRate = () => wantedRate(); } catch (e) {}
+  // sleep-timer fade (WP10): module 1 asks for it. With the chain routed, a linear ramp of every routed chain's output
+  // gain to 0.02 over `sec` s — after the limiter, so it never pumps, and the element's volume (SoundCloud's slider)
+  // stays put; 0 restores unity after the pause. false when nothing is routed: module 1 steps the volume instead.
+  try {
+    SUITE.audioFadeOut = (sec) => {
+      let any = false;
+      if (fxRouted) sceFx.forEach((e) => {
+        if (!e.routed) return;
+        try {
+          const g = e.chain.output.gain, t = e.ctx.currentTime || 0;
+          g.cancelScheduledValues(t);
+          if (sec > 0) { g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0.02, t + sec); } else g.setValueAtTime(1, t);
+          any = true;
+        } catch (er) {}
+      });
+      sleepFadeOn = any && sec > 0;
+      return any;
+    };
+  } catch (e) {}
   // composite user response at one frequency (dB), from the probe bank (2.26)
   function eqCurveDbAt(f) {
     try { return compositeDb(new Float32Array([+f || 1000])).userDb[0] || 0; } catch (e) { return 0; }
@@ -12836,6 +12862,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           restoreLoud: () => restoreTrackLoud(),
           ab: (a, b) => { abA = +a; abB = +b; abOn = true; abM = activeMedia(); armAb(); refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
           sleep: () => ({ rem: SUITE.sleep ? SUITE.sleep.remainingMs() : -1, armed: !!(SUITE.sleep && SUITE.sleep.armed()), chip: sleepChipMin }),
+          sleepSet: (min) => { if (SUITE.sleep) SUITE.sleep.set(+min); }, sleepFading: () => sleepFadeOn,
           muted: () => mutedVol != null,
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
           fade: () => fadeCtl.state(), restartTrack, nudgeSeek, seekPct, applySpeed, status: () => audioStatus(),
