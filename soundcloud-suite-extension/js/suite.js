@@ -10616,6 +10616,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const re = () => { try { const w = wantedRate(); if (Math.abs((m.playbackRate || 1) - w) > 0.01) m.playbackRate = w; } catch (e) {} };
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
+      m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
       try { m.preservesPitch = true; m.mozPreservesPitch = true; m.webkitPreservesPitch = true; } catch (e) {}
     } catch (e) {}
   }
@@ -10642,6 +10643,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   let paintCmp = null;     // set by audioRender (the Compare button's painter); null until the tab has rendered
   let loudTimer = 0;       // the loudness measurement interval (started/stopped by applyFx)
   const meter = {};        // live meter values { m, s, i, peak, outDb, gainDb, gr, limGr } — filled by the meter loops
+  // Loudness-normalize measurement state (2.4 / 2.5), one track at a time: the gated K-weighted
+  // blocks (400 ms each, from the SOURCE taps), the integrated value, the source peak, the gain
+  // the makeup node was last told (dB) and where it came from ('' measuring · 'measured' · 'remembered')
+  const lnorm = { href: null, blocks: [], recent: [], trackPeak: 0, curGainDb: 0, nodeDb: 0, lint: NaN, dur: NaN, measuring: true, src: '', pending: false, lastWrite: 0, tgKey: '' };
+  let lastLoudUrl = null;  // the href the loudness state belongs to (mirrors lastSpeedUrl)
   let lastHeadroomDb = 0;  // the auto-headroom applyFx last took off the pre-amp (dB, ≥ 0) — shown in the Pre-amp value
   let eqCurveVer = 0;      // bumped by applyFx whenever anything that shapes the composite curve changed (the canvas redraws on it)
   let contourK = 0;        // loudness-contour depth 0..1 from SoundCloud's volume slider (driven by the enforce tick)
@@ -11154,8 +11160,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       fxRouted = any;
       // ── the loudness measurement loop runs only while it can hear something ──
       const wantLoud = keep('loudnessOn') && fxRouted;
-      if (wantLoud && !loudTimer) loudTimer = setInterval(loudTick, 500);
+      if (wantLoud && !loudTimer) { loudTimer = setInterval(loudTick, 500); lastLoudUrl = null; try { restoreTrackLoud(); } catch (er) {} }
       else if (!wantLoud && loudTimer) { clearInterval(loudTimer); loudTimer = 0; }
+      if (!keep('loudnessOn')) { if (lnorm.href != null || lnorm.src || lnorm.blocks.length) loudReset(null); lastLoudUrl = null; lnorm.nodeDb = 0; }
+      else loudRetarget();   // a new target or guard state re-applies the gain immediately
       eqCurveVer++;
     } catch (e) { Log.err('applyFx', e); }
   }
@@ -11172,27 +11180,145 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const sl = rd(c.pL, c.bufPL), sr = rd(c.pR, c.bufPR), spk = Math.max(sl.pk, sr.pk);
       meter.srcPeak = spk > 1e-6 ? 20 * Math.log10(spk) : -120;
       try { meter.gr = c.comp.reduction; meter.limGr = c.lim.reduction; } catch (er) {}
-      try { const g = c.makeup.gain.value; meter.gainDb = g > 0 ? 20 * Math.log10(g) : -120; } catch (er) {}
     } catch (e) {}
   }
-  // the 500 ms loudness loop (the K-weighted, gated measurement lands with the
-  // Loudness-normalize rework); until then it keeps the output meter fresh
-  function loudTick() { peakTick(); }
-  function updateLoudness() {
-    try {
-      sceFx.forEach((e) => {
-        const a = e.chain.analyser, buf = e.chain.buf;
-        a.getFloatTimeDomainData(buf);
-        let sum = 0, peak = 0;
-        for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; const av = v < 0 ? -v : v; if (av > peak) peak = av; }
-        const rms = Math.sqrt(sum / buf.length);
-        if (rms < 1e-4) return;   // silence/paused — don't chase the noise floor
-        let g = 0.12 / rms; g = Math.max(0.5, Math.min(3, g));
-        if (peak > 0) g = Math.min(g, 0.98 / peak);   // never push the peaks past full scale — makeup is the last gain before the output
-        try { e.chain.makeup.gain.setTargetAtTime(g, e.ctx.currentTime || 0, 0.5); } catch (er) { try { e.chain.makeup.gain.value = g; } catch (er2) {} }
-      });
-    } catch (e) { Log.err('updateLoudness', e); }
+  // ── Loudness normalize (2.4): K-weighted, gated, measured at `input` (the untouched
+  //    source, so the value is the track's — ReplayGain semantics — whatever the chain does) ──
+  const newestRouted = () => { let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); return e; };
+  function loudReset(href) {
+    lnorm.href = href; lnorm.blocks = []; lnorm.recent = []; lnorm.trackPeak = 0; lnorm.curGainDb = 0; lnorm.lint = NaN; lnorm.dur = NaN;
+    lnorm.measuring = true; lnorm.src = ''; lnorm.pending = false; lnorm.lastWrite = 0;
+    delete meter.m; delete meter.s; delete meter.i; delete meter.gainDb;
   }
+  // the gain for a track of integrated loudness `lint` and sample peak `peak` (linear): the
+  // target delta, never past 0.98 FS at the source (+3 dB of limiting budget while the guard
+  // is on — what the streaming services allow), clamped −15..+12
+  function loudGainDb(lint, peak) {
+    const tg = AUDIO_CLAMP.loudTarget.one.indexOf(+CFG.loudTarget) >= 0 ? +CFG.loudTarget : -14;
+    const budget = CFG.limiterOn ? 3 : 0;
+    const g = Math.min(tg - lint, 20 * Math.log10(0.98 / Math.max(+peak || 0, 1e-4)) + budget);
+    return isFinite(g) ? Math.max(-15, Math.min(12, g)) : 0;
+  }
+  // the target / guard state a gain was computed for
+  const loudTgKey = () => (+CFG.loudTarget) + '|' + (CFG.limiterOn ? 1 : 0);
+  // write the makeup gain of every routed chain: fast = a 50 ms ramp (a remembered value at track
+  // start, a new target); otherwise asymmetric — down in ~1 s (a loud drop after a quiet intro),
+  // up over ~10 s (a correction upward is never a jump)
+  function loudWrite(gDb, fast) {
+    const g = Math.pow(10, gDb / 20), down = gDb < lnorm.nodeDb;
+    sceFx.forEach((e) => {
+      if (!e.routed) return;
+      const p = e.chain.makeup.gain, now = e.ctx.currentTime || 0;
+      try {
+        if (fast) ramp(p, g, now, 0.05);
+        else { p.cancelScheduledValues(now); p.setValueAtTime(p.value, now); p.setTargetAtTime(g, now, down ? 0.3 : 3); }
+      } catch (er) { try { p.value = g; } catch (e2) {} }
+    });
+    lnorm.curGainDb = gDb; lnorm.nodeDb = gDb; meter.gainDb = gDb; lnorm.tgKey = loudTgKey();
+  }
+  // a new target / guard state re-applies the current track's gain at once (2.4 "immediately"); no-op until one is known
+  function loudRetarget() {
+    try {
+      if (!CFG.loudnessOn || !lnorm.src || !isFinite(lnorm.lint) || lnorm.tgKey === loudTgKey()) return;
+      const g = loudGainDb(lnorm.lint, lnorm.trackPeak);
+      if (Math.abs(g - lnorm.curGainDb) > 0.01) { loudWrite(g, true); rememberLoud(true); }
+      else lnorm.tgKey = loudTgKey();
+    } catch (e) {}
+  }
+  // the 500 ms loop: output meter, then one 400 ms K-weighted block from the source taps →
+  // momentary / short-term / gated integrated loudness → the gain once 3 s have been heard
+  function loudTick() {
+    peakTick();
+    try {
+      if (!CFG.loudnessOn) return;
+      const e = newestRouted(); if (!e) return;
+      restoreTrackLoud();   // a track change, or a restore deferred until the duration is known
+      const m = activeMedia();
+      if (!m || m.paused || !(m.readyState > 0)) return;
+      if (isFinite(m.duration) && m.duration > 0) lnorm.dur = m.duration;
+      if (!lnorm.measuring) return;   // a complete remembered value is applied — nothing to measure
+      const c = e.chain, sr = e.ctx.sampleRate || 48000;
+      // 400 ms (up to 81.9 kHz), capped at the tap size: an unguarded 38 400 at 96 k would index below 0
+      const n = Math.max(1, Math.min(Math.round(0.4 * sr), c.bufKL.length));
+      c.kL.getFloatTimeDomainData(c.bufKL); c.kR.getFloatTimeDomainData(c.bufKR);
+      const ms = (b) => { let s = 0; for (let i = b.length - n; i < b.length; i++) s += b[i] * b[i]; return s / n; };
+      const pw = ms(c.bufKL) + ms(c.bufKR);
+      // the source sample peak (peakTick just read the whole pL/pR buffers into meter.srcPeak, dBFS)
+      if (isFinite(meter.srcPeak) && meter.srcPeak > -119) lnorm.trackPeak = Math.max(lnorm.trackPeak, Math.pow(10, meter.srcPeak / 20));
+      if (!(pw >= 1e-12)) return;   // silence (or NaN): no block
+      const Lb = -0.691 + 10 * Math.log10(pw);
+      meter.m = Lb;
+      lnorm.recent.push(pw); if (lnorm.recent.length > 6) lnorm.recent.shift();
+      meter.s = -0.691 + 10 * Math.log10(lnorm.recent.reduce((a, b) => a + b, 0) / lnorm.recent.length);
+      if (Lb > -70 && lnorm.blocks.length < 3000) lnorm.blocks.push(Lb);   // absolute gate; 25 min cap
+      const bl = lnorm.blocks; if (!bl.length) return;
+      const P = bl.map((L) => Math.pow(10, (L + 0.691) / 10));
+      const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+      const Lrel = -0.691 + 10 * Math.log10(mean(P)) - 10;   // relative gate
+      const above = P.filter((v, i) => bl[i] > Lrel);
+      if (!above.length) return;
+      lnorm.lint = -0.691 + 10 * Math.log10(mean(above));
+      meter.i = lnorm.lint;
+      if (bl.length >= 6) {   // 3 s heard — never a gain from a 1.5 s intro
+        lnorm.pending = false;
+        const g = loudGainDb(lnorm.lint, lnorm.trackPeak);
+        if (Math.abs(g - lnorm.curGainDb) > 0.5) { loudWrite(g, false); lnorm.src = 'measured'; rememberLoud(true); }
+        else if (!lnorm.src) { lnorm.src = 'measured'; lnorm.curGainDb = lnorm.nodeDb; meter.gainDb = lnorm.nodeDb; lnorm.tgKey = loudTgKey(); rememberLoud(true); }
+        else rememberLoud(false);   // the 30 s cadence
+      }
+    } catch (e) {}
+  }
+  // ── per-track loudness memory (2.5): GM 'loud:bytrack' → { [href]: { l, p, s, d, t, f } } ──
+  // l / p are SOURCE values (taps at `input`), so they stay valid whatever the chain does later;
+  // f = 1 once at least min(60 s, half the track) has been heard (a complete measurement)
+  function rememberLoud(force) {
+    try {
+      if (!CFG.loudnessOn || !lnorm.href || !isFinite(lnorm.lint) || lnorm.blocks.length < 6) return;
+      if (!force && Date.now() - lnorm.lastWrite < 30000) return;
+      lnorm.lastWrite = Date.now();
+      const s = lnorm.blocks.length * 0.5, d = isFinite(lnorm.dur) ? lnorm.dur : 0;
+      let map = GET('loud:bytrack', {}); if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
+      const old = map[lnorm.href];
+      // a partial re-measurement never replaces a longer one of the same upload
+      if (old && typeof old === 'object' && Math.abs((+old.d || 0) - d) <= 2 && s < (+old.s || 0)) return;
+      map[lnorm.href] = { l: Math.round(lnorm.lint * 10) / 10, p: Math.round(lnorm.trackPeak * 1000) / 1000, s: Math.round(s * 10) / 10, d: Math.round(d * 10) / 10, t: Date.now(), f: s >= Math.min(60, 0.5 * d) ? 1 : 0 };
+      const keys = Object.keys(map);
+      if (keys.length > 1000) { keys.sort((a, b) => (+(map[a] && map[a].t) || 0) - (+(map[b] && map[b].t) || 0)); for (let i = 0; i < keys.length - 1000; i++) delete map[keys[i]]; }
+      SET('loud:bytrack', map);
+    } catch (e) {}
+  }
+  // on a track change (enforce, the loudness tick, a captured element's `playing`): flush the old
+  // track's memory, reset the measurement, and apply a remembered value at once — no slow ramp.
+  // A remembered value is used only when the duration matches (same upload); a complete one
+  // (f = 1) ends the measuring for this track, a partial one is refined and overwritten.
+  function restoreTrackLoud() {
+    try {
+      if (!CFG.loudnessOn) return;
+      const href = curTrackHref();
+      if (href !== lastLoudUrl) {
+        rememberLoud(true);
+        lastLoudUrl = href; loudReset(href);
+        lnorm.pending = !!href;
+      }
+      if (!lnorm.pending) return;
+      let map = GET('loud:bytrack', {}); if (!map || typeof map !== 'object') map = {};
+      const entry = map[lnorm.href];
+      if (!entry || typeof entry !== 'object' || !isFinite(+entry.l)) {
+        // an unknown track starts at unity: never carry a quiet track's +9 dB into the next one
+        lnorm.pending = false; if (lnorm.nodeDb !== 0) loudWrite(0, true); lnorm.curGainDb = 0;
+        return;
+      }
+      const m = activeMedia(), d = m ? +m.duration : NaN;
+      if (!isFinite(d) || d <= 0) return;   // metadata not there yet — again next tick (the measurement takes over after 3 s anyway)
+      lnorm.pending = false; lnorm.dur = d;
+      if (Math.abs((+entry.d || 0) - d) > 2) { if (lnorm.nodeDb !== 0) loudWrite(0, true); lnorm.curGainDb = 0; return; }   // a different upload at this href
+      lnorm.lint = +entry.l; lnorm.trackPeak = Math.max(lnorm.trackPeak, +entry.p || 0); meter.i = lnorm.lint;
+      loudWrite(loudGainDb(lnorm.lint, lnorm.trackPeak), true);
+      lnorm.src = 'remembered';
+      if (entry.f) lnorm.measuring = false;
+    } catch (e) {}
+  }
+  try { W.addEventListener('pagehide', () => { try { rememberLoud(true); } catch (e) {} }); } catch (e) {}
   function updateFade() {
     try {
       const m = activeMedia();
@@ -11289,7 +11415,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { killUpsellBanners(); } catch (e) {}
       try { if (sleepUntil) paintSleep(); } catch (e) {}
       try { if (CFG.speedPerTrack) restoreTrackSpeed(); } catch (e) {}
-      try { if (CFG.loudnessOn) updateLoudness(); } catch (e) {}
+      try { restoreTrackLoud(); } catch (e) {}
       try { if (fxRouted && !loudTimer) peakTick(); } catch (e) {}
       try { if (CFG.fadeOn) updateFade(); } catch (e) {}
       const m = activeMedia();
@@ -11841,7 +11967,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // boost or the clip guard is in play (LUFS / applied only with loudness on, boost only
       // above 100 %, guard only while it reduces); the plain hint otherwise. Real minus signs.
       const fmtDb = (v, plus) => (v < 0 ? '−' : plus ? '+' : '') + Math.abs(v).toFixed(1);
-      let cmpLatched = false, frame = 0, lastSub = '', lastGuard = '';
+      let cmpLatched = false, frame = 0, lastSub = '', lastGuard = '', lastLoud = '';
       const subText = () => {
         if (fxBypass) return 'Comparing · original tone' + (cmpLatched ? ' — click Compare to return' : '');
         const boost = CFG.boostAmt | 0, loud = !!CFG.loudnessOn, gr = +meter.limGr;
@@ -11940,7 +12066,26 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       // ── loudness & dynamics ──
       bodyEl.appendChild(sectionLabel('Loudness & dynamics'));
-      toggleRow('Loudness normalize', 'Even out quiet & loud tracks', 'loudnessOn');
+      // loudness normalize (2.4): the description carries the live state (measuring… / applied /
+      // remembered); the Target select re-applies the gain at once and, like Intensity, wakes the switch
+      const LOUD_DESC = 'Even out quiet & loud tracks';
+      const loudRow = toggleRow('Loudness normalize', LOUD_DESC, 'loudnessOn');
+      const tgRow = D.createElement('div'); tgRow.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0;transition:opacity .15s';
+      const tgL = D.createElement('span'); tgL.textContent = 'Target'; tgL.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
+      tgL.title = 'Quiet −18 · Normal −14 · Loud −11 LUFS';
+      const paintTg = () => { tgRow.style.opacity = CFG.loudnessOn ? '1' : '.45'; };
+      const tgSel = mkSel([['-18', 'Quiet'], ['-14', 'Normal'], ['-11', 'Loud']], () => ([-18, -14, -11].indexOf(CFG.loudTarget | 0) >= 0 ? CFG.loudTarget | 0 : -14),
+        (v) => { CFG.loudTarget = v | 0; if (!CFG.loudnessOn) { CFG.loudnessOn = true; loudRow.sw._paint(); } save(); applyFx(); paintTg(); });
+      loudRow.sw.addEventListener('click', paintTg);
+      tgRow.append(tgL, tgSel); paintTg(); bodyEl.appendChild(tgRow);
+      const loudDesc = () => {
+        if (!CFG.loudnessOn) return LOUD_DESC;
+        const g = +meter.gainDb;
+        if (lnorm.src === 'remembered' && isFinite(g)) return LOUD_DESC + ' · remembered · ' + fmtDb(g, true) + ' dB';
+        if (lnorm.src === 'measured' && isFinite(g)) return LOUD_DESC + ' · ' + fmtDb(g, true) + ' dB applied';
+        return LOUD_DESC + ' · measuring…';
+      };
+      loudRow.desc.textContent = loudDesc();
       // volume boost (2.2): ×1..×3 after the loudness gain, always through the clip guard
       let boostR = null;
       const paintBoost = () => { try { boostR.row.lastChild.style.color = (CFG.boostAmt | 0) > 100 ? '#ff6a1f' : '#86868e'; } catch (e) {} };
@@ -11970,6 +12115,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const gr = +meter.limGr;
           const g = (isFinite(gr) && gr < -0.3) ? GUARD_DESC + ' · ' + fmtDb(gr) + ' dB' : GUARD_DESC;
           if (g !== lastGuard) { lastGuard = g; guard.desc.textContent = g; }
+          const ld = loudDesc();
+          if (ld !== lastLoud) { lastLoud = ld; loudRow.desc.textContent = ld; }
         } catch (e) {}
       };
 
@@ -12141,6 +12288,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           set: (k, v) => { CFG[k] = v; save(); applyFx(); }, get: (k) => CFG[k], cfg: () => Object.assign({}, CFG),
           bypass: (v) => setBypass(v), setBand, curveAt: (f) => eqCurveDbAt(f), curveSample: (x) => satCurveAt(x),
           loudMem: () => GET('loud:bytrack', {}) || {},
+          loudMemClear: () => SET('loud:bytrack', {}),
+          loud: () => ({ href: lnorm.href, blocks: lnorm.blocks.length, lint: lnorm.lint, trackPeak: lnorm.trackPeak, curGainDb: lnorm.curGainDb, nodeDb: lnorm.nodeDb, dur: lnorm.dur, measuring: lnorm.measuring, src: lnorm.src, pending: lnorm.pending }),
+          restoreLoud: () => restoreTrackLoud(),
           ab: (a, b) => { abA = +a; abB = +b; abOn = true; refreshBar(); }, abOn: () => abOn, abClear, rate: () => wantedRate(),
           seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
           toggleMute, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
