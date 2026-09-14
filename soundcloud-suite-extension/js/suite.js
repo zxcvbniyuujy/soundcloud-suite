@@ -11125,6 +11125,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const sl = rd(c.pL, c.bufPL), sr = rd(c.pR, c.bufPR), spk = Math.max(sl.pk, sr.pk);
       meter.srcPeak = spk > 1e-6 ? 20 * Math.log10(spk) : -120;
       try { meter.gr = c.comp.reduction; meter.limGr = c.lim.reduction; } catch (er) {}
+      try { const g = c.makeup.gain.value; meter.gainDb = g > 0 ? 20 * Math.log10(g) : -120; } catch (er) {}
     } catch (e) {}
   }
   // the 500 ms loudness loop (the K-weighted, gated measurement lands with the
@@ -11738,53 +11739,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       };
       const sectionLabel = (txt) => { const s = D.createElement('div'); s.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#76767e;margin:22px 2px 6px'; const d = D.createElement('span'); d.style.cssText = 'width:10px;height:2px;border-radius:2px;flex:none;background:rgba(255,255,255,.16)'; const t = D.createElement('span'); t.textContent = txt; s.append(d, t); return s; };
 
-      // ── header ──
-      const hd = D.createElement('div'); hd.style.cssText = 'display:flex;align-items:center;margin-bottom:14px';
-      const htx = D.createElement('div'); htx.style.cssText = 'flex:1';
-      htx.innerHTML = '<div style="font-size:17px;font-weight:700;letter-spacing:-.4px;color:#fff">Equalizer</div><div style="font-size:11px;color:#7c7c84;margin-top:1px">10-band · drag the curve</div>';
-      const eqSw = makeSwitch(() => CFG.eqOn, () => { CFG.eqOn = !CFG.eqOn; save(); applyFx(); });
-      hd.append(htx, eqSw); host.appendChild(hd);
-
-      // ── EQ curve stage (flat, calm) ──
-      const stage = D.createElement('div'); stage.style.cssText = 'position:relative;border-radius:14px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);overflow:hidden';
-      const canvas = D.createElement('canvas'); canvas.width = 880; canvas.height = 380; canvas.style.cssText = 'display:block;width:100%;height:188px;touch-action:none;cursor:pointer';
-      stage.appendChild(canvas); host.appendChild(stage);
-
-      // ── pre-amp ──
-      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB', 0);
-      pre.row.style.cssText += ';margin-top:6px;border-top:1px solid rgba(255,255,255,.05)';
-      host.appendChild(pre.row);
-
-      // ── presets ──
-      host.appendChild(sectionLabel('Preset'));
-      const repaintAll = () => { eqSw._paint(); pre.paint(); };
-      eqRepaint = repaintAll;
-      const pRow = D.createElement('div'); pRow.style.cssText = 'display:flex;gap:8px;align-items:center';
-      const sel = D.createElement('select'); sel.className = 'sxsel'; sel.style.cssText = 'flex:1;min-width:0;background-color:rgba(255,255,255,.05);border:0;border-radius:10px;color:#e6e6ea;font:500 12.5px inherit;padding:10px 12px;cursor:pointer';
-      const fillSel = () => { sel.replaceChildren(); sel.add(new Option('Choose a preset…', '')); const og1 = D.createElement('optgroup'); og1.label = 'Built-in'; for (const k of Object.keys(EQ_PRESETS)) { const o = new Option(k, 'b:' + k); o.style.color = '#111'; og1.appendChild(o); } sel.add(og1); const cu = (CFG.eqCustom && typeof CFG.eqCustom === 'object') ? CFG.eqCustom : {}; const keys = Object.keys(cu); if (keys.length) { const og2 = D.createElement('optgroup'); og2.label = 'My presets'; for (const k of keys) { const o = new Option(k, 'c:' + k); o.style.color = '#111'; og2.appendChild(o); } sel.add(og2); } sel.value = ''; };
-      fillSel();
       const mkBtn = (txt) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.style.cssText = 'flex:none;border:0;border-radius:10px;padding:10px 14px;font:600 11.5px inherit;cursor:pointer;background:rgba(255,255,255,.06);color:#c4c4ca;transition:background .14s'; b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.11)'; }); b.addEventListener('mouseleave', () => { b.style.background = 'rgba(255,255,255,.06)'; }); return b; };
-      const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '10px 0'; delBtn.style.width = '36px'; delBtn.title = 'Delete preset';
-      sel.addEventListener('change', () => { const v = sel.value; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; if (!v) return; if (v.charAt(0) === 'b') applyEqPreset(EQ_PRESETS[v.slice(2)]); else { const cu = CFG.eqCustom || {}; applyEqPreset(cu[v.slice(2)] || []); } });
-      delBtn.addEventListener('click', () => { const v = sel.value; if (!v || v.charAt(0) !== 'c') return; const name = v.slice(2); const cu = Object.assign({}, CFG.eqCustom); delete cu[name]; CFG.eqCustom = cu; save(); fillSel(); delBtn.style.display = 'none'; toast('Removed “' + name + '”'); });
-      const saveBtn = mkBtn('Save'); saveBtn.addEventListener('click', () => { let name = ''; try { name = W.prompt('Name this EQ preset:', 'My EQ'); } catch (e) {} if (!name) return; name = String(name).slice(0, 24).trim(); if (!name) return; CFG.eqCustom = Object.assign({}, CFG.eqCustom, { [name]: ensureEqBands().slice() }); save(); fillSel(); sel.value = 'c:' + name; delBtn.style.display = ''; toast('Saved “' + name + '”'); });
-      const flatBtn = mkBtn('Reset'); flatBtn.addEventListener('click', () => { applyEqPreset(EQ_PRESETS.Flat); fillSel(); });
-      pRow.append(sel, delBtn, saveBtn, flatBtn); host.appendChild(pRow);
-
-      // ── enhance ──
-      host.appendChild(sectionLabel('Enhance'));
-      const enhHead = D.createElement('div'); enhHead.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)';
-      const enhTx = D.createElement('div'); enhTx.style.cssText = 'flex:1';
-      enhTx.innerHTML = '<div style="font-size:12.5px;color:#e6e6ea">Enhance audio</div><div style="font-size:10.5px;color:#7c7c84;margin-top:2px">Restores clarity, warmth &amp; punch</div>';
-      const intR = sliderRow('Intensity', 0, 100, 5, () => CFG.enhanceAmt | 0, (x) => { CFG.enhanceAmt = x | 0; if (!CFG.enhanceOn) { CFG.enhanceOn = true; enhSw._paint(); intR.row.style.opacity = '1'; } saveSoon(); applyFx(); }, (x) => (x | 0) + '%', 50);
-      const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; });
-      enhHead.append(enhTx, enhSw); host.appendChild(enhHead);
-      intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; host.appendChild(intR.row);
-      const wR = sliderRow('Stereo width', 0, 200, 5, () => CFG.stereoWidth | 0, (x) => { CFG.stereoWidth = x | 0; saveSoon(); applyFx(); }, (x) => ((x | 0) === 0 ? 'Mono' : (x | 0) === 100 ? 'Normal' : (x | 0) + '%'), 100);
-      host.appendChild(wR.row);
-
-      // ── effects ──
-      host.appendChild(sectionLabel('Effects'));
+      // everything after the canvas lives in one body div, dimmed while comparing (2.3)
+      const bodyEl = D.createElement('div'); bodyEl.style.cssText = 'transition:opacity .15s';
       const toggleRow = (label, desc, key) => {
         const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.05)';
         const tx = D.createElement('div'); tx.style.cssText = 'flex:1';
@@ -11792,15 +11749,128 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const t2 = D.createElement('div'); t2.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:2px'; t2.textContent = desc;
         tx.append(t1, t2);
         const sw = makeSwitch(() => CFG[key], () => { CFG[key] = !CFG[key]; save(); applyFx(); });
-        row.append(tx, sw); host.appendChild(row);
+        row.append(tx, sw); bodyEl.appendChild(row); return { row, sw, desc: t2 };
       };
-      toggleRow('Loudness normalize', 'Even out quiet & loud tracks', 'loudnessOn');
+
+      // ── header: title + the live meter line (2.6), Compare (2.3), the EQ switch ──
+      const HINT = '10-band · drag the curve · double-click resets';
+      const hd = D.createElement('div'); hd.style.cssText = 'display:flex;align-items:center;margin-bottom:14px';
+      const htx = D.createElement('div'); htx.style.cssText = 'flex:1;min-width:0';
+      htx.innerHTML = '<div style="font-size:17px;font-weight:700;letter-spacing:-.4px;color:#fff">Equalizer</div><div style="font-size:11px;color:#7c7c84;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>';
+      const subEl = htx.children[1];
+      // the sub-line: the Compare state while comparing; the meter segments while loudness,
+      // boost or the clip guard is in play (LUFS / applied only with loudness on, boost only
+      // above 100 %, guard only while it reduces); the plain hint otherwise. Real minus signs.
+      const fmtDb = (v, plus) => (v < 0 ? '−' : plus ? '+' : '') + Math.abs(v).toFixed(1);
+      let cmpLatched = false, frame = 0, lastSub = '', lastGuard = '';
+      const subText = () => {
+        if (fxBypass) return 'Comparing · original tone' + (cmpLatched ? ' — click Compare to return' : '');
+        const boost = CFG.boostAmt | 0, loud = !!CFG.loudnessOn, gr = +meter.limGr;
+        if (!loud && boost <= 100 && !needsLimiter()) return HINT;
+        const seg = [];
+        if (loud && isFinite(meter.i)) seg.push(fmtDb(meter.i) + ' LUFS');
+        if (isFinite(meter.peak) && meter.peak > -90) seg.push('peak ' + fmtDb(meter.peak) + ' dB');
+        if (loud && isFinite(meter.gainDb) && meter.gainDb > -90) seg.push(fmtDb(meter.gainDb, true) + ' dB applied');
+        if (boost > 100) seg.push('boost ' + boost + ' %');
+        if (isFinite(gr) && gr < -0.3) seg.push('guard ' + fmtDb(gr) + ' dB');
+        return seg.length ? seg.join(' · ') : HINT;
+      };
+      const paintSub = () => { const t = subText(); if (t !== lastSub) { lastSub = t; subEl.textContent = t; } };
+      // Compare: hold to hear the original, a quick click keeps comparing until the next
+      // click (or the tab closes). Tint + body dim make it obvious the switches do not apply.
+      const cmp = mkBtn('Compare'); cmp.style.padding = '7px 11px'; cmp.style.marginRight = '10px'; cmp.style.userSelect = 'none'; cmp.style.touchAction = 'none';
+      cmp.title = 'Hold to hear the original · click to keep comparing';
+      const tintCmp = (v) => { cmp.style.background = v ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; cmp.style.color = v ? '#ffb083' : '#c4c4ca'; };
+      // mkBtn's own hover handlers run first; these keep the tint while comparing
+      cmp.addEventListener('mouseenter', () => { if (fxBypass) tintCmp(true); });
+      cmp.addEventListener('mouseleave', () => { if (fxBypass) tintCmp(true); });
+      let cmpDown = 0;
+      cmp.addEventListener('pointerdown', (ev) => { if (ev.button) return; cmpDown = Date.now(); setBypass(true); });
+      const cmpUp = () => {
+        if (!cmpDown) return;
+        const held = Date.now() - cmpDown; cmpDown = 0;
+        if (held < 350) { cmpLatched = !cmpLatched; setBypass(cmpLatched); }
+        else { cmpLatched = false; setBypass(false); }
+      };
+      cmp.addEventListener('pointerup', cmpUp); cmp.addEventListener('pointerleave', cmpUp); cmp.addEventListener('pointercancel', cmpUp);
+      paintCmp = (v) => { v = !!v; if (!v) cmpLatched = false; tintCmp(v); bodyEl.style.opacity = v ? '.45' : '1'; try { paintSub(); } catch (e) {} };
+      const eqSw = makeSwitch(() => CFG.eqOn, () => { CFG.eqOn = !CFG.eqOn; save(); applyFx(); });
+      hd.append(htx, cmp, eqSw); host.appendChild(hd);
+
+      // ── EQ curve stage (flat, calm) ──
+      const stage = D.createElement('div'); stage.style.cssText = 'position:relative;border-radius:14px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);overflow:hidden';
+      const canvas = D.createElement('canvas'); canvas.width = 880; canvas.height = 380; canvas.style.cssText = 'display:block;width:100%;height:188px;touch-action:none;cursor:pointer';
+      stage.appendChild(canvas); host.appendChild(stage);
+      host.appendChild(bodyEl);
+
+      // ── pre-amp ──
+      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB', 0);
+      pre.row.style.cssText += ';margin-top:6px;border-top:1px solid rgba(255,255,255,.05)';
+      bodyEl.appendChild(pre.row);
+
+      // ── presets ──
+      bodyEl.appendChild(sectionLabel('Preset'));
+      const repaintAll = () => { eqSw._paint(); pre.paint(); };
+      eqRepaint = repaintAll;
+      const pRow = D.createElement('div'); pRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+      const sel = D.createElement('select'); sel.className = 'sxsel'; sel.style.cssText = 'flex:1;min-width:0;background-color:rgba(255,255,255,.05);border:0;border-radius:10px;color:#e6e6ea;font:500 12.5px inherit;padding:10px 12px;cursor:pointer';
+      const fillSel = () => { sel.replaceChildren(); sel.add(new Option('Choose a preset…', '')); const og1 = D.createElement('optgroup'); og1.label = 'Built-in'; for (const k of Object.keys(EQ_PRESETS)) { const o = new Option(k, 'b:' + k); o.style.color = '#111'; og1.appendChild(o); } sel.add(og1); const cu = (CFG.eqCustom && typeof CFG.eqCustom === 'object') ? CFG.eqCustom : {}; const keys = Object.keys(cu); if (keys.length) { const og2 = D.createElement('optgroup'); og2.label = 'My presets'; for (const k of keys) { const o = new Option(k, 'c:' + k); o.style.color = '#111'; og2.appendChild(o); } sel.add(og2); } sel.value = ''; };
+      fillSel();
+      const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '10px 0'; delBtn.style.width = '36px'; delBtn.title = 'Delete preset';
+      sel.addEventListener('change', () => { const v = sel.value; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; if (!v) return; if (v.charAt(0) === 'b') applyEqPreset(EQ_PRESETS[v.slice(2)]); else { const cu = CFG.eqCustom || {}; applyEqPreset(cu[v.slice(2)] || []); } });
+      delBtn.addEventListener('click', () => { const v = sel.value; if (!v || v.charAt(0) !== 'c') return; const name = v.slice(2); const cu = Object.assign({}, CFG.eqCustom); delete cu[name]; CFG.eqCustom = cu; save(); fillSel(); delBtn.style.display = 'none'; toast('Removed “' + name + '”'); });
+      const saveBtn = mkBtn('Save'); saveBtn.addEventListener('click', () => { let name = ''; try { name = W.prompt('Name this EQ preset:', 'My EQ'); } catch (e) {} if (!name) return; name = String(name).slice(0, 24).trim(); if (!name) return; CFG.eqCustom = Object.assign({}, CFG.eqCustom, { [name]: ensureEqBands().slice() }); save(); fillSel(); sel.value = 'c:' + name; delBtn.style.display = ''; toast('Saved “' + name + '”'); });
+      const flatBtn = mkBtn('Reset'); flatBtn.addEventListener('click', () => { applyEqPreset(EQ_PRESETS.Flat); fillSel(); });
+      pRow.append(sel, delBtn, saveBtn, flatBtn); bodyEl.appendChild(pRow);
+
+      // ── playback (speed, vinyl mode and the fade lengths join this section later) ──
+      bodyEl.appendChild(sectionLabel('Playback'));
       toggleRow('Fade in / out', 'Smooth the gap between tracks', 'fadeOn');
+
+      // ── enhance ──
+      bodyEl.appendChild(sectionLabel('Enhance'));
+      const enhHead = D.createElement('div'); enhHead.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)';
+      const enhTx = D.createElement('div'); enhTx.style.cssText = 'flex:1';
+      enhTx.innerHTML = '<div style="font-size:12.5px;color:#e6e6ea">Enhance audio</div><div style="font-size:10.5px;color:#7c7c84;margin-top:2px">Clarity, warmth &amp; punch — level-matched, no loudness trick</div>';
+      const intR = sliderRow('Intensity', 0, 100, 5, () => CFG.enhanceAmt | 0, (x) => { CFG.enhanceAmt = x | 0; if (!CFG.enhanceOn) { CFG.enhanceOn = true; enhSw._paint(); intR.row.style.opacity = '1'; } saveSoon(); applyFx(); }, (x) => (x | 0) + '%', 50);
+      const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; });
+      enhHead.append(enhTx, enhSw); bodyEl.appendChild(enhHead);
+      intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; bodyEl.appendChild(intR.row);
+
+      // ── loudness & dynamics ──
+      bodyEl.appendChild(sectionLabel('Loudness & dynamics'));
+      toggleRow('Loudness normalize', 'Even out quiet & loud tracks', 'loudnessOn');
+      // volume boost (2.2): ×1..×3 after the loudness gain, always through the clip guard
+      let boostR = null;
+      const paintBoost = () => { try { boostR.row.lastChild.style.color = (CFG.boostAmt | 0) > 100 ? '#ff6a1f' : '#86868e'; } catch (e) {} };
+      boostR = sliderRow('Volume boost', 100, 300, 5, () => cl(CFG.boostAmt | 0, 100, 300), (x) => { CFG.boostAmt = x | 0; saveSoon(); applyFx(); paintBoost(); }, (x) => (x | 0) + '%', 100);
+      paintBoost(); bodyEl.appendChild(boostR.row);
+      // clip guard (2.1): the description gains a live gain-reduction suffix while it works
+      const GUARD_DESC = 'Stops boosts from distorting · on automatically when boosting';
+      const guard = toggleRow('Clip guard', GUARD_DESC, 'limiterOn');
+
+      // ── stereo ──
+      bodyEl.appendChild(sectionLabel('Stereo'));
+      const wR = sliderRow('Stereo width', 0, 200, 5, () => CFG.stereoWidth | 0, (x) => { CFG.stereoWidth = x | 0; saveSoon(); applyFx(); }, (x) => ((x | 0) === 0 ? 'Mono' : (x | 0) === 100 ? 'Normal' : (x | 0) + '%'), 100);
+      bodyEl.appendChild(wR.row);
 
       // ── footnote ──
       const note = D.createElement('div'); note.style.cssText = 'margin-top:20px;font-size:10px;color:#67676f;line-height:1.5';
       note.textContent = 'These shape SoundCloud’s audio in real time. Turn them off and playback returns to normal instantly.';
-      host.appendChild(note);
+      bodyEl.appendChild(note);
+
+      // ── the live numbers: output-tap reads at 10 Hz while loudness is off (the loudness
+      //    loop reads them itself otherwise); sub-line + guard suffix repainted at ~5 Hz ──
+      const refreshMeter = () => {
+        try {
+          if (!loudTimer && frame % 6 === 0) peakTick();
+          if (frame % 12) return;
+          paintSub();
+          const gr = +meter.limGr;
+          const g = (isFinite(gr) && gr < -0.3) ? GUARD_DESC + ' · ' + fmtDb(gr) + ' dB' : GUARD_DESC;
+          if (g !== lastGuard) { lastGuard = g; guard.desc.textContent = g; }
+        } catch (e) {}
+      };
 
       // ── EQ curve renderer: calm thin line, soft fill, faint spectrum, small dots ──
       const cx = canvas.getContext('2d');
@@ -11823,6 +11893,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const draw = () => {
         if (!audioTabOn || !canvas.isConnected) { eqRaf = 0; return; }
         eqRaf = requestAnimationFrame(draw);
+        frame++; refreshMeter();
         try {
           cx.clearRect(0, 0, CW, CH);
           const e = [...sceFx].pop(); const ch = e && e.chain;
@@ -11841,6 +11912,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } catch (e) {}
       };
       draw();
+      paintCmp(fxBypass);   // a reopened tab never shows an un-tinted button while bypassed
     } catch (e) {}
   }
   try { SUITE.audioRender = audioRender; } catch (e) {}
