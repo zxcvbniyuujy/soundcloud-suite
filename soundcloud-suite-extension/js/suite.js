@@ -12015,7 +12015,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // boost or the clip guard is in play (LUFS / applied only with loudness on, boost only
       // above 100 %, guard only while it reduces); the plain hint otherwise. Real minus signs.
       const fmtDb = (v, plus) => (v < 0 ? '−' : plus ? '+' : '') + Math.abs(v).toFixed(1);
-      let cmpLatched = false, frame = 0, lastSub = '', lastGuard = '', lastLoud = '';
+      let cmpLatched = false, frame = 0, lastSub = '', lastGuard = '', lastLoud = '', lastNight = '';
       const subText = () => {
         if (fxBypass) return 'Comparing · original tone' + (cmpLatched ? ' — click Compare to return' : '');
         const boost = CFG.boostAmt | 0, loud = !!CFG.loudnessOn, gr = +meter.limGr;
@@ -12172,6 +12172,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         return LOUD_DESC + ' · measuring…';
       };
       loudRow.desc.textContent = loudDesc();
+      // night mode (2.7): the comp as a gentle leveller (Night wins over Enhance's punch). Strength dims
+      // while off and wakes the switch like Intensity does; the description carries the live gain reduction
+      const NIGHT_DESC = 'Quiet parts up, loud parts down · late-night & commute listening';
+      const nightRow = toggleRow('Night mode', NIGHT_DESC, 'nightOn');
+      let strR = null;
+      const paintNight = () => { try { strR.row.style.opacity = CFG.nightOn ? '1' : '.45'; } catch (e) {} };
+      strR = sliderRow('Strength', 0, 100, 5, () => cl(CFG.nightAmt | 0, 0, 100), (x) => { CFG.nightAmt = x | 0; if (!CFG.nightOn) { CFG.nightOn = true; nightRow.sw._paint(); } saveSoon(); applyFx(); paintNight(); }, (x) => (x | 0) + '%', 50);
+      nightRow.sw.addEventListener('click', paintNight);
+      paintNight(); bodyEl.appendChild(strR.row);
+      liveSync.push(syncSlider(strR, () => cl(CFG.nightAmt | 0, 0, 100)), () => { nightRow.sw._paint(); paintNight(); });
       // volume boost (2.2): ×1..×3 after the loudness gain, always through the clip guard
       let boostR = null;
       const paintBoost = () => { try { boostR.row.lastChild.style.color = (CFG.boostAmt | 0) > 100 ? '#ff6a1f' : '#86868e'; } catch (e) {} };
@@ -12219,6 +12229,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const gr = +meter.limGr;
           const g = (isFinite(gr) && gr < -0.3) ? GUARD_DESC + ' · ' + fmtDb(gr) + ' dB' : GUARD_DESC;
           if (g !== lastGuard) { lastGuard = g; guard.desc.textContent = g; }
+          const ng = +meter.gr;
+          const nd = (CFG.nightOn && isFinite(ng) && ng < -0.3) ? NIGHT_DESC + ' · ' + fmtDb(ng) + ' dB' : NIGHT_DESC;
+          if (nd !== lastNight) { lastNight = nd; nightRow.desc.textContent = nd; }
           const ld = loudDesc();
           if (ld !== lastLoud) { lastLoud = ld; loudRow.desc.textContent = ld; }
           paintLc();
