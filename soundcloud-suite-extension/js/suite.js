@@ -11595,6 +11595,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     else { abA = m.currentTime; toast('A moved'); }
     refreshBar();
   }
+  // A–B timeline markers (WP10): 2-px accent spans inside SoundCloud's progress wrapper at A/dur and B/dur
+  // (A alone as soon as it is set); removed on clear. Repainted by refreshBar and, while looping, once a second
+  // from abCheck (the wrapper is re-rendered by SoundCloud on a track change).
+  let abMarkN = 0;
+  function abMarkers() {
+    try {
+      const w = D.querySelector('.playbackTimeline__progressWrapper'), m = activeMedia(), dur = m ? m.duration : NaN;
+      const pts = [abA, abB].filter((t) => t != null && isFinite(t));
+      const want = w && pts.length && isFinite(dur) && dur > 0;
+      D.querySelectorAll('.sce-abmark').forEach((e) => { if (!want || e.parentNode !== w || +e.dataset.i >= pts.length) e.remove(); });
+      if (!want) return;
+      if (!w.style.position && getComputedStyle(w).position === 'static') w.style.position = 'relative';
+      pts.forEach((t, i) => {
+        let el = w.querySelector('.sce-abmark[data-i="' + i + '"]');
+        if (!el) { el = D.createElement('span'); el.className = 'sce-abmark'; el.dataset.i = i; el.style.cssText = 'position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;border-radius:1px;background:#ff6a1f;pointer-events:none;z-index:3'; w.appendChild(el); }
+        const left = Math.max(0, Math.min(100, t / dur * 100)).toFixed(2) + '%'; if (el.style.left !== left) el.style.left = left;
+      });
+    } catch (e) {}
+  }
   // quiet: the loop switched itself off (the user seeked out of it) — a softer toast than an explicit clear
   function abClear(quiet) { abA = abB = null; abM = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
   // 2.28: the wrap is a timer aimed 30 ms of media time before B (rate-aware) plus a 100 ms backstop that survives
@@ -11619,6 +11638,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // another element took over: a track change ends the loop (a fresh element starts at 0, which the outside test below
       // cannot tell from a loop whose A sits at the very start); a merely paused loop element keeps its loop and rests the backstop
       if (abM && m !== abM) { if (!m.paused) abClear(true); else { try { clearInterval(abI); } catch (e) {} abI = 0; } return; }
+      if (!(++abMarkN % 10)) abMarkers();
       const t = m.currentTime;
       if (t < abA - 0.5 || t > abB + 1) { abClear(true); return; }   // the listener seeked outside the loop (checked first: a seek past B must not wrap)
       if (t >= abB - 0.05) { __sceUserSeek = Date.now(); m.currentTime = abA; armAb(); return; }
@@ -12877,6 +12897,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (abOn ? '#ff6a1f' : ''); ab.style.opacity = abOn ? '.95' : ''; ab.style.textShadow = abOn ? '0 0 10px rgba(255,106,31,.55)' : ''; }
       // FX glow (WP10): the hub button wears the speed pill's accent while the listener's own audio settings are
       // engaged (an open tab alone routes the chain but changes nothing audible); the tooltip names it and the boost
+      abMarkers();
       const hb = barWrap.querySelector('.sce-hub');
       if (hb) {
         const fx = fxUserOn() && !fxBypass, bst = CFG.boostAmt | 0;
