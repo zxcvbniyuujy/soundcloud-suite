@@ -10272,12 +10272,29 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const t = (f.t === 'LSC' || f.t === 'HSC') ? f.t : 'PK';
     return { t, f: clampNum(f.f, 20, 20000, 0), g: clampNum(f.g, -15, 15, 0), q: clampNum(f.q == null ? 0.7 : f.q, 0.1, 10, 0) };
   };
+  // a custom preset's name: never a prototype-walking key (Object.assign would honour it)
+  const eqPresetNameOk = (n) => typeof n === 'string' && n.length > 0 && n !== '__proto__' && n !== 'constructor' && n !== 'prototype';
+  const clampBands = (a) => { a = Array.isArray(a) ? a : []; const out = []; for (let i = 0; i < 10; i++) out.push(clampNum(a[i], -12, 12, 1)); return out; };
+  // the custom-preset map, rebuilt entry by entry: arrays (old saves) stay arrays, { b, pre } objects
+  // keep both fields clamped; built without a prototype, then re-plained so storage sees a normal object
+  const clampEqCustom = (v) => {
+    const o = Object.create(null);
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const k of Object.keys(v)) {
+        if (!eqPresetNameOk(k) || k.length > 24) continue;
+        const p = v[k];
+        if (Array.isArray(p)) o[k] = clampBands(p);
+        else if (p && typeof p === 'object' && Array.isArray(p.b)) { const e = { b: clampBands(p.b) }; if (p.pre != null && isFinite(+p.pre)) e.pre = clampNum(p.pre, -12, 12, 1); o[k] = e; }
+      }
+    }
+    return JSON.parse(JSON.stringify(o));
+  };
   // returns a sanitized value for an audio key, or the default when the shape is wrong
   const clampAudioKey = (k, v) => {
     const d = DEFAULTS[k];
-    if (k === 'eqBands') { const a = Array.isArray(v) ? v : []; const out = []; for (let i = 0; i < 10; i++) out.push(clampNum(a[i], -12, 12, 1)); return out; }
+    if (k === 'eqBands') return clampBands(v);
     if (k === 'peq') { return (Array.isArray(v) ? v : []).map(clampPeq).filter(Boolean).slice(0, 10); }
-    if (k === 'eqCustom') { return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}; }
+    if (k === 'eqCustom') return clampEqCustom(v);
     if (typeof v !== typeof d) return (d && typeof d === 'object') ? JSON.parse(JSON.stringify(d)) : d;
     const c = AUDIO_CLAMP[k];
     if (!c) return v;
@@ -10680,21 +10697,31 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
   const EQ_LABELS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
+  // built-in presets: tonal shapes first, then genres (bands at EQ_FREQS, dB)
   const EQ_PRESETS = {
     'Flat': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     'Bass boost': [7, 6, 4, 2, 0, 0, 0, 0, 0, 0],
     'Bass cut': [-8, -6, -3, -1, 0, 0, 0, 0, 0, 0],
+    'Bass reducer': [-6, -5, -3, -1, 0, 0, 0, 0, 0, 0],
     'Treble boost': [0, 0, 0, 0, 0, 1, 2, 4, 5, 6],
-    'Loudness': [6, 4, 2, 0, -1, -1, 0, 2, 4, 6],
+    'Soft highs': [0, 0, 0, 0, 0, 0, -1, -4, -2, -2],
+    'Loudness curve': [6, 4, 2, 0, -1, -1, 0, 2, 4, 6],
+    'Small speakers': [-4, -2, 1, 3, 3, 2, 1, 1, 0, -1],
+    'Late night': [-4, -3, -1, 1, 2, 2, 1, 0, -2, -4],
     'Vocal': [-3, -2, 0, 2, 4, 4, 3, 1, 0, -1],
+    'Podcast': [-8, -6, 0, 3, 4, 4, 3, 1, -2, -4],
     'Rock': [5, 3, 2, 0, -1, 0, 2, 3, 4, 4],
     'Pop': [-1, 0, 2, 3, 3, 2, 0, -1, -1, -1],
     'Electronic': [5, 4, 1, 0, -2, 1, 1, 2, 4, 5],
+    'Dance': [5, 4, 2, 0, 0, -2, -2, 0, 3, 4],
     'Hip-hop': [6, 5, 3, 2, 1, -1, 0, 1, 2, 3],
+    'R&B': [3, 5, 4, 1, -1, -1, 1, 2, 3, 3],
+    'Deep': [4, 3, 1, 1, 2, 2, 1, -1, -3, -4],
     'Jazz': [3, 2, 1, 2, -1, -1, 0, 1, 2, 3],
+    'Classical': [0, 0, 0, 0, 0, 0, -2, -3, -3, -4],
+    'Piano': [2, 1, 0, 2, 3, 1, 2, 3, 2, 1],
     'Acoustic': [4, 3, 2, 1, 1, 1, 2, 3, 3, 2],
     'Lo-fi': [4, 3, 1, 0, 0, -2, -5, -8, -11, -12],
-    'Podcast': [-5, -3, 0, 3, 4, 4, 3, 1, -2, -4],
   };
   // K-weighting (the ITU-R BS.1770 pre-filter + RLB high-pass) derived for any sample
   // rate by the bilinear method libebur128 uses — reproduces the 48 kHz table exactly
@@ -10720,6 +10747,24 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    *   matrix → analyser → makeup → boost → lim → limTrim → [tap] → output
    * Highpass/lowpass biquads cannot be made inert by parameters, so they are either
    * swapped to `peaking` 0 dB (rumble) or live only on paths whose gain is 0. */
+  // the probe bank: a never-connected copy of every linear user stage. Its params are
+  // written with .value (no ramp to lag behind), so getFrequencyResponse gives the true
+  // composite curve for auto-headroom and the canvas. Unconnected nodes cost no render time.
+  function buildProbeBank(ctx) {
+    const biq = (type, f, q, g) => { const b = ctx.createBiquadFilter(); b.type = type; try { b.frequency.value = f; if (q != null) b.Q.value = q; b.gain.value = g || 0; } catch (e) {} return b; };
+    const bands = EQ_NODE_FREQS.map((f, i) => (i === 0 ? biq('lowshelf', f, null, 0) : i === EQ_NODE_FREQS.length - 1 ? biq('highshelf', f, null, 0) : biq('peaking', f, 1.4, 0)));
+    const peq = []; for (let i = 0; i < 10; i++) peq.push(biq('peaking', 1000, 1, 0));
+    return { bands, peq, bass: biq('lowshelf', 100, null, 0), warm: biq('lowshelf', 90, null, 0), air: biq('highshelf', 8500, null, 0),
+      tiltLo: biq('lowshelf', 700, null, 0), tiltHi: biq('highshelf', 700, null, 0), lcLo: biq('lowshelf', 100, null, 0), lcHi: biq('highshelf', 8000, null, 0) };
+  }
+  // before the first play there is no chain (SoundCloud builds its graph on play): a bank on a
+  // tiny offline context answers for the canvas and the pre-amp value until a real chain exists
+  let _probeFallback = null;
+  function fallbackProbe() {
+    if (_probeFallback) return _probeFallback;
+    try { const OAC = W.OfflineAudioContext || window.OfflineAudioContext; if (OAC) _probeFallback = buildProbeBank(new OAC(1, 128, 48000)); } catch (e) { _probeFallback = null; }
+    return _probeFallback;
+  }
   function buildFxChain(ctx) {
     const sr = ctx.sampleRate || 48000;
     const biq = (type, f, q, g) => { const b = ctx.createBiquadFilter(); b.type = type; try { b.frequency.value = f; if (q != null) b.Q.value = q; b.gain.value = g || 0; } catch (e) {} return b; };
@@ -10832,11 +10877,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     for (let i = 0; i < path.length - 1; i++) path[i].connect(path[i + 1]);
     wMerge.connect(cfIn); cfMerge.connect(mxIn); mxMerge.connect(analyser);
     analyser.connect(makeup); makeup.connect(boost); boost.connect(lim); lim.connect(limTrim); limTrim.connect(output);
-    // probe bank — a second, never-connected copy of every linear user stage. Its params
-    // are written with .value (no ramp to lag behind), so getFrequencyResponse gives the
-    // true composite curve for auto-headroom and the canvas. Unconnected nodes cost no render time.
-    const probe = { bands: mkBands(), peq: mkPeq(), bass: biq('lowshelf', 100, null, 0), warm: biq('lowshelf', 90, null, 0), air: biq('highshelf', 8500, null, 0),
-      tiltLo: biq('lowshelf', 700, null, 0), tiltHi: biq('highshelf', 700, null, 0), lcLo: biq('lowshelf', 100, null, 0), lcHi: biq('highshelf', 8000, null, 0) };
+    // probe bank — a second, never-connected copy of every linear user stage (see buildProbeBank)
+    const probe = buildProbeBank(ctx);
     return {
       input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, warm, air, shaper, comp, compTrim,
       widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR,
@@ -10854,7 +10896,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     fr = fr || PROBE_FREQS;
     const n = fr.length, userDb = new Float32Array(n), peqDb = new Float32Array(n);
     try {
-      const e = [...sceFx].pop(); const p = e && e.chain && e.chain.probe;
+      const e = [...sceFx].pop(); const p = (e && e.chain && e.chain.probe) || fallbackProbe();
       if (!p) return { userDb, peqDb };
       const on = (k) => !fxBypass && !!CFG[k];
       const cl = (v, lo, hi) => { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0; };
@@ -11697,17 +11739,43 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const arr = cur.slice();           // fresh array — never mutate the DEFAULTS reference
     arr[i] = v;
     CFG.eqBands = arr;
-    let flipped = false;
-    if (!CFG.eqOn) { CFG.eqOn = true; flipped = true; }   // touching the EQ turns it on
+    if (!CFG.eqOn) CFG.eqOn = true;   // touching the EQ turns it on
     saveSoon(); applyFx();
-    if (flipped && eqRepaint) eqRepaint();
+    if (eqRepaint) eqRepaint();   // the switch when it flipped, the pre-amp value, the preset select's dirty state
   }
-  function applyEqPreset(arr) {
-    const out = (arr || []).slice(0, EQ_FREQS.length).map((x) => Math.max(-12, Math.min(12, Math.round(+x || 0))));
+  // a preset is a bands array (built-ins, old custom saves) or { b: number[10], pre: number }
+  // (custom saves, which remember the pre-amp)
+  const presetBands = (p) => Array.isArray(p) ? p : (p && typeof p === 'object' && Array.isArray(p.b)) ? p.b : [];
+  const presetPre = (p) => (p && !Array.isArray(p) && typeof p === 'object' && p.pre != null && isFinite(+p.pre)) ? Math.max(-12, Math.min(12, Math.round(+p.pre))) : null;
+  const customPresets = () => (CFG.eqCustom && typeof CFG.eqCustom === 'object' && !Array.isArray(CFG.eqCustom)) ? CFG.eqCustom : {};
+  function applyEqPreset(p) {
+    const out = presetBands(p).slice(0, EQ_FREQS.length).map((x) => Math.max(-12, Math.min(12, Math.round(+x || 0))));
     while (out.length < EQ_FREQS.length) out.push(0);
+    const pre = presetPre(p);
     CFG.eqBands = out; CFG.eqOn = true;
+    if (pre != null) CFG.eqPreamp = pre;
     save(); applyFx();
     if (eqRepaint) eqRepaint();
+  }
+  // the preset the current curve equals ('b:Name' | 'c:Name' | '' when edited): bands must match,
+  // and the pre-amp too when the preset stores one. When two presets share a curve (a custom
+  // save of a built-in) the one last chosen or saved wins, so the select shows what the
+  // listener just did; otherwise built-ins come first
+  let eqPresetHint = '';
+  function matchEqPreset() {
+    const cur = ensureEqBands(), pre = CFG.eqPreamp | 0;
+    const same = (p) => {
+      const b = presetBands(p); if (b.length !== cur.length) return false;
+      for (let i = 0; i < b.length; i++) if (Math.round(+b[i] || 0) !== (cur[i] | 0)) return false;
+      const pp = presetPre(p); return pp == null || pp === pre;
+    };
+    const cu = customPresets();
+    const lookup = (key) => { if (!key) return undefined; const n = key.slice(2); if (key.charAt(0) === 'b') return EQ_PRESETS[n]; return (eqPresetNameOk(n) && Object.prototype.hasOwnProperty.call(cu, n)) ? cu[n] : undefined; };
+    const hinted = lookup(eqPresetHint);
+    if (hinted && same(hinted)) return eqPresetHint;
+    for (const k of Object.keys(EQ_PRESETS)) if (same(EQ_PRESETS[k])) return 'b:' + k;
+    for (const k of Object.keys(cu)) if (eqPresetNameOk(k) && same(cu[k])) return 'c:' + k;
+    return '';
   }
   function audioRender(host) {
     try {
@@ -11738,6 +11806,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         row.append(l, r, v); return { row, input: r, paint };
       };
       const sectionLabel = (txt) => { const s = D.createElement('div'); s.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#76767e;margin:22px 2px 6px'; const d = D.createElement('span'); d.style.cssText = 'width:10px;height:2px;border-radius:2px;flex:none;background:rgba(255,255,255,.16)'; const t = D.createElement('span'); t.textContent = txt; s.append(d, t); return s; };
+      // the preset select's clothes, shared by every select, the preset-name input and the paste boxes
+      const SEL_CSS = 'flex:1;min-width:0;background-color:rgba(255,255,255,.05);border:0;border-radius:10px;color:#e6e6ea;font:500 12.5px inherit;padding:10px 12px;cursor:pointer';
+      // a small select: opts = [[value, label], …]; set() receives the chosen value string
+      const mkSel = (opts, get, set) => { const s = D.createElement('select'); s.className = 'sxsel'; s.style.cssText = SEL_CSS; for (const o of opts) { const op = new Option(o[1], String(o[0])); op.style.color = '#111'; s.add(op); } s.value = String(get()); s.addEventListener('change', () => { try { set(s.value); } catch (e) {} }); return s; };
+      // a paste area (AutoEQ text, settings JSON), hidden until its button opens it
+      const pasteBox = (ph) => { const t = D.createElement('textarea'); t.placeholder = ph || ''; t.spellcheck = false; t.style.cssText = SEL_CSS + ';height:96px;resize:vertical;cursor:text;display:none;width:100%;box-sizing:border-box;margin-top:8px;font-family:inherit;outline:0'; return t; };
 
       const mkBtn = (txt) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.style.cssText = 'flex:none;border:0;border-radius:10px;padding:10px 14px;font:600 11.5px inherit;cursor:pointer;background:rgba(255,255,255,.06);color:#c4c4ca;transition:background .14s'; b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.11)'; }); b.addEventListener('mouseleave', () => { b.style.background = 'rgba(255,255,255,.06)'; }); return b; };
       // everything after the canvas lives in one body div, dimmed while comparing (2.3)
@@ -11803,25 +11877,47 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       stage.appendChild(canvas); host.appendChild(stage);
       host.appendChild(bodyEl);
 
-      // ── pre-amp ──
-      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB', 0);
+      // ── pre-amp: the value also shows what auto-headroom (2.9) took off ("0 dB · auto −4") ──
+      const fmtAuto = () => { const h = Math.round(lastHeadroomDb * 10) / 10; return h > 0 ? ' · auto −' + h : ''; };
+      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB' + fmtAuto(), 0);
       pre.row.style.cssText += ';margin-top:6px;border-top:1px solid rgba(255,255,255,.05)';
+      pre.row.lastChild.style.cssText += ';width:auto;min-width:46px;white-space:nowrap';   // room for the auto part
       bodyEl.appendChild(pre.row);
 
-      // ── presets ──
+      // ── presets (2.27): the select mirrors the curve (blank once it is edited), Save is an inline row ──
       bodyEl.appendChild(sectionLabel('Preset'));
-      const repaintAll = () => { eqSw._paint(); pre.paint(); };
-      eqRepaint = repaintAll;
       const pRow = D.createElement('div'); pRow.style.cssText = 'display:flex;gap:8px;align-items:center';
-      const sel = D.createElement('select'); sel.className = 'sxsel'; sel.style.cssText = 'flex:1;min-width:0;background-color:rgba(255,255,255,.05);border:0;border-radius:10px;color:#e6e6ea;font:500 12.5px inherit;padding:10px 12px;cursor:pointer';
-      const fillSel = () => { sel.replaceChildren(); sel.add(new Option('Choose a preset…', '')); const og1 = D.createElement('optgroup'); og1.label = 'Built-in'; for (const k of Object.keys(EQ_PRESETS)) { const o = new Option(k, 'b:' + k); o.style.color = '#111'; og1.appendChild(o); } sel.add(og1); const cu = (CFG.eqCustom && typeof CFG.eqCustom === 'object') ? CFG.eqCustom : {}; const keys = Object.keys(cu); if (keys.length) { const og2 = D.createElement('optgroup'); og2.label = 'My presets'; for (const k of keys) { const o = new Option(k, 'c:' + k); o.style.color = '#111'; og2.appendChild(o); } sel.add(og2); } sel.value = ''; };
+      const sel = D.createElement('select'); sel.className = 'sxsel'; sel.style.cssText = SEL_CSS;
+      const fillSel = () => { sel.replaceChildren(); sel.add(new Option('Choose a preset…', '')); const og1 = D.createElement('optgroup'); og1.label = 'Built-in'; for (const k of Object.keys(EQ_PRESETS)) { const o = new Option(k, 'b:' + k); o.style.color = '#111'; og1.appendChild(o); } sel.add(og1); const keys = Object.keys(customPresets()).filter(eqPresetNameOk); if (keys.length) { const og2 = D.createElement('optgroup'); og2.label = 'My presets'; for (const k of keys) { const o = new Option(k, 'c:' + k); o.style.color = '#111'; og2.appendChild(o); } sel.add(og2); } sel.value = ''; };
       fillSel();
       const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '10px 0'; delBtn.style.width = '36px'; delBtn.title = 'Delete preset';
-      sel.addEventListener('change', () => { const v = sel.value; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; if (!v) return; if (v.charAt(0) === 'b') applyEqPreset(EQ_PRESETS[v.slice(2)]); else { const cu = CFG.eqCustom || {}; applyEqPreset(cu[v.slice(2)] || []); } });
-      delBtn.addEventListener('click', () => { const v = sel.value; if (!v || v.charAt(0) !== 'c') return; const name = v.slice(2); const cu = Object.assign({}, CFG.eqCustom); delete cu[name]; CFG.eqCustom = cu; save(); fillSel(); delBtn.style.display = 'none'; toast('Removed “' + name + '”'); });
-      const saveBtn = mkBtn('Save'); saveBtn.addEventListener('click', () => { let name = ''; try { name = W.prompt('Name this EQ preset:', 'My EQ'); } catch (e) {} if (!name) return; name = String(name).slice(0, 24).trim(); if (!name) return; CFG.eqCustom = Object.assign({}, CFG.eqCustom, { [name]: ensureEqBands().slice() }); save(); fillSel(); sel.value = 'c:' + name; delBtn.style.display = ''; toast('Saved “' + name + '”'); });
-      const flatBtn = mkBtn('Reset'); flatBtn.addEventListener('click', () => { applyEqPreset(EQ_PRESETS.Flat); fillSel(); });
+      // dirty state: the select shows the preset the curve equals, or nothing once a band or the pre-amp moved
+      const syncSel = () => { try { const v = matchEqPreset(); if (sel.value !== v) sel.value = v; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; } catch (e) {} };
+      const repaintAll = () => { eqSw._paint(); pre.paint(); syncSel(); };
+      eqRepaint = repaintAll;
+      syncSel();
+      sel.addEventListener('change', () => { const v = sel.value; if (!v) { syncSel(); return; } eqPresetHint = v; if (v.charAt(0) === 'b') applyEqPreset(EQ_PRESETS[v.slice(2)]); else { const cu = customPresets(), name = v.slice(2); if (Object.prototype.hasOwnProperty.call(cu, name)) applyEqPreset(cu[name]); else syncSel(); } });
+      const setCustom = (cu) => { CFG.eqCustom = clampEqCustom(cu); save(); fillSel(); syncSel(); };
+      delBtn.addEventListener('click', () => { const v = sel.value; if (!v || v.charAt(0) !== 'c') return; const name = v.slice(2); const cu = Object.assign({}, customPresets()); delete cu[name]; setCustom(cu); toast('Removed “' + name + '”'); });
+      // inline Save: a hidden name row under the preset row (no window.prompt); Enter = OK, Escape = Cancel
+      const nRow = D.createElement('div'); nRow.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:8px';
+      const nIn = D.createElement('input'); nIn.type = 'text'; nIn.maxLength = 24; nIn.placeholder = 'Preset name'; nIn.spellcheck = false; nIn.style.cssText = SEL_CSS + ';cursor:text;font-family:inherit;outline:0';
+      const okBtn = mkBtn('OK'), noBtn = mkBtn('Cancel');
+      const showName = (on) => { nRow.style.display = on ? 'flex' : 'none'; if (on) { nIn.value = ''; try { nIn.focus(); } catch (e) {} } };
+      const commitName = () => {
+        const name = String(nIn.value || '').slice(0, 24).trim();
+        if (!eqPresetNameOk(name)) { toast('Not a valid name'); return; }
+        const cu = Object.assign({}, customPresets()); cu[name] = { b: ensureEqBands().slice(), pre: CFG.eqPreamp | 0 };
+        eqPresetHint = 'c:' + name; setCustom(cu); showName(false); toast('Saved “' + name + '”');
+      };
+      okBtn.addEventListener('click', commitName); noBtn.addEventListener('click', () => showName(false));
+      nIn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); commitName(); } else if (ev.key === 'Escape') { ev.preventDefault(); showName(false); } });
+      const saveBtn = mkBtn('Save'); saveBtn.addEventListener('click', () => showName(nRow.style.display === 'none'));
+      const flatBtn = mkBtn('Reset'); flatBtn.addEventListener('click', () => applyEqPreset(EQ_PRESETS.Flat));
       pRow.append(sel, delBtn, saveBtn, flatBtn); bodyEl.appendChild(pRow);
+      nRow.append(nIn, okBtn, noBtn); bodyEl.appendChild(nRow);
+      // auto-headroom (2.9) closes the EQ block
+      toggleRow('Auto-headroom', 'Lowers the volume by your biggest boost so nothing clips', 'eqAutoPre');
 
       // ── playback (speed, vinyl mode and the fade lengths join this section later) ──
       bodyEl.appendChild(sectionLabel('Playback'));
@@ -11872,11 +11968,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } catch (e) {}
       };
 
-      // ── EQ curve renderer: calm thin line, soft fill, faint spectrum, small dots ──
+      // ── EQ curve renderer (2.26): the TRUE composite response from the probe bank (bands +
+      //    bass + tilt, plus the Enhance shelves / contour while they are on) on a log axis, the
+      //    spectrum on the same axis, dotted ±6 / ±12 grid, the AutoEQ bank dashed, small dots ──
       const cx = canvas.getContext('2d');
       const N = EQ_FREQS.length, CW = canvas.width, CH = canvas.height;
       const padX = 30, padY = 48, usableH = CH - padY * 2, midY = padY + usableH / 2;
       const bandX = (i) => padX + (i / (N - 1)) * (CW - padX * 2);
+      // the log axis runs through the handles (31 Hz at bandX(0), 16 kHz at bandX(9)) so every
+      // handle sits on the curve; the curve and the spectrum continue to the canvas edges (≈ 25 Hz .. 20 kHz)
+      const LOGSPAN = Math.log2(EQ_FREQS[N - 1] / EQ_FREQS[0]);
+      const freqX = (f) => padX + Math.log2(f / EQ_FREQS[0]) / LOGSPAN * (CW - padX * 2);
+      const xFreq = (x) => EQ_FREQS[0] * Math.pow(2, (x - padX) / (CW - padX * 2) * LOGSPAN);
       const gainToY = (g) => midY - (cl(g, -12, 12) / 12) * (usableH / 2);
       const gainFromY = (y) => cl(Math.round((midY - y) / (usableH / 2) * 12), -12, 12);
       let dragBand = -1, hoverBand = -1;
@@ -11888,27 +11991,56 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       canvas.addEventListener('pointercancel', () => { dragBand = -1; });
       canvas.addEventListener('pointerleave', () => { hoverBand = -1; });
       canvas.addEventListener('dblclick', (ev) => { const p = evToC(ev); setBand(nearest(p.x), 0); });
-      const curvePath = (pts) => { cx.beginPath(); cx.moveTo(pts[0].x, pts[0].y); for (let i = 0; i < pts.length - 1; i++) { const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2; cx.bezierCurveTo(p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6, p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6, p2.x, p2.y); } };
+      // the composite is read from the probe bank only when applyFx changed something (eqCurveVer)
+      let drawnVer = -1, curve = null, peqCurve = null, peqAny = false, drawnHover = -2, drawnDrag = -2;
+      const refreshCurve = () => { const cd = compositeDb(); curve = cd.userDb; peqCurve = cd.peqDb; peqAny = false; for (let i = 0; i < peqCurve.length; i++) if (Math.abs(peqCurve[i]) > 0.05) { peqAny = true; break; } };
+      const plot = (arr) => { cx.beginPath(); for (let i = 0; i < PROBE_N; i++) { const x = freqX(PROBE_FREQS[i]), y = gainToY(arr[i]); if (i) cx.lineTo(x, y); else cx.moveTo(x, y); } };
+      // spectrum bars: 64 over the same axis, each the max of the FFT bins it spans (recomputed per sample rate)
+      const BARS = 64, barLo = new Int32Array(BARS), barHi = new Int32Array(BARS); let barsSr = 0;
+      const GRID = [12, 6, -6, -12];
       if (eqRaf) { try { cancelAnimationFrame(eqRaf); } catch (e) {} eqRaf = 0; }
       const draw = () => {
         if (!audioTabOn || !canvas.isConnected) { eqRaf = 0; return; }
         eqRaf = requestAnimationFrame(draw);
         frame++; refreshMeter();
         try {
+          const changed = eqCurveVer !== drawnVer;
+          if (changed) { drawnVer = eqCurveVer; refreshCurve(); pre.paint(); syncSel(); }
+          // frame skipping: nothing plays and nothing changed → repaint every 4th frame
+          let idle = false; try { const m = activeMedia(); idle = !m || m.paused; } catch (e) {}
+          if (!changed && idle && hoverBand === drawnHover && dragBand === drawnDrag && (frame & 3)) return;
+          drawnHover = hoverBand; drawnDrag = dragBand;
           cx.clearRect(0, 0, CW, CH);
           const e = [...sceFx].pop(); const ch = e && e.chain;
-          if (ch) { ch.analyser.getByteFrequencyData(ch.freq); const bins = ch.freq, n = bins.length, BARS = 64, bw = CW / BARS; for (let b = 0; b < BARS; b++) { const lo = Math.floor(Math.pow(n, b / BARS)); let hi = Math.floor(Math.pow(n, (b + 1) / BARS)); if (hi <= lo) hi = lo + 1; if (hi > n) hi = n; let m = 0; for (let k = lo; k < hi; k++) if (bins[k] > m) m = bins[k]; const v = m / 255, bh = v * (CH * 0.7); cx.fillStyle = 'rgba(255,255,255,' + (0.03 + v * 0.05).toFixed(3) + ')'; cx.fillRect(b * bw, CH - bh, bw - 1, bh); } }
+          if (ch) {
+            ch.analyser.getByteFrequencyData(ch.freq);
+            const bins = ch.freq, n = bins.length, bw = CW / BARS;
+            let sr = 48000; try { sr = e.ctx.sampleRate || 48000; } catch (er) {}
+            if (sr !== barsSr) { barsSr = sr; const binHz = sr / ch.analyser.fftSize; for (let b = 0; b < BARS; b++) { let lo = Math.floor(xFreq(b * bw) / binHz), hi = Math.floor(xFreq((b + 1) * bw) / binHz); lo = Math.max(1, Math.min(n - 1, lo)); if (hi <= lo) hi = lo + 1; if (hi > n) hi = n; barLo[b] = lo; barHi[b] = hi; } }
+            for (let b = 0; b < BARS; b++) { let m = 0; for (let k = barLo[b]; k < barHi[b]; k++) if (bins[k] > m) m = bins[k]; const v = m / 255, bh = v * (CH * 0.7); cx.fillStyle = 'rgba(255,255,255,' + (0.03 + v * 0.05).toFixed(3) + ')'; cx.fillRect(b * bw, CH - bh, bw - 1, bh); }
+          }
+          // grid: the midline, dotted ±6 / ±12 lines, small labels at the left edge
           cx.strokeStyle = 'rgba(255,255,255,.05)'; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(0, midY); cx.lineTo(CW, midY); cx.stroke();
+          cx.strokeStyle = 'rgba(255,255,255,.04)'; cx.setLineDash([1, 3]); cx.beginPath();
+          for (const g of GRID) { const y = Math.round(gainToY(g)) + 0.5; cx.moveTo(0, y); cx.lineTo(CW, y); }
+          cx.stroke(); cx.setLineDash([]);
+          cx.font = '500 14px -apple-system,BlinkMacSystemFont,sans-serif'; cx.textAlign = 'left'; cx.textBaseline = 'middle'; cx.fillStyle = '#76767e';
+          for (const g of GRID) cx.fillText((g > 0 ? '+' : '−') + Math.abs(g), 6, gainToY(g));
+          cx.textBaseline = 'alphabetic';
           const bands = ensureEqBands();
-          const pts = [{ x: 0, y: gainToY(bands[0] || 0) }];
-          for (let i = 0; i < N; i++) pts.push({ x: bandX(i), y: gainToY(bands[i] || 0) });
-          pts.push({ x: CW, y: gainToY(bands[N - 1] || 0) });
-          curvePath(pts); cx.lineTo(CW, midY); cx.lineTo(0, midY); cx.closePath();
-          const fg = cx.createLinearGradient(0, padY, 0, CH - padY); fg.addColorStop(0, 'rgba(255,90,0,.13)'); fg.addColorStop(.5, 'rgba(255,90,0,.02)'); fg.addColorStop(1, 'rgba(255,90,0,.13)');
-          cx.fillStyle = fg; cx.fill();
-          cx.strokeStyle = '#ff7a3d'; cx.lineWidth = 2; cx.lineJoin = 'round'; curvePath(pts); cx.stroke();
+          if (curve) {
+            // soft fill between the composite and the midline, then the line itself
+            plot(curve); cx.lineTo(freqX(PROBE_FREQS[PROBE_N - 1]), midY); cx.lineTo(freqX(PROBE_FREQS[0]), midY); cx.closePath();
+            const fg = cx.createLinearGradient(0, padY, 0, CH - padY); fg.addColorStop(0, 'rgba(255,90,0,.13)'); fg.addColorStop(.5, 'rgba(255,90,0,.02)'); fg.addColorStop(1, 'rgba(255,90,0,.13)');
+            cx.fillStyle = fg; cx.fill();
+            cx.strokeStyle = '#ff7a3d'; cx.lineWidth = 2; cx.lineJoin = 'round'; plot(curve); cx.stroke();
+            // the headphone-correction bank, dashed, only while it does something
+            if (peqAny) { cx.setLineDash([6, 5]); cx.strokeStyle = 'rgba(255,255,255,.35)'; cx.lineWidth = 1.5; plot(peqCurve); cx.stroke(); cx.setLineDash([]); }
+          }
           cx.font = '500 15px -apple-system,BlinkMacSystemFont,sans-serif'; cx.textAlign = 'center';
           for (let i = 0; i < N; i++) { const x = bandX(i), y = gainToY(bands[i] || 0), act = (i === dragBand || i === hoverBand); cx.fillStyle = act ? 'rgba(255,170,120,.85)' : 'rgba(150,150,160,.36)'; cx.fillText(EQ_LABELS[i], x, CH - 16); cx.beginPath(); cx.arc(x, y, act ? 5.5 : 4, 0, 7); cx.fillStyle = act ? '#ff7a3d' : '#fff'; cx.fill(); }
+          // the value while dragging, just above the handle
+          if (dragBand >= 0) { const g = bands[dragBand] | 0; cx.fillStyle = 'rgba(255,170,120,.85)'; cx.fillText((g > 0 ? '+' : g < 0 ? '−' : '') + Math.abs(g) + ' dB', bandX(dragBand), gainToY(g) - 16); }
         } catch (e) {}
       };
       draw();
@@ -12684,8 +12816,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       if (DARK_THEMES && DARK_THEMES.dark) { CFG.theme = 'dark'; CFG.autoDark = false; }
       CFG.eqOn = true;
-      CFG.eqBands = [3, 2, 1, 0, 0, 0, 1, 2, 3, 3];   // gentle bass + presence + air "smile"
-      CFG.eqPreamp = -1;
+      CFG.eqBands = [3, 2, 1, 0, 0, 0, 1, 2, 3, 3];   // gentle bass + presence + air "smile" (auto-headroom takes the +3 off the pre-amp)
       CFG.loudnessOn = true;
       CFG.enhanceOn = true; CFG.enhanceAmt = 55;
       CFG.stereoWidth = 122;
