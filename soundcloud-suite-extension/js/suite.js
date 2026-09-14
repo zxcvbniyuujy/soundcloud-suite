@@ -10733,12 +10733,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { D.addEventListener('visibilitychange', () => { try { if (D.hidden) setBypass(false); } catch (e) {} }); } catch (e) {}
   // the Audio tab routes the (transparent) chain so the spectrum analyser gets a
   // live signal even before any effect is actually enabled
-  function fxOn() {
+  function fxUserOn() {
     return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || CFG.peqOn || CFG.nightOn || CFG.loudCompOn
       || CFG.crossfeedOn || CFG.monoOn || CFG.swapLR
       || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0
-      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (CFG.boostAmt | 0) > 100 || audioTabOn);
+      || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (CFG.boostAmt | 0) > 100);
   }
+  function fxOn() { return fxUserOn() || audioTabOn; }
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
   const EQ_LABELS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
   // built-in presets: tonal shapes first, then genres (bands at EQ_FREQS, dB)
@@ -11213,6 +11214,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!keep('loudnessOn')) { if (lnorm.href != null || lnorm.src || lnorm.blocks.length) loudReset(null); lastLoudUrl = null; lnorm.nodeDb = 0; }
       else loudRetarget();   // a new target or guard state re-applies the gain immediately
       eqCurveVer++;
+      try { refreshBar(); } catch (er) {}   // the player-bar FX glow (WP10)
     } catch (e) { Log.err('applyFx', e); }
   }
   // ── Listening on (2.13): one tap sets a bundle for the output in use. Never auto-applied
@@ -12873,6 +12875,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       show('.sce-info', CFG.barInfo);
       const ab = barWrap.querySelector('.sce-ab');
       if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (abOn ? '#ff6a1f' : ''); ab.style.opacity = abOn ? '.95' : ''; ab.style.textShadow = abOn ? '0 0 10px rgba(255,106,31,.55)' : ''; }
+      // FX glow (WP10): the hub button wears the speed pill's accent while the listener's own audio settings are
+      // engaged (an open tab alone routes the chain but changes nothing audible); the tooltip names it and the boost
+      const hb = barWrap.querySelector('.sce-hub');
+      if (hb) {
+        const fx = fxUserOn() && !fxBypass, bst = CFG.boostAmt | 0;
+        hb.style.color = fx ? '#ff6a1f' : ''; hb.style.opacity = fx ? '.95' : ''; hb.style.textShadow = fx ? '0 0 10px rgba(255,106,31,.55)' : '';
+        hb._tip = fx ? 'Audio FX on' + (bst > 100 ? ' · boost ' + bst + ' %' : '') : '';
+        const t = 'Open / close the lyrics hub' + (hb._tip ? ' · ' + hb._tip : ''); if (hb.title !== t) hb.title = t;
+      }
     } catch (e) {}
   }
   function ensureBar() {
@@ -12906,7 +12917,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         b.type = 'button'; b.className = cls; b.title = title; b.setAttribute('aria-label', title);
         b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;background:none;border:0;color:inherit;opacity:.55;cursor:pointer;font:800 10px/1 inherit;padding:0 ' + (isHtml ? '0' : '5px') + ';min-width:26px;height:26px;border-radius:7px;transition:opacity .14s ease,background .14s ease,color .14s ease';
         if (isHtml) b.innerHTML = content; else b.textContent = content;
-        b.addEventListener('mouseenter', () => { b.style.opacity = '1'; b.style.background = 'rgba(255,90,0,.15)'; b.style.color = '#ff6a1f'; showTip(b, label); });
+        b.addEventListener('mouseenter', () => { b.style.opacity = '1'; b.style.background = 'rgba(255,90,0,.15)'; b.style.color = '#ff6a1f'; showTip(b, b._tip || label); });
         b.addEventListener('mouseleave', () => { b.style.background = 'none'; b.style.color = ''; b.style.opacity = ''; hideTip(); refreshBar(); });
         b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
         return b;
