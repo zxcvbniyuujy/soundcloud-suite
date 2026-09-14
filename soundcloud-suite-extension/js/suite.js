@@ -3512,6 +3512,7 @@
         clear() { try { clearSleep(); } catch (e) {} },
         remainingMs() { try { return sleepRemainingMs(); } catch (e) { return 0; } },
         armed() { try { return sleepArmed; } catch (e) { return false; } },
+        fading() { try { return fading; } catch (e) { return false; } },   // the enhancer's volume memory pauses during the fade
     };
 
     function boot() {
@@ -11661,7 +11662,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } else {
           const now = Date.now();
           // never remember a mute (M) or a near-silent level as "the volume": unmuting / the next session would restore silence
-          if (mutedVol == null && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
+          // (nor a sleep-timer fade in flight: its stepped-down levels are not "the volume" either)
+          let sleepFading = false; try { sleepFading = !!(SUITE.sleep && SUITE.sleep.fading && SUITE.sleep.fading()); } catch (e) {}
+          if (mutedVol == null && !sleepFading && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
         }
       }
     } catch (e) {}
