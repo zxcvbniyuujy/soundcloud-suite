@@ -3602,6 +3602,317 @@
    *  1. MEDIA HOOK — smooth time + seeking through SC's own timeline
    * ------------------------------------------------------------------ */
 
+  // auto-align state shared by the renderer (defined first) and App (defined later): ms on the clock side
+  const SyncAuto = { ms: 0, conf: 0, last: null };
+  /* lyric-align.js — constant-lag estimator for per-line synced lyrics (LRC sheets).
+   *
+   * LYRIC_ALIGN.create(ctx, sourceNode, opts) → tracker
+   *   Taps sourceNode (SoundCloud's MediaElementAudioSourceNode, or any AudioNode) with two
+   *   analyser branches of its own. The branches have NO downstream connections, so the audible
+   *   path is untouched (Chromium still renders analysers that have no outputs). The tap is made
+   *   with AudioNode.prototype.connect so an instance-level connect() wrapper on the source (the
+   *   extension's FX router installs one) is neither triggered nor confused.
+   *
+   *   Branch A "mid":  source → Gain(channelCount 1, explicit → 0.5·(L+R)) → HP 250 Hz ×2 → LP 3.5 kHz → Analyser
+   *   Branch B "side": source → Splitter → (+0.5·L) + (−0.5·R) → same filters → Analyser
+   *   Every hop (20 ms) a timer reads both analysers' 2048-sample time-domain buffers, takes the
+   *   mean square of each and adds them to a grid keyed by MEDIA time (opts.mediaTime()), so seeks
+   *   and pauses do not corrupt the envelope; frames past opts.windowSec (default 90 s) are ignored
+   *   and the timer idles there (no analyser reads).
+   *
+   *   opts.mediaTime()      REQUIRED — the media element's currentTime in seconds.
+   *   opts.paused()         optional — true while paused (frames are dropped).
+   *   opts.playbackRate()   optional — when != 1 frames are stamped straight from mediaTime().
+   *   opts.windowSec        recorded media-time span (default 90).
+   *   opts.hopMs            grid step (default 20; the analysis constants assume 20).
+   *
+   * tracker.estimate(lineStartsSec) → { lagSec, confidence, peak, runnerUp, samples, linesUsed, reason, stats }
+   *   SIGN CONVENTION — lagSec is the constant to ADD to every lyric timestamp so the sheet lines up
+   *   with the audio the page is playing:  displayTime(line) = lrcTime(line) + lagSec.
+   *   lagSec > 0 ⇒ the vocal entries happen LATER than the sheet says (the sheet is EARLY / fires too
+   *   soon) and delaying it by lagSec fixes that. lagSec < 0 ⇒ the sheet is LATE; add the negative.
+   *   confidence ∈ [0, 1]. When the estimator declines, lagSec is 0, confidence 0 and reason is set
+   *   ('too-few-lines' | 'no-audio' | 'silence' | 'no-activity' | 'flat').
+   *   peak = { lagSec, score, z }  runnerUp = { lagSec, score, ratio }  samples = covered frames.
+   * tracker.stats()    → { ticks, cpuMs, frames, hop }  timer CPU accounting (performance.now only).
+   * tracker.envelope() → { mid, side, cnt, hop } copy of the raw grid (for offline analysis).
+   * tracker.dispose()  → stops the timer and disconnects the taps.
+   *
+   * LYRIC_ALIGN.analyse(envelope, lineStartsSec, opts) is the pure DSP core (no Web Audio), used by
+   * estimate() and by offline tests. All timing comes from ctx.currentTime / mediaTime(); the wall clock
+   * is never used (wall-clock-free).
+   *
+   * Method: per frame, the "centre" band energy c = max(mid − side, 0.05·mid) (a centred vocal has
+   * mid ≫ side; wide-panned instruments have mid ≈ side) is taken in dB and floored 60 dB below the
+   * loudest frame. A sustain-aware onset function is the half-wave-rectified STEP response: the mean
+   * level of the next W frames minus the mean of the previous W frames, at W = 6 (120 ms) and W = 12
+   * (240 ms), each compressed by tanh(step / 6 dB) and summed. A drum hit that lasts 50 ms raises the
+   * 240 ms forward mean by only ~1/5 of its height, a vocal phrase that sustains ≥ 250 ms raises it
+   * fully — that is the "sustain-aware" part. The onset function is cross-correlated with the sheet's
+   * line-start impulse train (Gaussian-smoothed by ±1 frame) for lags in ±2.5 s at 20 ms steps;
+   * lags out to ±6 s are also computed and serve as the null distribution (median and MAD → robust σ).
+   * Peaks: local maxima inside ±2.5 s whose height is within NEAR_PEAK_FRAC (15 %) of the best
+   * prominence compete, and the one nearest 0 wins (community sheets are usually within ±0.5 s; a
+   * secondary peak at ± one beat period is the classic ambiguity and this rule states the prior
+   * explicitly). Confidence = pz·√pr·pn with pz = clamp((z − 4)/4) from the peak's prominence in
+   * robust σ units, pr = clamp((1 − ratio)/0.5) from the runner-up (best local maximum outside
+   * ±150 ms of the winner) relative to the winner's prominence, and pn = clamp((linesUsed − 4)/8)
+   * so 6-line sheets cannot be fully confident.
+   */
+  const LYRIC_ALIGN = (function () {
+    'use strict';
+
+    var DEFAULT_HOP_MS = 20;
+    var MAX_LAG_SEC = 2.5;        // decision range for the lag
+    var NULL_LAG_SEC = 6;         // range whose correlation values form the null statistics
+    var STEP_SHORT = 6;           // 120 ms step detector (frames at 20 ms)
+    var STEP_LONG = 12;           // 240 ms step detector
+    var ONSET_SCALE_DB = 6;       // tanh compression scale for a rectified step, in dB
+    var LEVEL_FLOOR_DB = 60;      // per-frame level floored this far below the loudest frame
+    var NEAR_PEAK_FRAC = 0.15;    // peaks within 15 % of the top prominence compete; nearest 0 wins
+    var EXCLUDE_SEC = 0.15;       // runner-up must sit outside ±150 ms of the chosen peak
+    var Z_LO = 4, Z_HI = 8;       // prominence (robust σ) → 0..1
+    var RATIO_FULL = 0.5;         // runner-up ratio ≤ 0.5 → full marks, 1.0 → none
+    var MIN_LINES = 6;            // fewer usable lines → decline
+    var MIN_COVER_SEC = 15;       // less recorded audio than this → decline
+    var SILENCE_DB = -60;         // loudest mid-band frame below this (dBFS of mean square) → 'silence'
+    var ACTIVITY_MIN = 0.004;     // fraction of frames with onset > 0.3 required (else 'no-activity')
+    var GAP_W_LO = 1, GAP_W_HI = 4;  // line weight 0.5 → 1 as the gap to the previous line goes 1 → 4 s
+    var EPS = 1e-10;
+
+    function clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+    function median(a) {
+      if (!a.length) return NaN;
+      var b = Array.prototype.slice.call(a).sort(function (x, y) { return x - y; });
+      var h = b.length >> 1;
+      return b.length % 2 ? b[h] : 0.5 * (b[h - 1] + b[h]);
+    }
+    function meanSq(buf) { var s = 0; for (var i = 0; i < buf.length; i++) s += buf[i] * buf[i]; return s / buf.length; }
+    function tanh(x) { if (x > 20) return 1; if (x < -20) return -1; var e = Math.exp(2 * x); return (e - 1) / (e + 1); }
+    function round3(x) { return Math.round(x * 1000) / 1000; }
+
+    function decline(reason, extra) {
+      var r = { lagSec: 0, confidence: 0, peak: null, runnerUp: null, samples: 0, linesUsed: 0, reason: reason };
+      if (extra) for (var k in extra) r[k] = extra[k];
+      return r;
+    }
+
+    /* ── pure DSP core ─────────────────────────────────────────────────────────────── */
+    function analyse(env, lineStarts, opts) {
+      opts = opts || {};
+      var hop = env.hop > 0 ? env.hop : DEFAULT_HOP_MS / 1000;
+      var mid = env.mid, side = env.side, cnt = env.cnt, n = mid.length;
+      var maxLag = Math.round((opts.maxLagSec > 0 ? opts.maxLagSec : MAX_LAG_SEC) / hop);
+      var nullLag = Math.max(maxLag, Math.round(NULL_LAG_SEC / hop));
+      var i, k;
+
+      // 1. per-frame centre level in dB; validity from the sample count
+      var lvl = new Float32Array(n), valid = new Uint8Array(n);
+      var covered = 0, maxMid = -Infinity, maxC = -Infinity;
+      for (i = 0; i < n; i++) {
+        if (!cnt[i]) continue;
+        var m = mid[i] / cnt[i], s = side[i] / cnt[i];
+        var c = m - s; if (c < 0.05 * m) c = 0.05 * m;
+        var ml = 10 * Math.log10(m + EPS), cl = 10 * Math.log10(c + EPS);
+        lvl[i] = cl; valid[i] = 1; covered++;
+        if (ml > maxMid) maxMid = ml;
+        if (cl > maxC) maxC = cl;
+      }
+      var stats = { coveredSec: round3(covered * hop), maxMidDb: round3(maxMid) };
+      if (covered * hop < MIN_COVER_SEC) return decline('no-audio', { samples: covered, stats: stats });
+      if (maxMid < SILENCE_DB) return decline('silence', { samples: covered, stats: stats });
+      var floor = maxC - LEVEL_FLOOR_DB;
+      for (i = 0; i < n; i++) if (valid[i] && lvl[i] < floor) lvl[i] = floor;
+
+      // 2. sustain-aware onset function: rectified step response at two scales
+      var on = new Float32Array(n), onValid = new Uint8Array(n);
+      var runValid = new Int32Array(n + 1), pre = new Float64Array(n + 1);   // prefix sums
+      for (i = 0; i < n; i++) { runValid[i + 1] = runValid[i] + valid[i]; pre[i + 1] = pre[i] + (valid[i] ? lvl[i] : 0); }
+      var step = function (i0, W) {
+        // mean(lvl[i0 .. i0+W-1]) − mean(lvl[i0-W .. i0-1]); NaN unless every frame is valid
+        if (i0 - W < 0 || i0 + W > n) return NaN;
+        if (runValid[i0 + W] - runValid[i0 - W] !== 2 * W) return NaN;
+        return (pre[i0 + W] - pre[i0]) / W - (pre[i0] - pre[i0 - W]) / W;
+      };
+      var active = 0;
+      for (i = 0; i < n; i++) {
+        var a = step(i, STEP_SHORT), b = step(i, STEP_LONG);
+        if (isNaN(a) || isNaN(b)) continue;   // NaN → gap
+        var v = tanh(Math.max(0, a) / ONSET_SCALE_DB) + tanh(Math.max(0, b) / ONSET_SCALE_DB);
+        on[i] = v; onValid[i] = 1;
+        if (v > 0.3) active++;
+      }
+      var onCount = 0; for (i = 0; i < n; i++) onCount += onValid[i];
+      stats.activity = onCount ? round3(active / onCount) : 0;
+      if (!onCount || active / onCount < ACTIVITY_MIN) return decline('no-activity', { samples: covered, stats: stats });
+      // ±1-frame Gaussian smoothing of the impulse train ≡ smoothing the onset function
+      var sm = new Float32Array(n);
+      for (i = 0; i < n; i++) {
+        if (!onValid[i]) continue;
+        var acc = 0.5 * on[i], wsum = 0.5;
+        if (i > 0 && onValid[i - 1]) { acc += 0.25 * on[i - 1]; wsum += 0.25; }
+        if (i + 1 < n && onValid[i + 1]) { acc += 0.25 * on[i + 1]; wsum += 0.25; }
+        sm[i] = acc / wsum;
+      }
+
+      // 3. line impulses (frame index + weight from the gap to the previous line)
+      var lines = [];
+      var ls = Array.prototype.slice.call(lineStarts || []).map(Number).filter(function (t) { return !isNaN(t) && t >= 0; }).sort(function (x, y) { return x - y; });
+      var windowSec = n * hop;
+      for (i = 0; i < ls.length; i++) {
+        if (i > 0 && ls[i] - ls[i - 1] < 0.05) continue;   // duplicate timestamp (bilingual sheets)
+        if (ls[i] > windowSec) break;
+        var gap = i > 0 ? ls[i] - ls[i - 1] : GAP_W_HI;
+        var w = 0.5 + 0.5 * clamp01((gap - GAP_W_LO) / (GAP_W_HI - GAP_W_LO));
+        lines.push({ f: Math.round(ls[i] / hop), w: w });
+      }
+      // usable = the line's own frame is inside the recorded envelope
+      var used = 0, wTotal = 0;
+      for (i = 0; i < lines.length; i++) { var f = lines[i].f; if (f >= 0 && f < n && onValid[f]) { used++; wTotal += lines[i].w; } }
+      stats.linesInWindow = lines.length;
+      if (used < MIN_LINES) return decline('too-few-lines', { samples: covered, linesUsed: used, stats: stats });
+
+      // 4. cross-correlation over lags (lag > 0 ⇒ audio event later than the sheet ⇒ sheet early)
+      var L = 2 * nullLag + 1, cc = new Float64Array(L), ccOk = new Uint8Array(L);
+      for (k = -nullLag; k <= nullLag; k++) {
+        var sum = 0, ws = 0;
+        for (i = 0; i < lines.length; i++) {
+          var idx = lines[i].f + k;
+          if (idx < 0 || idx >= n || !onValid[idx]) continue;
+          sum += lines[i].w * sm[idx]; ws += lines[i].w;
+        }
+        if (ws >= 0.5 * wTotal) { cc[k + nullLag] = sum / ws; ccOk[k + nullLag] = 1; }
+      }
+      var fin = []; for (k = 0; k < L; k++) if (ccOk[k]) fin.push(cc[k]);
+      if (fin.length < 20) return decline('no-audio', { samples: covered, linesUsed: used, stats: stats });
+      var med = median(fin), dev = []; for (k = 0; k < fin.length; k++) dev.push(Math.abs(fin[k] - med));
+      var sd = 1.4826 * median(dev);
+      stats.ccMedian = round3(med); stats.ccSigma = round3(sd);
+      if (!(sd > 1e-6)) return decline('flat', { samples: covered, linesUsed: used, stats: stats });
+
+      // 5. local maxima inside the decision range
+      var peaks = [], top = -Infinity;
+      for (k = -maxLag; k <= maxLag; k++) {
+        var j = k + nullLag;
+        if (!ccOk[j]) continue;
+        var lft = j > 0 && ccOk[j - 1] ? cc[j - 1] : -Infinity, rgt = j + 1 < L && ccOk[j + 1] ? cc[j + 1] : -Infinity;
+        if (cc[j] > lft && cc[j] >= rgt) { peaks.push({ k: k, v: cc[j] }); if (cc[j] > top) top = cc[j]; }
+      }
+      if (!peaks.length || !(top > med)) return decline('flat', { samples: covered, linesUsed: used, stats: stats });
+      var thresh = top - NEAR_PEAK_FRAC * (top - med), chosen = null;
+      for (i = 0; i < peaks.length; i++) {
+        if (peaks[i].v < thresh) continue;
+        if (!chosen || Math.abs(peaks[i].k) < Math.abs(chosen.k)) chosen = peaks[i];
+      }
+      var excl = Math.round(EXCLUDE_SEC / hop), ru = null;
+      for (i = 0; i < peaks.length; i++) {
+        if (Math.abs(peaks[i].k - chosen.k) <= excl) continue;
+        if (!ru || peaks[i].v > ru.v) ru = peaks[i];
+      }
+      // parabolic interpolation for a sub-frame lag
+      var jc = chosen.k + nullLag, frac = 0;
+      if (jc > 0 && jc + 1 < L && ccOk[jc - 1] && ccOk[jc + 1]) {
+        var y0 = cc[jc - 1], y1 = cc[jc], y2 = cc[jc + 1], den = y0 - 2 * y1 + y2;
+        if (den < 0) { frac = 0.5 * (y0 - y2) / den; if (frac > 0.5) frac = 0.5; if (frac < -0.5) frac = -0.5; }
+      }
+      var prom = chosen.v - med, z = prom / sd;
+      var ratio = ru ? Math.max(0, (ru.v - med) / prom) : 0;
+      var pz = clamp01((z - Z_LO) / (Z_HI - Z_LO));
+      var pr = clamp01((1 - ratio) / (1 - RATIO_FULL));
+      var pn = clamp01((used - 4) / 8);
+      var conf = pz * Math.sqrt(pr) * pn;
+      stats.pz = round3(pz); stats.pr = round3(pr); stats.pn = round3(pn); stats.globalMaxLagSec = round3(peaks.filter(function (p) { return p.v === top; })[0].k * hop);
+      return {
+        lagSec: round3((chosen.k + frac) * hop),
+        confidence: round3(conf),
+        peak: { lagSec: round3(chosen.k * hop), score: round3(chosen.v), z: round3(z) },
+        runnerUp: ru ? { lagSec: round3(ru.k * hop), score: round3(ru.v), ratio: round3(ratio) } : null,
+        samples: covered, linesUsed: used, reason: '', stats: stats,
+      };
+    }
+
+    /* ── live tracker on a Web Audio graph ─────────────────────────────────────────── */
+    function create(ctx, src, opts) {
+      opts = opts || {};
+      if (!ctx || !src || typeof opts.mediaTime !== 'function') throw new Error('LYRIC_ALIGN.create: ctx, sourceNode and opts.mediaTime() are required');
+      var hopMs = opts.hopMs > 0 ? +opts.hopMs : DEFAULT_HOP_MS, hop = hopMs / 1000;
+      var windowSec = opts.windowSec > 0 ? +opts.windowSec : 90;
+      var n = Math.ceil(windowSec / hop) + 1;
+      var env = { mid: new Float32Array(n), side: new Float32Array(n), cnt: new Uint16Array(n), hop: hop };
+      var FFT = 2048, buf = new Float32Array(FFT);
+      var own = [];
+      var gain = function (g) { var nd = ctx.createGain(); nd.gain.value = g; own.push(nd); return nd; };
+      var biquad = function (type, f) { var nd = ctx.createBiquadFilter(); nd.type = type; nd.frequency.value = f; nd.Q.value = 0.7071; own.push(nd); return nd; };
+      var branch = function (input) {
+        var hp1 = biquad('highpass', 250), hp2 = biquad('highpass', 250), lp = biquad('lowpass', 3500);
+        var an = ctx.createAnalyser(); an.fftSize = FFT; an.smoothingTimeConstant = 0; own.push(an);
+        input.connect(hp1); hp1.connect(hp2); hp2.connect(lp); lp.connect(an);
+        return an;
+      };
+      // mid: explicit mono down-mix = 0.5·(L+R)
+      var midIn = gain(1); midIn.channelCount = 1; midIn.channelCountMode = 'explicit'; midIn.channelInterpretation = 'speakers';
+      // side: 0.5·L − 0.5·R summed into a mono gain
+      var split = ctx.createChannelSplitter(2); own.push(split);
+      var gl = gain(0.5), gr = gain(-0.5), sideIn = gain(1); sideIn.channelCount = 1; sideIn.channelCountMode = 'explicit';
+      split.connect(gl, 0); split.connect(gr, 1); gl.connect(sideIn); gr.connect(sideIn);
+      var anM = branch(midIn), anS = branch(sideIn);
+      var rawConnect = (opts.rawConnect === false || !W.AudioNode) ? src.connect : W.AudioNode.prototype.connect;
+      var rawDisconnect = (opts.rawConnect === false || !W.AudioNode) ? src.disconnect : W.AudioNode.prototype.disconnect;
+      rawConnect.call(src, midIn); rawConnect.call(src, split);
+
+      var halfWin = (FFT / 2) / ctx.sampleRate;
+      var lastMt = -1, seg = null, ticks = 0, cpuMs = 0, frames = 0, disposed = false;
+      var now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0; };
+      var body = function () {
+        var mt = +opts.mediaTime();
+        if (!(mt >= 0) || mt === Infinity) { seg = null; lastMt = -1; return; }
+        if (opts.paused && opts.paused()) { seg = null; lastMt = mt; return; }
+        if (mt === lastMt) { seg = null; return; }   // frozen clock: paused / stalled
+        lastMt = mt;
+        var t, rate = opts.playbackRate ? +opts.playbackRate() : 1;
+        if (rate && Math.abs(rate - 1) > 0.01) t = mt;
+        else {
+          // media time = render clock + offset; the offset is constant between seeks, so a running
+          // median of it removes the jitter of individual currentTime reads. A jump > 200 ms = seek.
+          var ct = ctx.currentTime, off = mt - ct;
+          if (seg && Math.abs(off - seg.off) > 0.2) seg = null;
+          if (!seg) seg = { offs: [], off: off };
+          seg.offs.push(off); if (seg.offs.length > 15) seg.offs.shift();
+          seg.off = median(seg.offs);
+          t = ct + seg.off;
+        }
+        var idx = Math.round((t - halfWin) / hop);   // stamp the frame at the centre of the analyser window
+        if (idx < 0 || idx >= n) return;             // outside the recorded window → idle
+        anM.getFloatTimeDomainData(buf); var m2 = meanSq(buf);
+        anS.getFloatTimeDomainData(buf); var s2 = meanSq(buf);
+        if (env.cnt[idx] < 65535) { env.mid[idx] += m2; env.side[idx] += s2; env.cnt[idx]++; frames++; }
+      };
+      var tick = function () { if (disposed) return; var t0 = now(); ticks++; try { body(); } catch (e) {} cpuMs += now() - t0; };
+      var timer = setInterval(tick, hopMs);
+
+      return {
+        estimate: function (lineStarts) {
+          var t0 = now();
+          var r = analyse(env, lineStarts, { maxLagSec: opts.maxLagSec });
+          r.stats = r.stats || {}; r.stats.estimateMs = round3(now() - t0);
+          return r;
+        },
+        stats: function () { return { ticks: ticks, cpuMs: round3(cpuMs), frames: frames, hop: hop, sampleRate: ctx.sampleRate }; },
+        envelope: function () { return { mid: Array.prototype.slice.call(env.mid), side: Array.prototype.slice.call(env.side), cnt: Array.prototype.slice.call(env.cnt), hop: hop }; },
+        dispose: function () {
+          if (disposed) return; disposed = true;
+          clearInterval(timer);
+          try { rawDisconnect.call(src, midIn); } catch (e) {}
+          try { rawDisconnect.call(src, split); } catch (e) {}
+          for (var i = 0; i < own.length; i++) { try { own[i].disconnect(); } catch (e) {} }
+          own.length = 0;
+        },
+      };
+    }
+
+    return { create: create, analyse: analyse, VERSION: '0.1' };
+  })();
+
   const Media = (() => {
     let active = null;
     const reg = (el) => {
@@ -7047,7 +7358,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     function curMiniLine() {
       if (!miniData) return -1;
-      const t = Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0)) / 1000;
+      const t = Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
       let lo = 0, hi = miniData.length - 1, ans = -1;
       while (lo <= hi) { const m2 = (lo + hi) >> 1; if (miniData[m2][0] <= t) { ans = m2; lo = m2 + 1; } else hi = m2 - 1; }
       return ans;
@@ -7148,7 +7459,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let best = null;
       for (const idxs of cnt.values()) if (idxs.length >= 3 && (!best || idxs.length > best.length)) best = idxs;
       if (!best) { toast('No repeating chorus found'); return; }
-      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0)) / 1000;
+      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
       const nowT = Media.time() + offS;
       let target = best[0];   // next occurrence ahead of now, else the first
       for (const i of best) if (times[i] > nowT + 1) { target = i; break; }
@@ -7162,7 +7473,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * let the arrow keys fall through to normal page scrolling. */
     function seekLine(delta) {
       if (!isSynced || !times.length || tab !== 'lyrics' || searchMode) return false;
-      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0)) / 1000;
+      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
       let i = activeI < 0 ? 0 : activeI + delta;
       i = Math.max(0, Math.min(times.length - 1, i));
       Media.seek(Math.max(0, times[i] - offS));
@@ -7171,7 +7482,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     function replayLine() {
       if (!isSynced || activeI < 0 || tab !== 'lyrics' || searchMode) return false;
-      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0)) / 1000;
+      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
       Media.seek(Math.max(0, times[activeI] - offS));
       pauseScrollUntil = 0;
       toast('↻ replaying line');
@@ -7857,7 +8168,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             'lines: ' + lineCount,
             'clock: source=' + srcClk + '  media=' + (elem != null ? elem : '?') + 's  SC-timeline=' + (aria >= 0 ? aria : '?') + 's  delta=' + (drift != null ? drift : '?') + 's  rate=' + rate,
             'usedTime: ' + Media.time().toFixed(2) + 's',
-            'offsets: global=' + (App.latencyMs() || 0) + 'ms  track=' + (App.offsetMs() || 0) + 'ms  anchors=' + (App.anchorCount() || 0) + '  lead=' + (App.leadMs() || 0) + 'ms  autoLat=' + (App.autoLatencyMs() || 0) + 'ms',
+            'offsets: global=' + (App.latencyMs() || 0) + 'ms  track=' + (App.offsetMs() || 0) + 'ms  auto=' + (SyncAuto.ms | 0) + 'ms' + (SyncAuto.last ? ' (conf ' + (+SyncAuto.last.confidence).toFixed(2) + (SyncAuto.last.reason ? ', ' + SyncAuto.last.reason : '') + ')' : '') + '  anchors=' + (App.anchorCount() || 0) + '  lead=' + (App.leadMs() || 0) + 'ms  autoLat=' + (App.autoLatencyMs() || 0) + 'ms',
             'active line #' + activeI + ': "' + act + '"',
             'sample lines (effective time -> text):',
           ].concat(samp).join('\n');
@@ -8081,8 +8392,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const qc = lyr.synced ? '#3ddc84' : (estMode ? '#ffb454' : '#8b8b92');
       let s = `<span class="qdot" style="background:${qc};box-shadow:0 0 6px ${qc}66"></span>${name}<span class="dot"> · </span>${kind}`;
       // a persisted nudge silently re-applies on every future play — show it
-      const om = App.offsetMs ? App.offsetMs() : 0;
-      if (om) s += `<span class="dot"> · </span>${om > 0 ? '+' : ''}${(om / 1000).toFixed(Math.abs(om) % 100 ? 2 : 1)}s`;
+      const om = App.offsetMs ? App.offsetMs() : 0, am = SyncAuto.ms | 0;
+      if (om || am) { const tot = om + am; s += `<span class="dot"> · </span>${!om && am ? 'auto ' : ''}${tot > 0 ? '+' : ''}${(tot / 1000).toFixed(Math.abs(tot) % 100 ? 2 : 1)}s`; }
       let lk = false;
       if (lyr.picked) s += '<span class="dot"> · </span>Picked';
       else if (lyr.low) { s += '<span class="dot"> · </span>Low match — tap to fix'; lk = true; }
@@ -8230,7 +8541,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         // the highlight loop adds +(off+latency) to media time, so line i
         // activates at media time (times[i] − off − latency) — seeking must
         // SUBTRACT both or a nudged sync lands away from the clicked line
-        const off = ((App.offsetMs() || 0) + (App.latencyMs() || 0)) / 1000;
+        const off = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
         Media.seek(Math.max(0, t - off));
         pauseScrollUntil = 0;
       };
@@ -8465,7 +8776,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       if (!isSynced || !times.length || searchMode || tab !== 'lyrics' || tapOn) return;
       // configurable perceptual lead + per-track nudge + device-latency comp
-      const t = Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0)) / 1000;
+      const t = Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
       const i = bisect(t);
       // TRUE karaoke wipe: every frame, fill the current line from its exact
       // playback position within the line — this is what makes sync read as
@@ -9069,13 +9380,53 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let syncSaveT = null;
     const persistSync = () => {
       if (!meta) return;
-      const key = meta.key, offNow = off, anchNow = anch.slice();
+      const key = meta.key, offNow = off, aoffNow = SyncAuto.ms, anchNow = anch.slice();
       stopT(syncSaveT);
       syncSaveT = Ticker.after(() => {
         const entry = Cache.get(key);
-        if (entry) { entry.off = offNow; entry.anch = anchNow; Cache.set(key, entry); }
+        if (entry) { entry.off = offNow; entry.aoff = aoffNow; entry.anch = anchNow; Cache.set(key, entry); }
       }, 600);
     };
+
+    /* audio auto-align (v5.1): LYRIC_ALIGN listens to the first 90 s of every track through taps of its own on
+     * the captured source and estimates the constant lag between the synced sheet and the vocals it actually
+     * hears (community sheets are often a few hundred ms off, timed to another master or intro). Applied as a
+     * third offset term, aoff (ms, clock-side: −lagSec), only when the estimate is confident and moves things
+     * by ≥ 80 ms, only while the user has not nudged or anchored this track, persisted with the cache entry.
+     * '0' clears it like the other offsets; a manual nudge sits on top of it. */
+    let aligner = null, alignT = null, alignTries = 0;   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
+    const AUTO_ALIGN_MIN_CONF = 0.5, AUTO_ALIGN_MIN_MS = 80, AUTO_ALIGN_AT_MS = [45000, 15000, 15000];   // first look at 45 s, then 60 s, 75 s
+    function alignStop() { stopT(alignT); alignT = null; if (aligner) { try { aligner.dispose(); } catch (e) {} aligner = null; } }
+    function alignStart() {
+      alignStop(); alignTries = 0; SyncAuto.last = null;
+      try {
+        const tap = SUITE.audioTap && SUITE.audioTap(); if (!tap || !tap.ctx || !tap.src || typeof LYRIC_ALIGN === 'undefined') return;
+        aligner = LYRIC_ALIGN.create(tap.ctx, tap.src, {
+          mediaTime: () => { try { const c = SUITE.audioClock && SUITE.audioClock(); return c == null ? NaN : c; } catch (e) { return NaN; } },
+          paused: () => !Media.playing(),
+          playbackRate: () => { try { return (SUITE.audioRate && SUITE.audioRate()) || 1; } catch (e) { return 1; } },
+          windowSec: 90,
+        });
+        alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[0]);
+      } catch (e) { aligner = null; }
+    }
+    function alignRun() {
+      alignT = null;
+      try {
+        if (!aligner || !lyr || !lyr.synced || lyr.instr) return;
+        const starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
+        const r = aligner.estimate(starts); SyncAuto.last = r;
+        const settled = off !== 0 || anch.length > 0 || SyncAuto.ms !== 0;   // a manual sync or a restored value wins
+        if (!settled && r && r.confidence >= AUTO_ALIGN_MIN_CONF && Math.abs(r.lagSec) * 1000 >= AUTO_ALIGN_MIN_MS) {
+          SyncAuto.ms = -Math.round(r.lagSec * 1000); SyncAuto.conf = r.confidence;
+          persistSync();
+          try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
+          UI.toast('Lyrics auto-aligned ' + (SyncAuto.ms > 0 ? '+' : '') + (SyncAuto.ms / 1000).toFixed(2) + ' s from the vocals · 0 undoes it');
+          return;
+        }
+        if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]);   // more audio, another look
+      } catch (e) {}
+    }
 
     // permalink-first cache key: archive accounts post many distinct tracks
     // titled "untitled"/"snippet" — title|uploader collided them, silently
@@ -9164,6 +9515,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const same = result && lyr && (result === lyr ||
         (result.lines === lyr.lines && result.src === lyr.src && !!result.synced === !!lyr.synced));
       lyr = result;
+      if (!aligner && result && result.synced) alignStart();   // the source arrived after the track change
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
       // (e.g. left by an older version) so they can't linger in storage / diagnostics
       if (result && result.synced && anch.length) { anch = []; try { persistSync(); } catch (e) {} }
@@ -9278,6 +9630,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const c = fromCache(entry);
         if (c) {
           off = (entry && entry.off) || 0;
+          SyncAuto.ms = (entry && entry.aoff) | 0; SyncAuto.conf = SyncAuto.ms ? 1 : 0;
           anch = (entry && entry.anch) || [];
           apply(c, myToken);
           return;
@@ -9368,7 +9721,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       token++;
       lyr = null;
       off = 0;
+      SyncAuto.ms = 0; SyncAuto.conf = 0;
       anch = [];
+      alignStart();
       UI.setReady(false);
       UI.setHeader(meta);
       UI.exitSearch(true);
@@ -9669,7 +10024,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       };
       if (deltaMs === 0) {
         const hadAnchors = anch.length > 0;
-        off = 0;
+        off = 0; SyncAuto.ms = 0; SyncAuto.conf = 0;
         anch = [];
         persistSync();
         UI.toast(hadAnchors ? 'Sync + anchors reset' : 'Sync reset');
@@ -9687,7 +10042,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // makes it the active line (highlight lead + device latency accounted for)
     function syncToLine(t) {
       if (!lyr || !lyr.synced) return;
-      off = Math.round((t - lead / 1000 - Media.time()) * 1000) - goff;
+      off = Math.round((t - lead / 1000 - Media.time()) * 1000) - goff - SyncAuto.ms;
       if (Math.abs(off) < 30) off = 0;
       persistSync();
       learnOffset();
@@ -9826,7 +10181,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     return {
       meta: () => meta,
+      lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
       offsetMs: () => off,
+      autoAlignMs: () => SyncAuto.ms,
       latencyMs: () => goff,
       autoLatencyMs: () => { try { return (SUITE.audioLatency && SUITE.audioLatency()) || 0; } catch (e) { return 0; } },
       setLatency,
@@ -9881,6 +10238,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       pick, nudge, watch,
     };
   })();
+  // lyric engine debug accessor — only when the user opted into debug (localStorage 'scss:debug' = '1')
+  try { if (W.localStorage.getItem('scss:debug') === '1') { SUITE.lyricDebug = () => App.lyricDebug(); W.__sceLyricDebug = SUITE.lyricDebug; } } catch (e) {}
 
   /* ------------------------------------------------------------------ *
    *  10. HOTKEYS + BOOT
@@ -13413,6 +13772,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.audioLatency = () => { try { const c = sceLastCtx; if (c) { const l = (c.outputLatency || c.baseLatency || 0); const raw = (l > 0 && l < 0.6) ? Math.round(l * 1000) : 0; if (raw > 0 && Math.abs(raw - sceLatMs) >= 5) sceLatMs = raw; } return sceLatMs + fxLatencyMs(); } catch (e) { return sceLatMs; } }; } catch (e) {}
   // the hub converts that latency from output seconds to media seconds
   try { SUITE.audioRate = () => wantedRate(); } catch (e) {}
+  // the captured source and its context for the hub's own analysis taps (lyric auto-align):
+  // the newest entry, whether or not the chain is routed — a tap on the source node hears the
+  // track either way. null before SoundCloud has built its graph.
+  try { SUITE.audioTap = () => { const e = [...sceFx].pop(); return e ? { ctx: e.ctx, src: e.src } : null; }; } catch (e) {}
   // sleep-timer fade (WP10): module 1 asks for it. With the chain routed, a linear ramp of every routed chain's output
   // gain to 0.02 in `sec` s — after the limiter, so it never pumps, and the element's volume (SoundCloud's slider)
   // stays put; 0 restores unity after the pause. false when nothing is routed: module 1 steps the volume instead.
