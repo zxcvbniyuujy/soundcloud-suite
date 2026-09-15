@@ -3602,8 +3602,9 @@
    *  1. MEDIA HOOK — smooth time + seeking through SC's own timeline
    * ------------------------------------------------------------------ */
 
-  // auto-align state shared by the renderer (defined first) and App (defined later): ms on the clock side
-  const SyncAuto = { ms: 0, conf: 0, last: null };
+  // auto-align state shared by the renderer (defined first) and App (defined later): ms on the clock side,
+  // the latest estimate, and App's apply() for the menu
+  const SyncAuto = { ms: 0, conf: 0, last: null, apply: null, MIN_SEC: 0.2 };
   /* lyric-align.js — constant-lag estimator for per-line synced lyrics (LRC sheets).
    *
    * LYRIC_ALIGN.create(ctx, sourceNode, opts) → tracker
@@ -8075,6 +8076,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       sep();
       mi('Calibrate sync (tap along)', () => startTapAlign(), 'A');
       mi('Reset sync & anchors', () => App.nudge(0), '0');
+      // a clear vocal-alignment finding (≥ 200 ms, not declined) for this synced sheet, not yet applied
+      { const r = SyncAuto.last; if (r && !r.reason && r.confidence > 0 && Math.abs(r.lagSec) >= SyncAuto.MIN_SEC && !SyncAuto.ms && curLyr && curLyr.synced && SyncAuto.apply) {
+        const ms = -Math.round(r.lagSec * 1000);
+        mi('Align to vocals: ' + (ms > 0 ? '+' : '') + (ms / 1000).toFixed(2) + 's (' + (r.confidence >= 0.5 ? 'clear' : r.confidence >= 0.2 ? 'likely' : 'weak') + ')', () => SyncAuto.apply());
+      } }
       mi('Sync wizard: ' + (wizOn ? 'on' : 'off'), () => toggleWizard());
       mi('Audio latency: auto ' + (App.autoLatencyMs() || 0) + 'ms' + ((App.latencyMs() || 0) ? ' + ' + App.latencyMs() + ' manual' : ''), () => {
         let v = null;
@@ -9390,12 +9396,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     /* audio auto-align (v5.1): LYRIC_ALIGN listens to the first 90 s of every track through taps of its own on
      * the captured source and estimates the constant lag between the synced sheet and the vocals it actually
-     * hears (community sheets are often a few hundred ms off, timed to another master or intro). Applied as a
-     * third offset term, aoff (ms, clock-side: −lagSec), only when the estimate is confident and moves things
-     * by ≥ 80 ms, only while the user has not nudged or anchored this track, persisted with the cache entry.
-     * '0' clears it like the other offsets; a manual nudge sits on top of it. */
+     * hears (community sheets are sometimes a few hundred ms off, timed to another master or intro). Looks at
+     * 45, 60 and 75 s. The estimate is never applied on its own: on six real tracks it was precise (shift-
+     * invariant within 0.02 s, never confident on a scrambled or wrong-song sheet) but its confidence on true
+     * sheets stayed low and the lags it found clustered at +0.1..0.18 s — the vocal's energy rises after the
+     * timestamp people tap, not a sheet error. So a clear finding of ≥ 200 ms is offered in the ⋯ menu as
+     * "Align to vocals"; applying it sets a third offset term, SyncAuto.ms (clock-side: −lagSec), persisted with
+     * the cache entry, shown as "auto" in the source line. '0' clears it like the other offsets; a manual nudge
+     * sits on top of it. */
     let aligner = null, alignT = null, alignTries = 0;   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
-    const AUTO_ALIGN_MIN_CONF = 0.5, AUTO_ALIGN_MIN_MS = 80, AUTO_ALIGN_AT_MS = [45000, 15000, 15000];   // first look at 45 s, then 60 s, 75 s
+    const AUTO_ALIGN_AT_MS = [45000, 15000, 15000];   // first look at 45 s, then 60 s, 75 s
     function alignStop() { stopT(alignT); alignT = null; if (aligner) { try { aligner.dispose(); } catch (e) {} aligner = null; } }
     function alignStart() {
       alignStop(); alignTries = 0; SyncAuto.last = null;
@@ -9416,17 +9426,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (!aligner || !lyr || !lyr.synced || lyr.instr) return;
         const starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
         const r = aligner.estimate(starts); SyncAuto.last = r;
-        const settled = off !== 0 || anch.length > 0 || SyncAuto.ms !== 0;   // a manual sync or a restored value wins
-        if (!settled && r && r.confidence >= AUTO_ALIGN_MIN_CONF && Math.abs(r.lagSec) * 1000 >= AUTO_ALIGN_MIN_MS) {
-          SyncAuto.ms = -Math.round(r.lagSec * 1000); SyncAuto.conf = r.confidence;
-          persistSync();
-          try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
-          UI.toast('Lyrics auto-aligned ' + (SyncAuto.ms > 0 ? '+' : '') + (SyncAuto.ms / 1000).toFixed(2) + ' s from the vocals · 0 undoes it');
-          return;
-        }
+        if (r && !r.reason && r.confidence > 0 && Math.abs(r.lagSec) >= SyncAuto.MIN_SEC) return;   // a clear finding: the menu offers it
         if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]);   // more audio, another look
       } catch (e) {}
     }
+    // the ⋯ menu's "Align to vocals": apply the latest estimate as the auto offset (a nudge on top stays possible)
+    SyncAuto.apply = () => {
+      try {
+        const r = SyncAuto.last; if (!r || !lyr || !lyr.synced) return;
+        SyncAuto.ms = -Math.round(r.lagSec * 1000); SyncAuto.conf = r.confidence;
+        persistSync();
+        try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
+        UI.toast('Lyrics aligned to the vocals (' + (SyncAuto.ms > 0 ? '+' : '') + (SyncAuto.ms / 1000).toFixed(2) + ' s) · 0 undoes it');
+      } catch (e) {}
+    };
 
     // permalink-first cache key: archive accounts post many distinct tracks
     // titled "untitled"/"snippet" — title|uploader collided them, silently

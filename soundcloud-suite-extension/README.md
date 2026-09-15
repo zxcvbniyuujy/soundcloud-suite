@@ -74,9 +74,10 @@ entirely, so SoundCloud plays exactly as it does without the extension.
 Lyrics sync: the highlight follows the audio clock minus the measured output
 and effects delay, lights the sung line on its own frame, and — for synced
 sheets — listens to the first 90 s of the track through its own taps to
-estimate the constant lag between the sheet and the vocals it hears; when the
-estimate is confident it applies it as an "auto" offset (shown in the source
-line; **0** clears it, and any manual nudge wins).
+estimate the constant lag between the sheet and the vocals it hears. A clear
+finding of 200 ms or more shows up in the ⋯ menu as **Align to vocals**;
+applying it sets an "auto" offset (shown in the source line; **0** clears it,
+and any manual nudge sits on top).
 
 Audio hotkeys (with **Global hotkeys** on in Tweaks): **A** hold to compare,
 **N** night mode, **,** / **.** speed −5 % / +5 %. Inside the hub they work on
