@@ -52,9 +52,11 @@ entirely, so SoundCloud plays exactly as it does without the extension.
   harmonic bass for small speakers.
 - **Enhance** — a five-stage tone shape (sub, warmth, a mud dip, presence,
   air), 4×-oversampled saturation, a harmonic exciter that rebuilds the top
-  end a lossy stream lost, and a three-band compressor for punch. It takes
-  its own headroom so nothing clips, and its level is measured offline on a
-  music clip and cancelled, so it never wins by simply being louder.
+  end a lossy stream lost, and a three-band compressor for punch that follows
+  the track's own loudness, so a quiet dynamic mix and a brickwalled master
+  get the same treatment. It takes its own headroom so nothing clips, and its
+  level is measured offline on a music clip and cancelled, so it never wins by
+  simply being louder.
 - **Loudness & dynamics** — K-weighted, gated loudness normalization with a
   Quiet / Normal / Loud target and a per-track memory; Night mode; Volume
   boost up to 300 %; and a **Clip guard** — a true-peak brick-wall limiter

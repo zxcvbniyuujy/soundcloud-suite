@@ -321,7 +321,7 @@ const FIXTURE_SRC = `
       eq(p.sub.frequency, 55, label + ' sub corner'); eq(p.mud.frequency, 280, label + ' mud centre'); eq(p.pres.frequency, 3000, label + ' presence centre'); eq(p.air.frequency, 8500, label + ' air corner');
       eq(p.shaper.hasCurve, false, label + ' shaper curve null'); eq(p.shaperOversample, 'none', label + ' shaper oversample');
       eq(p.exShape.hasCurve, true, label + ' exciter curve fixed'); eq(p.exOversample, 'none', label + ' exciter oversample'); eq(p.exGain.gain, 0, label + ' exGain');
-      eq(p.cpG.gain, 1, label + ' cpG'); eq(p.mbG.gain, 0, label + ' mbG');
+      eq(p.cpG.gain, 1, label + ' cpG'); eq(p.mbG.gain, 0, label + ' mbG'); eq(p.mbOut.gain, 1, label + ' mbOut');
       for (const k of ['mbLo', 'mbMid', 'mbHi']) { eq(p[k].ratio, 1, label + ' ' + k + '.ratio'); eq(p[k].threshold, 0, label + ' ' + k + '.threshold'); }
       eq(p.comp.ratio, 1, label + ' comp.ratio'); eq(p.comp.threshold, 0, label + ' comp.threshold'); eq(p.compTrim.gain, 1, label + ' compTrim');
       eq(p.widener.gain, 1, label + ' widener'); eq(p.vGain.gain, 1, label + ' vGain');
@@ -455,7 +455,8 @@ const FIXTURE_SRC = `
     eq(s.params.air.frequency, 8500, 'air 8.5 kHz'); approx(s.params.air.gain, 3, 0.001, 'air +3');
     const tm = await dbg(`return d.enhToneMaxDb(1);`); assert(tm > 3.3 && tm <= 3.5, 'the tone never boosts past the pre-gain (max ' + tm + ' dB)');
     approx(s.params.exGain.gain, 0.22, 0.001, 'exciter mix 0.22'); eq(s.params.exOversample, '4x', 'exciter 4×');
-    eq(s.params.comp.ratio, 1, 'wideband comp inert'); eq(s.params.comp.threshold, 0, 'comp thr 0'); eq(s.params.cpG.gain, 0, 'cpG 0'); eq(s.params.mbG.gain, 1, 'mbG 1');
+    eq(s.params.comp.ratio, 1, 'wideband comp inert'); eq(s.params.comp.threshold, 0, 'comp thr 0'); eq(s.params.cpG.gain, 0, 'cpG 0');
+    assert(s.params.mbG.gain > 0 && Math.abs(s.params.mbG.gain * s.params.mbOut.gain - 1) < 0.02, 'the bank is in and its offset wrap nets to 1 (mbG ' + s.params.mbG.gain.toFixed(3) + ' · mbOut ' + s.params.mbOut.gain.toFixed(3) + ')');
     approx(s.params.mbLo.threshold, -23.5, 0.001, 'lo thr −23.5'); approx(s.params.mbLo.ratio, 1.6, 0.001, 'lo ratio 1.6'); approx(s.params.mbLo.attack, 0.03, 0.001, 'lo attack'); approx(s.params.mbLo.release, 0.2, 0.001, 'lo release');
     approx(s.params.mbMid.threshold, -21.5, 0.001, 'mid thr −21.5'); approx(s.params.mbMid.ratio, 1.5, 0.001, 'mid ratio 1.5'); approx(s.params.mbMid.attack, 0.012, 0.001, 'mid attack'); approx(s.params.mbMid.release, 0.15, 0.001, 'mid release');
     approx(s.params.mbHi.threshold, -27.5, 0.001, 'hi thr −27.5'); approx(s.params.mbHi.ratio, 1.7, 0.001, 'hi ratio 1.7'); approx(s.params.mbHi.attack, 0.005, 0.001, 'hi attack'); approx(s.params.mbHi.release, 0.1, 0.001, 'hi release');
@@ -817,6 +818,29 @@ const FIXTURE_SRC = `
     b = await cmpBtn(); eq(b.bg, TINT.bg, 'render paints the current bypass'); eq(parseFloat(await bodyOpacity()), 0.45, 'render dims the body');
     await dbg(`d.bypass(false);`);
     await closeHub(); await resetAudio(); await stopPlay();
+  });
+
+  scenario('enhance-adaptive', async () => {
+    // v2.1: the bank sits between +off / −off gains that follow the source's short-term loudness (reference −11.6 LUFS,
+    // the calibration clip): fixture M (≈ −11.6) → offset near 0; fixture A (a −23 dBFS sine, ≈ −26 LUFS K-weighted) →
+    // clamped +10 dB; the wrap nets to 1 at every instant (reciprocal exponential ramps); off → the offset rests at 0
+    await play('M', { loop: true, sampleRate: 48000 });
+    await audioTab();
+    await set('enhanceOn', true); await set('enhanceAmt', 100);
+    await sleep(5000);   // 6 blocks of 400 ms, then the 4 s smoothing settles
+    let s = await snap(), tr = await dbg(`return d.enhTrack();`);
+    assert(isFinite(tr.lufs) && Math.abs(tr.off) < 2, 'mastered clip: offset near 0 (got ' + (+tr.off).toFixed(2) + ' dB at ' + (+tr.lufs).toFixed(1) + ' LUFS)');
+    approx(s.params.mbG.gain * s.params.mbOut.gain, 1, 0.02, 'the wrap nets to 1'); eq(s.params.cpG.gain, 0, 'bank leg in');
+    console.log('  adaptive: M ' + (+tr.lufs).toFixed(1) + ' LUFS → offset ' + (+tr.off).toFixed(2) + ' dB');
+    await play('A', { loop: true, sampleRate: 48000 }); await sleep(8000);
+    s = await snap(); tr = await dbg(`return d.enhTrack();`);
+    assert(tr.off > 9.5, 'quiet sine: offset clamped to +10 (got ' + (+tr.off).toFixed(2) + ' at ' + (+tr.lufs).toFixed(1) + ' LUFS)');
+    assert(Math.abs(s.params.mbG.gain / Math.pow(10, tr.off / 20) - 1) < 0.15, 'mbG carries +off (' + s.params.mbG.gain.toFixed(3) + ')');
+    approx(s.params.mbG.gain * s.params.mbOut.gain, 1, 0.02, 'the wrap still nets to 1');
+    console.log('  adaptive: A ' + (+tr.lufs).toFixed(1) + ' LUFS → offset ' + (+tr.off).toFixed(2) + ' dB, mbG ' + s.params.mbG.gain.toFixed(3));
+    await set('enhanceOn', false); await sleep(100); s = await snap(); tr = await dbg(`return d.enhTrack();`);
+    eq(tr.off, 0, 'off → offset 0'); eq(s.params.mbG.gain, 0, 'mbG 0'); eq(s.params.mbOut.gain, 1, 'mbOut 1');
+    await closeHub(); await stopPlay();
   });
 
   scenario('enhance-level-match', async () => {
@@ -1585,7 +1609,7 @@ const FIXTURE_SRC = `
     await set('enhanceOn', true); s = await snap(); approx(s.params.comp.threshold, -32.4, 0.001, 'Night keeps the comp with Enhance on');
     eq(s.params.cpG.gain, 1, 'Night: the wideband path'); eq(s.params.mbG.gain, 0, 'Night parks the bank'); eq(s.params.mbLo.ratio, 1, 'bank inert under Night'); approx(s.params.air.gain, 1.5, 0.001, 'Enhance tone stays under Night');
     await set('nightOn', false); s = await snap(); eq(s.params.comp.ratio, 1, 'Night off: Enhance 50 % takes its bank back (comp idle)'); eq(s.params.comp.threshold, 0, 'comp thr 0');
-    eq(s.params.cpG.gain, 0, 'cpG 0'); eq(s.params.mbG.gain, 1, 'mbG 1'); approx(s.params.mbLo.threshold, -19.75, 0.001, 'lo band thr at 50 %'); approx(s.params.mbLo.ratio, 1.3, 0.001, 'lo band ratio at 50 %'); approx(s.params.mbLo.knee, 12, 0.001, 'bank knee');
+    eq(s.params.cpG.gain, 0, 'cpG 0'); assert(s.params.mbG.gain > 0 && Math.abs(s.params.mbG.gain * s.params.mbOut.gain - 1) < 0.02, 'bank in, wrap nets to 1'); approx(s.params.mbLo.threshold, -19.75, 0.001, 'lo band thr at 50 %'); approx(s.params.mbLo.ratio, 1.3, 0.001, 'lo band ratio at 50 %'); approx(s.params.mbLo.knee, 12, 0.001, 'bank knee');
     await set('enhanceOn', false); await set('nightAmt', 50); s = await snap();
     eq(s.params.comp.ratio, 1, 'both off: ratio 1'); eq(s.params.comp.threshold, 0, 'threshold 0'); eq(s.params.compTrim.gain, 1, 'compTrim 1'); eq(s.params.cpG.gain, 1, 'cpG 1'); eq(s.params.mbG.gain, 0, 'mbG 0');
     await closeHub(); await sleep(150); s = await snap(); eq(s.routed, false, 'nothing on → detached');

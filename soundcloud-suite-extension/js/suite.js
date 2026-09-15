@@ -6213,9 +6213,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   transform: translateX(2px) scale(1.015);
   filter: drop-shadow(0 1px 9px rgba(255, 120, 0, 0.09));
   font-weight: 700;
-  animation: lin 0.34s ease both;
+  /* no fade-in and a near-instant colour flip: the line must read as lit on the very frame the
+     word is heard (a 340 ms fade + 300 ms colour ease made every line land a third of a second
+     late at lead 0). Leaving .act keeps the slower .line ease, so past lines still dim gently. */
+  transition: color 0.06s linear, opacity 0.1s ease, transform 0.22s cubic-bezier(.22,1,.36,1);
 }
-@supports not (-webkit-background-clip: text) { .line.act { color: #fff; background: none; animation: lin 0.38s ease both; } }
+@supports not (-webkit-background-clip: text) { .line.act { color: #fff; background: none; } }
 .line.u { font-weight: 500; color: #c9c9cf; cursor: default; padding: 4px 14px; font-size: calc(var(--fs, 16px) - 1px); opacity: .92; }
 .tline { padding: 0 14px 5px; margin-top: -3px; font-size: calc(var(--fs, 16px) - 4px); line-height: 1.35; font-weight: 500; font-style: italic; color: #6f6f78; letter-spacing: 0.1px; animation: lin 0.38s ease both; }
 .line.act + .tline { color: #9a9aa2; }
@@ -11114,17 +11117,61 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return { enhPre: pre, sub, warm, mud, pres, air, shaper, exShape, exGain, sum, mbG, mbOut, mbLo, mbMid, mbHi };
   }
   // the node values for intensity a (0 = every stage inert) with the bank on or off (Night mode
-  // keeps the tone and takes the dynamics); `w(param, value, seconds)` is the writer (applyFx
-  // ramps a routed chain, the calibration and a detached chain write .value)
-  function setEnhanceParams(b, a, bank, w, db2g) {
+  // keeps the tone and takes the dynamics) at programme offset `off` dB (see enhTick: the bank
+  // is wrapped in +off / −off gains so it always works the level it was tuned on; the wrap
+  // nets to exactly 1). `w(param, value, seconds)` is the writer (applyFx ramps a routed
+  // chain, the calibration and a detached chain write .value).
+  function setEnhanceParams(b, a, bank, off, w, db2g) {
     w(b.enhPre.gain, db2g(-ENH_HEAD * a));
     w(b.sub.gain, ENH.sub * a); w(b.warm.gain, ENH.warm * a); w(b.mud.gain, ENH.mud * a); w(b.pres.gain, ENH.pres * a); w(b.air.gain, ENH.air * a);
     w(b.exGain.gain, ENH.exMix * a, 0.05);
-    w(b.mbG.gain, bank ? 1 : 0, 0.05);
+    b.bankOn = !!bank;
+    w(b.mbG.gain, bank ? db2g(off) : 0, 0.05); w(b.mbOut.gain, db2g(-off), 0.05);
     for (const [c, k] of [[b.mbLo, ENH.lo], [b.mbMid, ENH.mid], [b.mbHi, ENH.hi]]) {
       w(c.threshold, bank ? k.thr - k.thrA * a : 0, 0.05); w(c.ratio, bank ? 1 + k.ratio * a : 1, 0.05); w(c.knee, 12, 0.05);
       w(c.attack, k.att, 0.05); w(c.release, k.rel, 0.05);
     }
+  }
+  /* Programme-adaptive bank (v2.1). The bank's thresholds are absolute, so on its own it would
+   * work a −8 LUFS master hard and a −18 LUFS dynamic mix barely at all — and the measured level
+   * match only holds at the level it was tuned on. So the source's short-term loudness (the
+   * K-weighted taps, 6 × 400 ms, smoothed with a 4 s time constant, snapped on a track change,
+   * held through silence) sets an offset ENH_REF − L, clamped ±10 dB, and the bank sits between
+   * +off and −off gains: whatever the track's level, the bank sees the calibration clip's level,
+   * the auto-makeup is untouched, and the wrap nets to exactly 1 — also mid-move: the two gains
+   * glide as reciprocal exponential ramps (0.6 s), whose product is 1 at every instant. Run by
+   * loudTick (every 500 ms while Enhance is on and the chain is routed), so it never pumps. */
+  const ENH_REF = -11.6;   // LUFS of the calibration clip (bench, gated)
+  const enhTrack = { href: null, entry: null, recent: [], lufs: NaN, off: 0 };
+  function enhTick() {
+    if (!CFG.enhanceOn) return;
+    const e = newestRouted(); if (!e) return;
+    const m = activeMedia(); if (!m || m.paused || !(m.readyState > 0)) return;
+    // a new track (the badge's href) or a new source node (a fresh chain entry): start over from its first block
+    const href = curTrackHref();
+    if (href !== enhTrack.href || e !== enhTrack.entry) { enhTrack.href = href; enhTrack.entry = e; enhTrack.recent = []; enhTrack.lufs = NaN; }
+    const c = e.chain, sr = e.ctx.sampleRate || 48000;
+    const n = Math.max(1, Math.min(Math.round(0.4 * sr), c.bufKL.length));
+    c.kL.getFloatTimeDomainData(c.bufKL); c.kR.getFloatTimeDomainData(c.bufKR);
+    const ms = (b) => { let s = 0; for (let i = b.length - n; i < b.length; i++) s += b[i] * b[i]; return s / n; };
+    const pw = ms(c.bufKL) + ms(c.bufKR);
+    if (!(pw >= 1e-9)) return;   // silence (< −90 LUFS) or NaN: hold the last offset
+    enhTrack.recent.push(pw); if (enhTrack.recent.length > 6) enhTrack.recent.shift();
+    const st = -0.691 + 10 * Math.log10(enhTrack.recent.reduce((a, b) => a + b, 0) / enhTrack.recent.length);
+    enhTrack.lufs = isFinite(enhTrack.lufs) ? enhTrack.lufs + (st - enhTrack.lufs) * 0.12 : st;
+    const off = Math.max(-10, Math.min(10, ENH_REF - enhTrack.lufs));
+    if (Math.abs(off - enhTrack.off) < 0.2) return;
+    enhTrack.off = off;
+    const gIn = Math.pow(10, off / 20), gOut = Math.pow(10, -off / 20);
+    sceFx.forEach((x) => {
+      if (!x.routed || !x.chain.bankOn) return;   // bankOn is stamped on the object setEnhanceParams wrote (the chain)
+      try {
+        const now = x.ctx.currentTime || 0, a = x.chain.mbG.gain, b = x.chain.mbOut.gain;
+        const a0 = Math.max(1e-4, a.value), b0 = Math.max(1e-4, b.value);   // exponential ramps need non-zero ends
+        a.cancelScheduledValues(now); a.setValueAtTime(a0, now); a.exponentialRampToValueAtTime(gIn, now + 0.6);
+        b.cancelScheduledValues(now); b.setValueAtTime(b0, now); b.exponentialRampToValueAtTime(gOut, now + 0.6);
+      } catch (er) {}
+    });
   }
   // the tone's biggest boost (dB) at intensity a — the sub and warm shelves overlap below 90 Hz
   // (≈ 3.3 dB at a = 1, measured on the probe bank); this is what `pre` takes off up front
@@ -11194,7 +11241,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const src = oc.createBufferSource(); src.buffer = enhClip(oc, sr);
       const blk = buildEnhanceBlock(oc);
       const bank = oc.createDynamicsCompressor(); try { bank.threshold.value = 0; bank.knee.value = 0; bank.ratio.value = 1; } catch (e) {}   // the dry leg gets the same fixed pre-delay
-      setEnhanceParams(blk, job.a, true, (p, v) => { try { p.value = v; } catch (e) {} }, (db) => Math.pow(10, db / 20));
+      setEnhanceParams(blk, job.a, true, 0, (p, v) => { try { p.value = v; } catch (e) {} }, (db) => Math.pow(10, db / 20));
       try { blk.shaper.curve = satCurve(job.a); blk.shaper.oversample = '4x'; blk.exShape.oversample = '4x'; } catch (e) {}
       const k = kCoeffs(sr), kDry = oc.createIIRFilter(k.b, k.a), kWet = oc.createIIRFilter(k.b, k.a), merge = oc.createChannelMerger(2);
       src.connect(bank); bank.connect(kDry); kDry.connect(merge, 0, 0);
@@ -11387,7 +11434,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return {
       input, preamp, rumble, tiltLo, tiltHi, lcLo, lcHi, bands, peq, bass, bassSum, hLP, hShape, hBP, hGain, harmOn: false,
       enhPre: enh.enhPre, sub: enh.sub, warm: enh.warm, mud: enh.mud, pres: enh.pres, air: enh.air, shaper: enh.shaper, exShape: enh.exShape, exGain: enh.exGain, enhSum: enh.sum,
-      mbG: enh.mbG, mbLo: enh.mbLo, mbMid: enh.mbMid, mbHi: enh.mbHi, cpG, comp, compTrim,
+      mbG: enh.mbG, mbOut: enh.mbOut, mbLo: enh.mbLo, mbMid: enh.mbMid, mbHi: enh.mbHi, bankOn: false, cpG, comp, compTrim,
       widener: wWidth, vGain, cfLpL, cfLpR, cfFeedL, cfFeedR, cfNegL, cfNegR, gLL, gLR, gRL, gRR, mxMerge, conv, rvWet, rvOn: false,
       analyser, kL, kR, pL, pR, oL, oR, makeup, boost, gA, gB, lim, tpl: null, tplReady: false, tplAlign, limTrim, output, probe,
       rumbleOn: false,   // the rumble filter's current type (edge-triggered by applyFx)
@@ -11648,6 +11695,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       //    level match (bank on) — with Night, its trim stands and only the block's pre-gain is
       //    given back (the tone then reads as a small, honest lift) ──
       const enhA = enhOn ? enhAmt : 0, bank = enhA > 0 && !nightOn;
+      if (!CFG.enhanceOn) { enhTrack.off = 0; enhTrack.lufs = NaN; enhTrack.recent = []; }   // off: the offset rests at 0 for the next time
       const compTrimG = bank ? db2g(-calibrateEnhance(enhA)) : cp ? cp.trim * db2g(ENH_HEAD * enhA) : 1;
       // ── clip guard: the true-peak leg (ceiling TP_CEIL, bypass exact when nothing boosts) where it
       //    is attached and filled, else the compressor leg (−3 dB, 20:1, its auto-makeup trimmed back
@@ -11690,7 +11738,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           c.harmOn = harm > 0;
           try { if (c.harmOn) c.bass.connect(c.hLP); else setTimeout(() => { try { if (!c.harmOn) { c.hGain.gain.cancelScheduledValues(0); c.hGain.gain.value = 0; c.bass.disconnect(c.hLP); } } catch (er) {} }, 250); } catch (er) {}
         }
-        setEnhanceParams(c, enhA, bank, w, db2g);
+        setEnhanceParams(c, enhA, bank, enhTrack.off, w, db2g);
         try {
           const curve = enhA > 0 ? satCurve(enhA) : null;
           if (c.shaper.curve !== curve) c.shaper.curve = curve;
@@ -11740,7 +11788,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       sceFx.forEach((e) => { if (e.routed !== want) { e.routed = want; try { e.reroute(); } catch (er) {} } if (e.routed) any = true; });
       fxRouted = any;
       // ── the loudness measurement loop runs only while it can hear something ──
-      const wantLoud = keep('loudnessOn') && fxRouted;
+      const wantLoud = (keep('loudnessOn') || !!CFG.enhanceOn) && fxRouted;   // Enhance's programme tracker rides the same tick
       if (wantLoud && !loudTimer) { loudTimer = setInterval(loudTick, 500); lastLoudUrl = null; try { restoreTrackLoud(); } catch (er) {} }
       else if (!wantLoud && loudTimer) { clearInterval(loudTimer); loudTimer = 0; }
       if (!keep('loudnessOn')) { if (lnorm.href != null || lnorm.src || lnorm.blocks.length) loudReset(null); lastLoudUrl = null; lnorm.nodeDb = 0; }
@@ -11862,6 +11910,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // momentary / short-term / gated integrated loudness → the gain once 3 s have been heard
   function loudTick() {
     peakTick(true);
+    try { enhTick(); } catch (e) {}
     try {
       if (!CFG.loudnessOn) return;
       const e = newestRouted(); if (!e) return;
@@ -13442,13 +13491,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           params: snapshot(), shaperHasCurve: hasCurve, loudTimer: !!loudTimer, meter: Object.assign({}, meter),
           dests: e ? [...e.dests].map((kv) => [kv[0], kv[1][0], kv[1][1]]) : [],
           headroomDb: lastHeadroomDb, curveVer: eqCurveVer, needsLimiter: needsLimiter(),
-          branches: e ? { harm: !!e.chain.harmOn, reverb: !!e.chain.rvOn } : null, nodes: () => (e ? e.chain : null),
+          branches: e ? { harm: !!e.chain.harmOn, reverb: !!e.chain.rvOn } : null, nodes: () => (e ? e.chain : null), source: () => (e ? e.src : null), context: () => (e ? e.ctx : null),
           guard: (() => { try { const c = e && e.chain; if (!c) return null; const tp = !!(c.tpl && c.tplReady); let bypass = null; try { if (c.tpl) bypass = c.tpl.parameters.get('bypass').value; } catch (er) {}
             return { mode: tp ? 'tp' : 'comp', on: needsLimiter(), ceiling: tp ? TP_CEIL : c.lim.threshold.value, bypass, attached: !!c.tpl, gr: meter.limGr, alignSamples: Math.round(c.tplAlign.delayTime.value * e.ctx.sampleRate), latencySamples: c.tpl ? c.tpl.latencySamples : null, loadErr: TP_LIMITER.lastError ? String(TP_LIMITER.lastError) : null }; } catch (er) { return null; } })(),
           ir: (() => { try { const b = e && e.chain.conv.buffer; if (!b) return null; const a0 = b.getChannelData(0), a1 = b.getChannelData(1); let s01 = 0, s00 = 0, s11 = 0; for (let i = 0; i < a0.length; i++) { s01 += a0[i] * a1[i]; s00 += a0[i] * a0[i]; s11 += a1[i] * a1[i]; } return { sec: b.duration, ch: b.numberOfChannels, corr: s01 / Math.sqrt(s00 * s11) }; } catch (er) { return null; } })(),
           meterTick: () => { peakTick(true); return Object.assign({}, meter); },
           composite: (f) => { const r = compositeDb(f == null ? null : new Float32Array([+f])); return { userDb: Array.from(r.userDb), peqDb: Array.from(r.peqDb), enhDb: Array.from(r.enhDb) }; },
           enhCalib: () => { const o = {}; _enhCalib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; }, enhToneMaxDb,
+          enhTrack: () => ({ href: enhTrack.href, lufs: enhTrack.lufs, off: enhTrack.off, blocks: enhTrack.recent.length }),
           calib: () => { const o = {}; _calib.forEach((v, k) => { o[k] = Object.assign({}, v); }); return o; },
           set: (k, v) => { CFG[k] = v; save(); applyFx(); }, get: (k) => CFG[k], cfg: () => Object.assign({}, CFG),
           bypass: (v) => setBypass(v), setBand, curveAt: (f) => eqCurveDbAt(f), curveSample: (x) => satCurveAt(x),
