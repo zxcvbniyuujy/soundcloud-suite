@@ -11145,7 +11145,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const enhTrack = { href: null, entry: null, recent: [], lufs: NaN, off: 0 };
   function enhTick() {
     if (!CFG.enhanceOn) return;
-    const e = newestRouted(); if (!e) return;
+    let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); if (!e) return;   // the newest routed chain
     const m = activeMedia(); if (!m || m.paused || !(m.readyState > 0)) return;
     // a new track (the badge's href) or a new source node (a fresh chain entry): start over from its first block
     const href = curTrackHref();
