@@ -142,6 +142,7 @@
         .replace(/(^|[^A-Za-z0-9_\-])([A-Za-z0-9_\-]{40,})(?=$|[^A-Za-z0-9_\-])/g, (m, lead, body, offset, full) => {
           const before = full.slice(Math.max(0, offset - 8), offset + lead.length);
           if (/(?:data:|blob:|;base64,)/i.test(before)) return m;
+          if ((body.match(/-/g) || []).length >= 3) return m;   // a track or page slug, not a token
           return lead + '‹REDACTED-' + body.length + 'ch›';
         });
       // session-scoped counter map for "I want to know how often X happened
@@ -2616,7 +2617,7 @@
                 }
                 showToast('Backup imported — settings, history and stats restored');
                 closeCard();
-            } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a shuffle backup'); }
+            } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a SuperSuite backup'); }
         };
         r.onerror = () => showToast('Couldn’t read that file');
         r.readAsText(file);
@@ -3991,7 +3992,7 @@
   })();
 
   const Media = (() => {
-    let active = null;
+    let active = null, seekSeq = 0;
     const reg = (el) => {
       try {
         if (!el || el.__slxHook) return;
@@ -4146,8 +4147,11 @@
             fired = true;
           }
         }
-        // verify the jump landed; if the UI ignored us, set the time directly
+        // verify the jump landed; if the UI ignored us, set the time directly — but only for the
+        // newest seek: a held arrow key or two quick line clicks must not be yanked back in turn
+        const mySeq = ++seekSeq;
         setTimeout(() => {
+          if (mySeq !== seekSeq) return;
           const now = this.time();
           if (Math.abs(now - sec) > 3 && active && isFinite(active.duration)) {
             try { active.currentTime = sec; } catch (e) {}
@@ -4353,7 +4357,7 @@
 
     const feats = [];
     const grabFeat = (m, g1) => {
-      String(g1 || '').split(/\s*(?:,|&|\+|\bx\b|\band\b)\s*/i)
+      String(g1 || '').replace(RX.anyBracket, ' ').replace(RX.bareProd, ' ').split(/\s*(?:,|&|\+|\bx\b|\band\b)\s*/i)
         .map((x) => x.trim()).filter((x) => x.length > 1).forEach((x) => feats.push(x));
       return ' ';
     };
@@ -4656,15 +4660,64 @@
   }
   const _hexToBytes = (h) => { const o = new Uint8Array(h.length / 2); for (let i = 0; i < o.length; i++) o[i] = parseInt(h.substr(i * 2, 2), 16); return o; };
   const _lt = (a, b) => { for (let i = 0; i < a.length && i < b.length; i++) { if (a[i] < b[i]) return true; if (a[i] > b[i]) return false; } return false; };
-  async function lrclibSolve(prefix, targetHex, deadline) {
-    const enc = new TextEncoder();
+  // LRCLIB's challenge needs ~2^24 hashes: awaited WebCrypto digests manage ~30k/s on the page thread,
+  // a pure-JS SHA-256 in a worker ~600k/s per core, so the search runs off-thread on a few cores
+  const POW_WORKER_SRC = ''
+  + 'const K=new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);'
+  + 'const W=new Uint32Array(64);const H=new Uint32Array(8);'
+  + 'function sha256(b){const n=b.length;const p=((n+9+63)>>6)<<6;const m=new Uint8Array(p);m.set(b);m[n]=0x80;'
+  + 'const bits=n*8;m[p-4]=bits>>>24;m[p-3]=(bits>>>16)&255;m[p-2]=(bits>>>8)&255;m[p-1]=bits&255;'
+  + 'H[0]=0x6a09e667;H[1]=0xbb67ae85;H[2]=0x3c6ef372;H[3]=0xa54ff53a;H[4]=0x510e527f;H[5]=0x9b05688c;H[6]=0x1f83d9ab;H[7]=0x5be0cd19;'
+  + 'for(let o=0;o<p;o+=64){for(let i=0;i<16;i++)W[i]=(m[o+i*4]<<24)|(m[o+i*4+1]<<16)|(m[o+i*4+2]<<8)|m[o+i*4+3];'
+  + 'for(let i=16;i<64;i++){const x=W[i-15],y=W[i-2];const s0=((x>>>7)|(x<<25))^((x>>>18)|(x<<14))^(x>>>3);const s1=((y>>>17)|(y<<15))^((y>>>19)|(y<<13))^(y>>>10);W[i]=(W[i-16]+s0+W[i-7]+s1)|0}'
+  + 'let a=H[0],c=H[1],d=H[2],e=H[3],f=H[4],g=H[5],h=H[6],k=H[7];'
+  + 'for(let i=0;i<64;i++){const S1=((f>>>6)|(f<<26))^((f>>>11)|(f<<21))^((f>>>25)|(f<<7));const ch=(f&g)^(~f&h);const t1=(k+S1+ch+K[i]+W[i])|0;'
+  + 'const S0=((a>>>2)|(a<<30))^((a>>>13)|(a<<19))^((a>>>22)|(a<<10));const mj=(a&c)^(a&d)^(c&d);const t2=(S0+mj)|0;'
+  + 'k=h;h=g;g=f;f=(e+t1)|0;e=d;d=c;c=a;a=(t1+t2)|0}'
+  + 'H[0]=(H[0]+a)|0;H[1]=(H[1]+c)|0;H[2]=(H[2]+d)|0;H[3]=(H[3]+e)|0;H[4]=(H[4]+f)|0;H[5]=(H[5]+g)|0;H[6]=(H[6]+h)|0;H[7]=(H[7]+k)|0}'
+  + 'const out=new Uint8Array(32);for(let i=0;i<8;i++){out[i*4]=H[i]>>>24;out[i*4+1]=(H[i]>>>16)&255;out[i*4+2]=(H[i]>>>8)&255;out[i*4+3]=H[i]&255}return out}'
+  + 'onmessage=e=>{const d=e.data;const enc=new TextEncoder();const t=d.target;for(let n=d.from;n<d.to;n++){const h=sha256(enc.encode(d.prefix+n));'
+  + 'let lt=false;for(let i=0;i<32;i++){if(h[i]<t[i]){lt=true;break}if(h[i]>t[i])break}if(lt){postMessage({found:n});return}}postMessage({done:d.to})};';
+  function lrclibSolve(prefix, targetHex, deadline) {
     const target = _hexToBytes(targetHex);
-    for (let nonce = 0; nonce < 20000000; nonce++) {
-      const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(prefix + nonce)));
-      if (_lt(h, target)) return prefix + ':' + nonce;
-      if ((nonce & 2047) === 0 && Date.now() > deadline) throw new Error('pow timeout');
-    }
-    throw new Error('pow exhausted');
+    const fallback = async () => {   // no Worker / Blob URL: the slow path, still correct
+      const enc = new TextEncoder();
+      for (let nonce = 0; nonce < 20000000; nonce++) {
+        const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(prefix + nonce)));
+        if (_lt(h, target)) return prefix + ':' + nonce;
+        if ((nonce & 2047) === 0 && Date.now() > deadline) throw new Error('pow timeout');
+      }
+      throw new Error('pow exhausted');
+    };
+    if (typeof Worker !== 'function' || typeof Blob !== 'function' || typeof URL === 'undefined' || !URL.createObjectURL) return fallback();
+    return new Promise((resolve, reject) => {
+      const threads = Math.max(1, Math.min(4, (navigator.hardwareConcurrency | 0) || 2));
+      const CHUNK = 200000;
+      let url = null, workers = [], next = 0, settled = false, timer = 0;
+      const finish = (fn, v) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        for (const w of workers) { try { w.terminate(); } catch (e) {} }
+        workers = [];
+        if (url) { try { URL.revokeObjectURL(url); } catch (e) {} }
+        if (fn) fn(v);
+      };
+      const feed = (w) => {
+        const from = next; next += CHUNK;
+        if (from >= 80000000) { finish(reject, new Error('pow exhausted')); return; }
+        w.postMessage({ prefix, target, from, to: from + CHUNK });
+      };
+      try {
+        url = URL.createObjectURL(new Blob([POW_WORKER_SRC], { type: 'text/javascript' }));
+        for (let i = 0; i < threads; i++) {
+          const w = new Worker(url);
+          w.onmessage = (e) => { const d = e.data || {}; if (d.found != null) finish(resolve, prefix + ':' + d.found); else feed(w); };
+          w.onerror = () => { finish(null, null); fallback().then(resolve, reject); };
+          workers.push(w); feed(w);
+        }
+        timer = setTimeout(() => finish(reject, new Error('pow timeout')), Math.max(1000, deadline - Date.now()));
+      } catch (e) { finish(null, null); fallback().then(resolve, reject); }
+    });
   }
   async function lrclibPublish(meta) {
     // meta: { track, artist, album, duration, plain, synced }
@@ -4672,7 +4725,7 @@
     if (ch.status < 200 || ch.status >= 300) throw new Error('challenge ' + ch.status);
     const c = JSON.parse(ch.text);
     if (!c || !c.prefix || !c.target) throw new Error('bad challenge');
-    const token = await lrclibSolve(c.prefix, c.target, Date.now() + 25000);
+    const token = await lrclibSolve(c.prefix, c.target, Date.now() + 240000);   // a few minutes on a slow machine is fine: it runs off-thread
     const res = await gmPostJSON('https://lrclib.net/api/publish', {
       trackName: meta.track || '', artistName: meta.artist || '', albumName: meta.album || meta.track || '',
       duration: Math.round(meta.duration || 0), plainLyrics: meta.plain || '', syncedLyrics: meta.synced || '',
@@ -4895,10 +4948,12 @@
       + encodeURIComponent('site:genius.com ' + q) + '&count=10', { timeout: 8000 });
     const out = [];
     let m;
-    const re0 = /<li class="b_algo"[\s\S]{0,400}?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-    while ((m = re0.exec(html))) webGeniusHit(out, m[1], m[2]);
     const re = /<h2[^>]*><a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
     while ((m = re.exec(html))) webGeniusHit(out, m[1], m[2]);
+    if (!out.length) {   // the first anchor in a result is often Bing's site-link, whose text is a URL — a last resort only
+      const re0 = /<li class="b_algo"[\s\S]{0,400}?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+      while ((m = re0.exec(html))) webGeniusHit(out, m[1], m[2]);
+    }
     if (!out.length) {
       const re2 = /<a[^>]+href="(https?:\/\/(?:www\.)?genius\.com\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
       while ((m = re2.exec(html))) webGeniusHit(out, m[1], m[2]);
@@ -5057,10 +5112,10 @@
       // mirrors fetch genius.com from OTHER servers — Cloudflare never sees this device.
       // R17: Wayback (Internet Archive, non-commercial) is always used; the two
       // commercial proxies (codetabs/allorigins) drop out in strict-privacy mode.
+      let wbP = null;   // one Wayback round trip per page, shared by the proxy race and the mirror fallback
+      const wayback = () => wbP || (wbP = gmFetch('https://web.archive.org/web/2id_/' + pageUrl, { timeout: 14000 }).then(viaHtml).catch(() => null));
       const mirrors = () => {
-        const list = [
-          gmFetch('https://web.archive.org/web/2id_/' + pageUrl, { timeout: 14000 }).then(viaHtml).catch(() => null),
-        ];
+        const list = [wayback()];
         if (!Strict.get()) {
           list.push(
             gmFetch('https://api.codetabs.com/v1/proxy?quest=' + pageUrl, { timeout: 10000 }).then(viaHtml).catch(() => null),
@@ -5074,10 +5129,7 @@
         if (r) return r;
         return await mirrors();
       }
-      const r = await firstOk([
-        direct(),
-        gmFetch('https://web.archive.org/web/2id_/' + pageUrl, { timeout: 14000 }).then(viaHtml).catch(() => null),
-      ]);
+      const r = await firstOk([direct(), wayback()]);
       if (r) return r;
       return await mirrors();
     });
@@ -5154,7 +5206,13 @@
 
   const MXM = (() => {
     let token = '';
-    try { token = GM_getValue('sl:mxmtok', '') || ''; } catch (e) {}
+    try {
+      token = GM_getValue('sl:mxmtok', '') || '';
+      // the endpoint hands some networks a token of all zeros that "works" but answers every query with the
+      // same unrelated song; and any token older than a week is not worth trusting
+      const ts = +GM_getValue('sl:mxmtokts', 0) || 0;
+      if (/^0+$/.test(token) || (token && Date.now() - ts > 7 * 86400000)) { token = ''; GM_setValue('sl:mxmtok', ''); }
+    } catch (e) {}
     // 'dead' (UpgradeOnly token) expires after 6h instead of poisoning every
     // future session — stale unofficial tokens are the steady state here
     let dead = false;
@@ -5166,9 +5224,9 @@
       if (dead) throw new Error('mxm');
       const j = await gmJSON('https://apic-desktop.musixmatch.com/ws/1.1/token.get?app_id=web-desktop-app-v1.0&t=' + Date.now(), { timeout: 7000 });
       const t = j && j.message && j.message.body && j.message.body.user_token;
-      if (!t || /UpgradeOnly/.test(t)) { markDead(); throw new Error('mxm'); }
+      if (!t || /UpgradeOnly/.test(t) || /^0+$/.test(t)) { markDead(); throw new Error('mxm'); }
       token = t;
-      try { GM_setValue('sl:mxmtok', t); } catch (e) {}
+      try { GM_setValue('sl:mxmtok', t); GM_setValue('sl:mxmtokts', Date.now()); } catch (e) {}
       return t;
     }
 
@@ -5367,7 +5425,7 @@
    * This is deliberately conservative: it strips promo / credit / link lines
    * and only returns a body that genuinely reads like lyrics, so it can be a
    * trustworthy LAST resort before "no match". */
-  const DESC_JUNK = /\b(?:prod(?:\.|uced)?\s*by|directed by|mixed?\s*by|master(?:ed)?\s*by|engineer|cover\s*art|art\s*by|follow|subscribe|subs?\b|stream(?:ing)?|out\s*now|available|free\s*dl|download|buy\b|link\s*in|dm\s*for|booking|business|inquiries|instagram|twitter|tiktok|youtube|spotify|apple\s*music|soundcloud|©|all\s*rights|beat\s*(?:by|from)|type\s*beat)\b|@[\w.]|https?:\/\/|www\.|[\w-]+\.(?:com|net|co|to|xyz|fm)\b/i;
+  const DESC_JUNK = /(?:[©℗]|\b(?:prod(?:\.|uced)?\s*by|directed by|mixed?\s*by|master(?:ed)?\s*by|engineer|cover\s*art|art\s*by|follow|subscribe|subs?\b|stream(?:ing)?|out\s*now|available|free\s*dl|download|buy\b|link\s*in|dm\s*for|booking|business|inquiries|instagram|twitter|tiktok|youtube|spotify|apple\s*music|soundcloud|all\s*rights|beat\s*(?:by|from)|type\s*beat)\b)|@[\w.]|https?:\/\/|www\.|[\w-]+\.(?:com|net|co|to|xyz|fm)\b/i;
   function descLyricsFrom(desc) {
     if (!desc || String(desc).length < 60) return null;
     const raw = String(desc).replace(/\r/g, '').split('\n').map((l) => l.trim());
@@ -5787,6 +5845,7 @@
       if (bl && bl.length) banned = bl;
     } catch (e) {}
     const banTag = (it) => (it.src || '') + '|' + normKey((it.a || '') + ' ' + (it.t || ''));
+    const descBanned = () => !!(banned && banned.includes('scdesc|' + normKey((meta.uploader || '') + ' ' + (meta.title || ''))));
     Trail.add(`find "${meta.title}" · up:${meta.uploader} · dur:${meta.dur || '?'} · gmode:${Gmode.get()}`);
     return new Promise((resolve, reject) => {
       const t0 = performance.now();
@@ -5953,7 +6012,7 @@
         }
         if (normKey(G.clean.bare) !== normKey(G.gq[0] || '')) track(kugouSearch(G.clean.bare || G.clean.title, meta.dur));
         const h = G.hints[0];
-        if (h && h.conf >= 0.55) track(ovhFind(h.a, G.clean.title));
+        if (h && h.conf >= 0.55) track(ovhFind(h.a, G.clean.title), false, true);
       }
 
       function finalEffort() {
@@ -5974,7 +6033,7 @@
         // flight) — be far more patient: this is exactly the song we want
         const rightAnswerLoading = pool.some((c) => c.score >= 0.7 && (c.ts || 0) >= 0.55 && pendingBody(c));
         const cap = lite ? 1 : (rightAnswerLoading ? 9 : 4);
-        if (((strongPending || rightAnswerLoading) && extensions < cap) || (left > 0 && extensions < 1)) {
+        if (((strongPending || rightAnswerLoading) && extensions < cap) || (left > 0 && extensions < (lite ? 1 : 4))) {
           extensions++;
           Trail.add(`final: still working (inflight:${left}${rightAnswerLoading ? ' · right answer loading' : ''}) — extending (#${extensions})`);
           after(finalEffort, strongPending ? 3500 : 2500);
@@ -6001,7 +6060,7 @@
         }
         // genuine last resort: lyrics the artist pasted into the SC description
         // (nothing else found them). Marked low so the source line is honest.
-        if (!lite && meta.descLyrics && meta.descLyrics.filter(Boolean).length >= 8) {
+        if (!lite && !descBanned() && meta.descLyrics && meta.descLyrics.filter(Boolean).length >= 8) {
           Trail.add('→ falling back to SC-description lyrics');
           finish({ src: 'scdesc', synced: false, lines: meta.descLyrics, a: meta.uploader || '', t: meta.title || '', low: true });
           return;
@@ -6208,7 +6267,7 @@
         track(neteaseSearch((artist + ' ' + G.clean.title).trim(), meta.dur));
         const cq = (artist + ' ' + G.clean.title).trim();
         if (!G.gq.some((q) => normKey(q) === normKey(cq))) {
-          if (Gtok.has()) track(geniusApiSearch(cq), true);   // reliable, cheap — worth it even in lite
+          if (Gtok.has()) track(geniusApiSearch(cq), true, true);   // reliable, cheap — worth it even in lite
           if (!lite) {
             if (Gmode.get() === 'direct') track(geniusSong(cq), true);
             track(webSearch(cq), true);
@@ -6356,7 +6415,7 @@
       if (G.gq[0]) {
         // official API first when a token is set — it's the only Genius route
         // that survives a Cloudflare-blocked / VPN connection reliably
-        if (Gtok.has()) track(geniusApiSearch(G.gq[0]), true);
+        if (Gtok.has()) track(geniusApiSearch(G.gq[0]), true, true);
         if (Gmode.get() === 'direct') {
           track(geniusSong(G.gq[0]).catch(() =>
             new Promise((r) => setTimeout(r, 1200)).then(() => geniusSong(G.gq[0]))), true);
@@ -8217,8 +8276,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Strict privacy: ' + (Strict.get() ? 'on ✓ (skip 3rd-party proxies)' : 'off'), () => {
         const now = Strict.toggle();
         toast(now
-          ? 'Strict mode on — Genius pages: direct + Wayback only (no codetabs/allorigins). Some VPN-blocked tracks may stop resolving.'
-          : 'Strict mode off — all proxies available as fallback.');
+          ? 'Strict privacy on — Genius pages: direct + Wayback only (no codetabs/allorigins). Some VPN-blocked tracks may stop resolving.'
+          : 'Strict privacy off — all proxies available as fallback.');
       });
       sep();
       let cn = 0, mn = 0;
@@ -8583,6 +8642,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!lineEls.length) { toast('Play a track with lyrics first'); return; }
       if (!estMode) { toast(isSynced ? 'Already synced — nudge with [ and ]' : 'Needs timed lyrics to calibrate'); return; }
       if (tab !== 'lyrics') setTab('lyrics');
+      if (!Media.playing()) { toast('Press play first, then tap ⎵ as each line starts'); return; }
       tapOn = true; tapIdx = 0;
       pauseScrollUntil = 0; activeI = -1;
       tapTick();
@@ -8813,6 +8873,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           else { for (let i = 0; i < ch.length; i++) out.push(null); }
         }
         if (myToken !== transToken || !transOn) return;
+        if (!out.some(Boolean)) toast('Translation unavailable right now');   // every chunk failed: say so instead of silently showing nothing
         for (let i = 0; i < els.length; i++) {
           const el = els[i], t = out[i];
           const nx = el.nextSibling;
@@ -9167,6 +9228,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         toast(copied ? 'Copied — paste it in the chat' : 'Copy failed');
       });
       row.appendChild(btn);
+      const back = document.createElement('button');
+      back.className = 'btn';
+      back.textContent = 'Back to lyrics';
+      back.addEventListener('click', () => { ++diagGen; if (curLyr) { curLyr.instr ? showInstrumental() : renderLyrics(curLyr); } else showIdle(); });   // the last sheet, or the idle card
+      row.appendChild(back);
       body.appendChild(row);
       setSrcLine(`Diagnostics · ${okCount}/${results.length} routes OK`);
     }
@@ -9310,8 +9376,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('⭳', 'Export .lrc file', 'Lyrics', () => { try { App.exportLrc(); } catch (e) {} });
       add('📄', 'Load .lrc / .txt file', 'Lyrics', () => { try { App.importLrc(); } catch (e) {} });
       // shuffle
-      add('🔀', 'Shuffle my Likes', 'Shuffle', () => { if (SUITE.shuffleNow) SUITE.shuffleNow(); });
-      add('✧', 'More like this track', 'Shuffle', () => { if (SUITE.moreLikeThis) SUITE.moreLikeThis(); });
+      add('🔀', 'Shuffle my Likes', 'Shuffle', () => { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; if (m) { if (!open) setOpen(true); toast(m); } });
+      add('✧', 'More like this track', 'Shuffle', () => { const m = SUITE.moreLikeThis ? SUITE.moreLikeThis() : 'Shuffle module not loaded'; if (m) { if (!open) setOpen(true); toast(m); } });
       // themes (SoundCloud page theme — handled by the enhancer over the bus)
       if (SUITE.setTheme) {
         const themes = [['none', 'Light'], ['dark', 'Dark'], ['amoled', 'AMOLED black'], ['midnight', 'Midnight'], ['dracula', 'Dracula'], ['nord', 'Nord'], ['ocean', 'Ocean'], ['gruvbox', 'Gruvbox'], ['rosepine', 'Rosé Pine'], ['solar', 'Solarized'], ['coffee', 'Coffee'], ['slate', 'Slate'], ['custom', 'Custom']];
@@ -9400,9 +9466,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       cmdkEl.__setAll = (a) => { all = a; };
       root.appendChild(cmdkEl);
     }
+    let cmdkPrev = null;
     function openPalette() {
       try {
         ensureCmdk();
+        cmdkPrev = (root.activeElement && root.activeElement !== cmdkEl ? root.activeElement : document.activeElement) || null;
+        if (cmdkPrev && (cmdkPrev === document.body || (cmdkEl && cmdkEl.contains(cmdkPrev)))) cmdkPrev = null;
         const all = paletteCommands();
         cmdkEl.__setAll(all);
         cmdkIn.value = '';
@@ -9411,7 +9480,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         setTimeout(() => { try { cmdkIn.focus(); } catch (e) {} }, 0);
       } catch (e) {}
     }
-    function closePalette() { if (cmdkEl) cmdkEl.classList.remove('on'); }
+    function closePalette() {
+      if (cmdkEl) cmdkEl.classList.remove('on');
+      const p = cmdkPrev; cmdkPrev = null;
+      if (p && p.isConnected) { try { p.focus({ preventScroll: true }); } catch (e) {} }
+    }
 
     return {
       mount, setOpen, isOpen: () => open, setNext,
@@ -9627,8 +9700,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { UI.setBusy(false); } catch (e) {}
       // a confirmed provisional: don't re-render identical content (flash),
       // just drop the "verifying…" tag from the source line
+      const sameLines = (x, y) => {
+        if (x === y) return true;
+        if (!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length) return false;
+        for (let i = 0; i < x.length; i++) {
+          const a = x[i], b = y[i];
+          if (a === b) continue;
+          if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+          for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
+        }
+        return true;
+      };
       const same = result && lyr && (result === lyr ||
-        (result.lines === lyr.lines && result.src === lyr.src && !!result.synced === !!lyr.synced));
+        (result.src === lyr.src && !!result.synced === !!lyr.synced && sameLines(result.lines, lyr.lines)));
       lyr = result;
       if (!aligner && result && result.synced) alignStart();   // the source arrived after the track change
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
@@ -9755,7 +9839,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
         if (Miss.has(key)) { apply(null, myToken); return; }
         if (Inflight.has(key)) {
-          if (UI.isOpen()) UI.showLoading();
+          if (UI.isOpen() && !UI.inSearch()) UI.showLoading();
           try { UI.setBusy(true); } catch (e) {}
           const infl = Inflight.get(key);
           infl.then((r) => {
@@ -9764,14 +9848,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             // answer — run the full search instead of trusting weak evidence
             if (infl.lite && (!r || r.low)) { if (!Inflight.has(key)) ensure(true); return; }
             apply(r, myToken);
-          }).catch(() => { try { UI.setBusy(false); } catch (e) {} if (myToken === token && UI.isOpen()) UI.showError(); });
+          }).catch(() => { if (myToken !== token) return; try { UI.setBusy(false); } catch (e) {} if (UI.isOpen()) UI.showError(); });
           return;
         }
       } else {
         Miss.del(key);
       }
 
-      if (UI.isOpen()) UI.showLoading();
+      if (UI.isOpen() && !UI.inSearch()) UI.showLoading();
       try { UI.setBusy(true); } catch (e) {}
       off = 0;
       anch = [];
@@ -9846,7 +9930,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       UI.setHeader(meta);
       UI.exitSearch(true);
       try { UI.setMini(null); } catch (e) {}   // never show the previous track's line
-      if (UI.isOpen()) UI.showLoading();
+      if (UI.isOpen() && !UI.inSearch()) UI.showLoading();
       stopT(prefetchT);
       stopT(warmT); stopT(warmT2);   // cancel the previous track's pending pre-warms so they can't pile up
       // Ticker, not setTimeout: hidden-tab timer clamping used to stall the
@@ -9947,6 +10031,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     /* ---------- "wrong lyrics": ban this match for this track, re-search ---------- */
     function banCurrent() {
       if (!meta || !lyr || lyr.instr) { UI.toast('Nothing to ban'); return; }
+      try { UI.exitSearch(true); } catch (e) {}
       try {
         const bm = GM_getValue('sl:ban', {}) || {};
         const arr = bm[meta.key] || [];
@@ -9967,6 +10052,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // a file read / paste can complete after the user skipped to another track;
       // bail so the imported lyrics never get filed under (or rendered on) the wrong song
       if (expectToken != null && expectToken !== token) { UI.toast('Track changed — import skipped'); return; }
+      try { UI.exitSearch(true); } catch (e) {}
       const mine = supersede();
       off = 0;
       anch = [];
@@ -10223,6 +10309,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     function markInstrumental() {
       if (!meta) return;
+      try { UI.exitSearch(true); } catch (e) {}
       const r = { instr: true, src: 'user', a: meta.uploader || '', t: meta.title || '' };
       const mine = supersede();
       Cache.set(meta.key, toCache(r));
@@ -10239,7 +10326,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     function lyricsLrc() {
       if (!lyr || lyr.instr || !lyr.lines || !lyr.lines.length) return '';
-      const offS = (off || 0) / 1000;
+      const offS = ((off || 0) + (SyncAuto.ms || 0)) / 1000;   // what the panel plays: manual nudge plus the vocal alignment
       const fmt = (t) => {
         t = Math.max(0, t - offS);   // a line activates at media time (t − off)
         const cs = Math.round(t * 100);   // round in centiseconds first — 59.999s must not print "[..:60.00]"
@@ -10297,10 +10384,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!track || !artist) { UI.toast('Missing title/artist to publish'); return; }
       const plain = lyricsText();
       const synced = (lyr.synced || anch.length) ? lyricsLrc() : '';   // real or calibrated timings only — a syllable guess must never reach the public database
-      UI.toast('Publishing to LRCLIB… solving challenge (a few seconds)');
+      UI.toast('Publishing to LRCLIB… solving its puzzle (up to a minute or two)');
       lrclibPublish({ track, artist, album: track, duration: meta.dur, plain, synced })
         .then(() => UI.toast('Published to LRCLIB — thank you! Findable for everyone now.'))
-        .catch((e) => UI.toast('Couldn’t publish — ' + ((e && e.message) || 'try again')));
+        .catch((e) => { const m = String((e && e.message) || ''); UI.toast('Couldn’t publish — ' + (/pow/.test(m) ? 'the puzzle took too long, try again' : (m || 'try again'))); });
     }
 
     return {
@@ -14157,7 +14244,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ONE consolidated pill: the Suite/lyrics button leads, then shuffle, etc.
       // (the lyrics module suppresses its own standalone button when this exists)
       barWrap.appendChild(mk('sce-hub', I.hub, 'Lyrics hub', 'Open / close the lyrics hub', () => { try { if (SUITE.toggleLyrics) SUITE.toggleLyrics(); else if (SUITE.openLyrics) SUITE.openLyrics(); else openSettings(); } catch (e) {} }, true));
-      barWrap.appendChild(mk('sce-shuffle', I.shuffle, 'Shuffle Likes', 'Shuffle your entire Likes library', () => { try { if (SUITE.shuffleNow) SUITE.shuffleNow(); else toast('Open your Likes to shuffle'); } catch (e) {} }, true));
+      barWrap.appendChild(mk('sce-shuffle', I.shuffle, 'Shuffle Likes', 'Shuffle your entire Likes library', () => { try { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Open your Likes to shuffle'; if (m) toast(m); } catch (e) {} }, true));
       barWrap.appendChild(mk('sce-restart', I.restart, 'Restart track', 'Restart this track from the beginning', restartTrack, true));
       barWrap.appendChild(mk('sce-speed', (CFG.speed / 100) + '×', 'Playback speed', 'Playback speed — click to cycle 0.5×–2×', cycleSpeed, false));
       barWrap.appendChild(mk('sce-ab', 'A·B', 'A–B loop', 'A–B loop: click for A, again for B (right-click clears)', abMark, false));
@@ -14371,8 +14458,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const foot = D.createElement('div'); foot.className = 'foot';
     const mkF = (txt, fn) => { const b = D.createElement('button'); b.className = 'btn'; b.textContent = txt; b.addEventListener('click', fn); foot.appendChild(b); return b; };
     let resetArm = 0, resetB = null;
-    resetB = mkF('Reset all', () => {
-      if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset all'; }, 4000); return; }   // one more click confirms
+    resetB = mkF('Reset enhancer', () => {
+      if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset enhancer'; }, 4000); return; }   // one more click confirms
       clearTimeout(resetArm); resetArm = 0;
       CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); rebuildPanel(); applyAll(); toast('Enhancer reset');
     });
@@ -14640,8 +14727,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const foot = D.createElement('div'); foot.style.cssText = 'display:flex;gap:7px;margin-top:14px';
       const mkF = (txt, fn) => { const b = D.createElement('button'); b.textContent = txt; b.style.cssText = 'flex:1;background:rgba(255,255,255,.07);border:0;border-radius:9px;color:#eaeaee;font:600 11px inherit;padding:8px;cursor:pointer'; b.addEventListener('click', fn); foot.appendChild(b); return b; };
       let resetArm = 0, resetB = null;
-      resetB = mkF('Reset all', () => {
-        if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset all'; }, 4000); return; }   // one more click confirms
+      resetB = mkF('Reset enhancer', () => {
+        if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset enhancer'; }, 4000); return; }   // one more click confirms
         clearTimeout(resetArm); resetArm = 0;
         CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); applyAll(); enhancerRender(container); toast('Enhancer reset');
       });

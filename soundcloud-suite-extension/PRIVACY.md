@@ -1,6 +1,6 @@
 # SoundCloud SuperSuite — Privacy Policy
 
-_Last updated: 13 September 2026._
+_Last updated: 20 September 2026._
 
 SoundCloud SuperSuite is a browser extension that enhances soundcloud.com.
 **The extension has no servers and collects nothing.**
@@ -15,8 +15,10 @@ There is no server, no account system and no analytics.
 ## What it sends, and to whom
 
 To show lyrics, the extension fetches lyric data **directly from public lyric
-providers** on your behalf, only for the track you are playing or searching.
-Every request goes over HTTPS.
+providers** on your behalf: for the track you are playing or searching, for the
+next track in your queue, and (unless you turn off "Pre-warm on hover" in
+Tweaks) for a track whose link you hover over, so its lyrics are ready before
+you press play. Every request goes over HTTPS.
 
 - lrclib.net, genius.com, api.genius.com, itunes.apple.com,
   apic-desktop.musixmatch.com, music.163.com, lyrics.kugou.com, krcs.kugou.com,
@@ -25,7 +27,8 @@ Every request goes over HTTPS.
   the correct lyric page
 - web.archive.org, api.allorigins.win, api.codetabs.com — read-only mirrors
   used to fetch a lyric page when the direct site is blocked
-- translate.googleapis.com — **only** when you ask for a translated line
+- translate.googleapis.com — **only** while you have Translate switched on in
+  the ⋯ menu; each line of the current lyrics is then sent for translation
 - api.listenbrainz.org — **only** if you add your own ListenBrainz token to
   scrobble plays (off by default)
 - api-v2.soundcloud.com / soundcloud.com — to read the playing track's public

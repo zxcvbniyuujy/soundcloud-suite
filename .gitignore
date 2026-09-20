@@ -1,0 +1,2 @@
+# store packages written by build.sh --zip
+*.zip

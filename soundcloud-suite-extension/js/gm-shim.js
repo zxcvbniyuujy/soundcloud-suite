@@ -33,8 +33,8 @@
   window.GM_setValue = function (key, value) {
     const k = PFX + key;
     let v;
-    try { v = JSON.stringify(value); } catch (e) { return; }
-    try { localStorage.setItem(k, v); return; } catch (e) {}
+    try { v = JSON.stringify(value); } catch (e) { return false; }
+    try { localStorage.setItem(k, v); return true; } catch (e) {}
     // quota pressure (we share soundcloud.com's localStorage): cached page
     // bodies are the fattest entries and always re-fetchable — shed them
     // and retry, so the lyric cache itself keeps working
@@ -46,7 +46,8 @@
       }
       dead.forEach((kk) => localStorage.removeItem(kk));
       localStorage.setItem(k, v);
-    } catch (e) {}
+      return true;
+    } catch (e) { return false; }   // the caller may re-read to confirm; nothing else it can do
   };
   window.GM_deleteValue = function (key) {
     try { localStorage.removeItem(PFX + key); } catch (e) {}

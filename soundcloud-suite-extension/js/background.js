@@ -42,7 +42,8 @@ function hostAllowed(url) {
 chrome.action.onClicked.addListener((tab) => {
   const onSoundCloud = !!(tab && typeof tab.url === 'string' && SC_FRAME.test(tab.url));
   if (onSoundCloud && tab.id != null) {
-    try { chrome.tabs.sendMessage(tab.id, { scss: 'sl-toggle' }, () => void chrome.runtime.lastError); } catch (e) {}
+    // no receiver = the tab was open before the install or update: reload it so the content scripts land
+    try { chrome.tabs.sendMessage(tab.id, { scss: 'sl-toggle' }, () => { if (chrome.runtime.lastError) { try { chrome.tabs.reload(tab.id); } catch (e) {} } }); } catch (e) {}
     return;
   }
   try { chrome.tabs.create({ url: 'https://soundcloud.com/' }); } catch (e) {}
@@ -75,7 +76,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       method: req.method || 'GET',
       headers: req.headers || {},
       body: req.data != null ? req.data : undefined,
-      credentials: req.anonymous ? 'omit' : 'include',
+      credentials: (!req.anonymous && SC_FRAME.test(req.url)) ? 'include' : 'omit',   // cookies only ever go to soundcloud.com, whatever the page asks
       redirect: 'follow',
       signal: ctrl.signal,
     }).then((r) => {
