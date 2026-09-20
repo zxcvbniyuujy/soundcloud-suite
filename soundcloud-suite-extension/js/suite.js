@@ -765,6 +765,7 @@
     }
     const jsonResponse = body => new PResponse(body, { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/json' } });
 
+
     function boostUrl(url) {
         if (!S.boosting || S.boostFails >= 2 || typeof url !== 'string') return url;
         try {
@@ -785,6 +786,98 @@
     const PResponse = PW.Response || Response;
     const PRequest = PW.Request || Request;
     const origFetch = PW.fetch.bind(PW);
+
+    /* ── feed rules: the enhancer's mute words, length limits, repost and liked filters, applied to the
+     * feed / search / related JSON before SoundCloud renders it, so a hidden track never shows and never
+     * plays. Pure and fail-open: any doubt returns the response untouched. ── */
+    const feedStats = { seen: 0, dropped: 0 };
+    function feedListKind(url) {
+        try {
+            const u = new URL(url, location.href);
+            if (!/(^|\.)api-v2\.soundcloud\.com$/.test(u.hostname)) return null;
+            const p = u.pathname;
+            if (p === '/stream' || p === '/me/stream' || /^\/stream\/users\/\d+$/.test(p)) return 'stream';
+            if (p === '/search' || p === '/search/tracks') return 'search';
+            if (/^\/tracks\/\d+\/related$/.test(p)) return 'related';
+            return null;
+        } catch (e) { return null; }
+    }
+    function feedFilter(json, rules, kind) {
+        const col = json && json.collection;
+        if (!Array.isArray(col)) return { json, dropped: 0 };
+        const words = (rules.mute || []).map(w => String(w).toLowerCase().trim()).filter(Boolean);
+        const keep = [];
+        let dropped = 0;
+        for (const it of col) {
+            if (!it || typeof it !== 'object') { keep.push(it); continue; }
+            const isRepost = kind === 'stream' && /-repost$/.test(String(it.type || ''));
+            if (rules.hideReposts && isRepost) { dropped++; continue; }
+            const t = kind === 'stream' ? (it.track || null) : ((it.kind === 'track' || kind === 'related') ? it : null);
+            if (!t) { keep.push(it); continue; }   // playlists, users and anything unknown pass through
+            const dur = +(t.full_duration || t.duration || 0);
+            if (rules.minMs && dur > 0 && dur < rules.minMs) { dropped++; continue; }
+            if (rules.maxMs && dur > rules.maxMs) { dropped++; continue; }
+            if (words.length) {
+                const hay = ((t.title || '') + ' ' + ((t.user && t.user.username) || '') + ' ' + (t.tag_list || '') + ' ' + (t.genre || '')).toLowerCase();
+                if (words.some(w => hay.indexOf(w) !== -1)) { dropped++; continue; }
+            }
+            if (rules.hideLiked && t.permalink_url && SUITE.libByUrl && SUITE.libByUrl(t.permalink_url)) { dropped++; continue; }
+            keep.push(it);
+        }
+        if (!dropped) return { json, dropped: 0 };
+        return { json: Object.assign({}, json, { collection: keep }), dropped };
+    }
+    function filterListResponse(res, kind) {
+        let rules = null;
+        try { rules = SUITE.feedRules ? SUITE.feedRules() : null; } catch (e) { rules = null; }
+        if (!rules || !rules.active || !res || !res.ok) return res;
+        let clone;
+        try { clone = res.clone(); } catch (e) { return res; }
+        return clone.json().then(j => {
+            const out = feedFilter(j, rules, kind);
+            feedStats.seen += (j && Array.isArray(j.collection)) ? j.collection.length : 0;
+            feedStats.dropped += out.dropped;
+            if (!out.dropped) return res;
+            return new PResponse(JSON.stringify(out.json), { status: res.status, statusText: res.statusText, headers: { 'Content-Type': 'application/json' } });
+        }).catch(() => res);
+    }
+    // XHR is what SoundCloud's app actually uses for its lists. The two getters are shadowed lazily on
+    // the request, so whoever reads response / responseText first (a readystatechange or load handler,
+    // registered in any order) gets the filtered body; the prototype getters read the real one underneath.
+    const XP0 = PW.XMLHttpRequest.prototype;
+    const xhrGetter = (k) => { const d = Object.getOwnPropertyDescriptor(XP0, k); return d && d.get; };
+    function installListFilter(xhr, kind) {
+        if (xhr.__bhListHooked) return;
+        xhr.__bhListHooked = true;
+        const gText = xhrGetter('responseText'), gResp = xhrGetter('response');
+        if (!gText || !gResp) return;
+        let done = false, text = null, obj = null;
+        const compute = () => {
+            if (done || xhr.readyState !== 4) return;
+            done = true;
+            try {
+                if (xhr.status !== 200) return;
+                const rules = SUITE.feedRules ? SUITE.feedRules() : null;
+                if (!rules || !rules.active) return;
+                const rt = xhr.responseType;
+                let j;
+                if (rt === 'json') j = gResp.call(xhr);
+                else if (rt === '' || rt === 'text') j = JSON.parse(gText.call(xhr));
+                else return;
+                const out = feedFilter(j, rules, kind);
+                feedStats.seen += (j && Array.isArray(j.collection)) ? j.collection.length : 0;
+                feedStats.dropped += out.dropped;
+                if (!out.dropped) return;
+                obj = out.json; text = JSON.stringify(out.json);
+            } catch (e) { text = null; obj = null; }
+        };
+        try {
+            Object.defineProperty(xhr, 'responseText', { configurable: true, get() { compute(); return text != null ? text : gText.call(xhr); } });
+            Object.defineProperty(xhr, 'response', { configurable: true, get() { compute(); if (obj == null) return gResp.call(xhr); return xhr.responseType === 'json' ? obj : text; } });
+        } catch (e) {}
+    }
+    try { SUITE.feedStats = () => Object.assign({}, feedStats); SUITE.feedFilter = feedFilter; } catch (e) {}
+
     PW.fetch = function (input, init) {
         let rawUrl = '';
         try {
@@ -828,11 +921,15 @@
         const isApi = API_RE.test(rawUrl);
         const p = origFetch(input, init);
         if (!isApi) return p;
+        let mth = 'GET';
+        try { mth = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase(); } catch (e) {}
+        const listKind = mth === 'GET' ? feedListKind(rawUrl) : null;
         return p.then(res => {
             try {
                 if (res && (res.status === 404 || res.status >= 500)) ApiHealth.markFail(res.status);
                 else if (res && res.status < 400) ApiHealth.markOk();
             } catch (e) {}
+            if (listKind) { try { return filterListResponse(res, listKind); } catch (e) { return res; } }
             return res;
         });
     };
@@ -846,6 +943,7 @@
             const raw = String(url);
             sniffUrl(raw, method);
             this.__bhApi = API_RE.test(raw);
+            this.__bhListKind = ((method || '').toUpperCase() === 'GET') ? feedListKind(raw) : null;   // feed / search / related lists get the rules
             if ((method || '').toUpperCase() === 'GET') {
                 const page = resolveFeed(raw);
                 if (page !== null) { this.__bhFeedPage = page; return origOpen.call(this, method, raw, ...rest); }
@@ -900,6 +998,7 @@
             }, 5);
             return;
         }
+        if (this.__bhListKind) { try { installListFilter(this, this.__bhListKind); } catch (e) {} }
         return origSend.apply(this, args);
     };
 
@@ -10993,6 +11092,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     focusMode: false,       // hide the right sidebar entirely
     maxWidth: false,        // cap content width for big screens
     hideReposts: false,     // hide reposts in the stream
+    feedMute: '',           // mute words: a track whose title, artist, tags or genre contains one never shows or plays
+    feedMinMin: '0',        // hide tracks shorter than N minutes ('0' = off)
+    feedMaxMin: '0',        // hide tracks longer than N minutes ('0' = off)
+    feedHideLiked: false,   // hide tracks already in the likes library
     resumePos: 'ask',       // long tracks remember their position: 'ask' | 'auto' | 'off'
     hidePlaylistsFeed: false, // hide playlists in the stream
     compactFeed: false,     // tighter stream rows
@@ -11181,7 +11284,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
     fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1], reverbAmt: [0, 100, 5],
-    resumePos: { one: ['ask', 'auto', 'off'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
+    resumePos: { one: ['ask', 'auto', 'off'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
   };
   const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
   // one PEQ filter entry, re-validated field by field (data only)
@@ -14499,6 +14602,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           toggleMute, bumpVol, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
+          feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -14716,7 +14820,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['hideUpsell', 'toggle', 'Hide Go+ upsells', 'Upgrade nags & banners'],
     ['hideAppBanner', 'toggle', 'Hide app / cookie banners', ''],
     ['hidePromoted', 'toggle', 'Hide promoted items', 'Sponsored tracks in the stream'],
-    ['hideReposts', 'toggle', 'Hide reposts', 'In your stream'],
+    ['hideReposts', 'toggle', 'Hide reposts', 'In your stream · they never play from the feed either'],
+    ['feedMute', 'text', 'Mute words', 'A track whose title, artist, tags or genre has one of these never shows or plays · comma-separated'],
+    ['feedMinMin', 'select', 'Hide tracks shorter than', 'In the feed, search and related tracks', [['0', 'Off'], ['1', '1 minute'], ['2', '2 minutes'], ['5', '5 minutes']]],
+    ['feedMaxMin', 'select', 'Hide tracks longer than', 'Keeps hour-long mixes out of a song feed', [['0', 'Off'], ['10', '10 minutes'], ['20', '20 minutes'], ['30', '30 minutes'], ['60', '1 hour']]],
+    ['feedHideLiked', 'toggle', 'Hide tracks you already liked', 'In the feed, search and related · uses the shuffle library'],
     ['hidePlaylistsFeed', 'toggle', 'Hide playlists in feed', 'Only tracks in the stream'],
     ['compactFeed', 'toggle', 'Compact feed', 'Tighter stream rows'],
     ['hideComments', 'toggle', 'Hide waveform comments', 'Cleaner player'],
@@ -14809,6 +14917,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const val = D.createElement('span'); val.className = 'val'; val.textContent = CFG[key] + (r[3] || '');
         rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
         row.appendChild(rng); row.appendChild(val);
+      } else if (type === 'text') {
+        const inp = D.createElement('input'); inp.type = 'text'; inp.value = CFG[key] || ''; inp.spellcheck = false; inp.setAttribute('aria-label', label);
+        inp.placeholder = key === 'feedMute' ? 'type beat, sped up, nightcore' : '';
+        inp.style.cssText = 'flex:1;min-width:0;max-width:46%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:inherit;font:inherit;font-size:12px;padding:7px 10px';
+        inp.addEventListener('keydown', (e) => e.stopPropagation());
+        let dT = 0;
+        inp.addEventListener('input', () => { clearTimeout(dT); dT = setTimeout(() => { CFG[key] = inp.value.slice(0, 400); save(); }, 400); });
+        row.appendChild(inp);
       } else if (type === 'textarea') {
         row.style.display = 'block';
         const ta = D.createElement('textarea'); ta.className = 'ta'; ta.value = CFG[key] || ''; ta.spellcheck = false; ta.setAttribute('aria-label', label);
@@ -15175,6 +15291,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.setTheme = (id) => { try { if (typeof id !== 'string') return; CFG.theme = id; CFG.autoDark = false; save(); applyAll(); } catch (e) {} }; } catch (e) {}
 
   function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); ensureTop(); }
+  // the feed rules the shuffle module's API layer applies to the feed / search / related JSON
+  try {
+    SUITE.feedRules = () => {
+      const mute = String(CFG.feedMute || '').split(/[,\n]/).map((w) => w.trim()).filter((w) => w.length >= 2);
+      const minMs = (parseInt(CFG.feedMinMin, 10) || 0) * 60000, maxMs = (parseInt(CFG.feedMaxMin, 10) || 0) * 60000;
+      const hideReposts = !!CFG.hideReposts, hideLiked = !!CFG.feedHideLiked;
+      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked), mute, minMs, maxMs, hideReposts, hideLiked };
+    };
+  } catch (e) {}
 
   /* ───────── lightweight error log + a copyable debug snapshot ─────────
    * The suite swallows its own errors defensively, so when something misbehaves
