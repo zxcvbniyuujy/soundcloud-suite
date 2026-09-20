@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SoundCloud Suite",
-  "version": "4.53.0",
-  "description": "All-in-one SoundCloud upgrade: themes & declutter, player tools, studio-grade audio, a synced-lyrics hub and full-library shuffle.",
+  "version": "4.53.1",
+  "description": "Synced lyrics, studio-grade audio, full-library shuffle and a cleaner look for the SoundCloud web player.",
   "minimum_chrome_version": "111",
   "icons": {
     "16": "icons/icon-16.png",

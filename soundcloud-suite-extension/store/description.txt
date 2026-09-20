@@ -1,34 +1,18 @@
-SoundCloud Suite turns the SoundCloud web player into the player it should have been: synced lyrics that follow the vocals, studio-grade audio you can actually hear, a shuffle that reaches your whole likes library, and a cleaner, darker SoundCloud with the clutter gone. Everything runs in your browser. Nothing is sent to us.
+SoundCloud Suite adds the things the web player has always been missing: lyrics that stay in sync with the song, real audio processing, a shuffle that reaches your whole likes library, and a darker, quieter page. Everything runs in your browser and nothing is sent to us.
 
-LYRICS THAT FOLLOW THE SONG
-• Synced, line-by-line lyrics for the track that is playing, locked to the audio clock so the highlight glides with the vocals, even on sped-up or edited uploads.
-• Six lyric sources are searched for you, so almost every track gets covered. Plain lyrics get a smart estimated timing you can fix with two taps.
-• Tap-along calibration, an "Align to vocals" offer when the hub hears a constant lag, and a mini lyric bar that floats over SoundCloud while the hub is closed.
-• Translate any lyrics line by line, copy a quote with its timestamp, export as .lrc, or paste your own lyrics for tracks nobody has covered.
+Lyrics that follow the song
+Synced lyrics appear line by line for the track that is playing, locked to the audio clock so the highlight keeps pace even on sped-up or edited uploads. Six lyric sources are searched for you, and plain lyrics get an estimated timing you can correct with two taps. Translate lines in place, copy a quote with its timestamp, export to .lrc, or paste your own lyrics for tracks nobody has covered. A small floating bar shows the current line while the panel is closed.
 
-STUDIO-GRADE AUDIO, RIGHT IN THE PLAYER
-• A ten-band equalizer you drag on a glowing live spectrum, 23 presets plus your own, per-track memory and automatic headroom so nothing clips.
-• Enhance: a five-stage tone shape, oversampled saturation, a harmonic exciter that rebuilds the top end a lossy stream lost, and a three-band compressor that follows the track's own loudness. Level-matched, so it never wins by simply being louder.
-• Loudness normalization that measures like the streaming services, Night mode, Volume boost to 300 %, and a true-peak clip guard.
-• Speed from 0.5× to 2× with pitch that follows or holds, fades, reverb, a "Slowed + reverb" chip, stereo width, crossfeed for headphones, balance, mono, and headphone correction from a pasted correction profile.
-• Every control is an exact passthrough when it is off. Hold Compare to hear the original at the same level.
+Sound you can actually hear
+A ten-band equalizer you drag on a live spectrum, with presets, per-track memory and automatic headroom so nothing clips. Enhance adds tone shaping, saturation, a harmonic exciter and a loudness-aware three-band compressor, level-matched so it never wins by simply being louder. Loudness normalization, Night mode, volume boost, a true-peak clip guard, speed from 0.5× to 2× with pitch that follows or holds, fades, reverb, stereo width, crossfeed, balance, mono and headphone correction. Every control is an exact passthrough when it is off, and holding Compare plays the original at the same level.
 
-SHUFFLE YOUR WHOLE LIBRARY
-• True random play across every track you have liked, not just the first page SoundCloud loads.
-• Genre and artist filters, a blocklist, skip-what-you-just-heard memory, listening stats, and optional scrobbling to your own listening-history account.
-• A CSV export of your likes and a one-file backup of every setting.
+Shuffle your whole library
+True random play across every track you have liked, not just the first page the site loads. Genre and artist filters, a blocklist, a memory of what you just heard, listening stats, optional scrobbling, a CSV export of your likes and a one-file backup of every setting.
 
-A CLEANER SOUNDCLOUD
-• Eleven dark themes, from pure black for OLED screens to soft, warm palettes, plus a light theme.
-• Hide the upsells, the sidebar, the footer and anything else you never look at. Zen mode strips the page down to the music.
-• Player tools in the bar: speed, A–B loop, sleep timer, waveform timeline, timecodes, track info with artist links, queue export, and a command palette (Ctrl+K) that reaches every setting.
-• Keyboard shortcuts for all of it. Press ? inside the hub for the full list.
+A quieter page
+Eleven dark themes and a light one. Hide the upsells, the sidebar, the footer and anything else you never look at, or switch on Zen mode and keep only the music. The player bar gains speed, an A–B loop, a sleep timer, a waveform timeline, timecodes, track info with artist links and queue export. A command palette (Ctrl+K) reaches every setting, and every feature has a keyboard shortcut; press ? inside the panel for the list.
 
-PRIVACY
-• No account, no servers, no analytics. Settings, stats and the lyric cache live in your own browser.
-• Lyrics lookups go straight from your browser to the lyric providers, without cookies. Lines are sent for translation only while you have Translate switched on.
-• Full privacy policy: https://github.com/zxcvbniyuujy/soundcloud-suite/blob/main/soundcloud-suite-extension/PRIVACY.md
+Privacy
+No account, no servers, no analytics. Settings, stats and the lyric cache stay in your browser. Lyric lookups go directly from your browser to the lyric providers without cookies, and lines are sent for translation only while Translate is on. The full privacy policy, source code and issue tracker are at https://github.com/zxcvbniyuujy/soundcloud-suite
 
-Open source on GitHub. Questions and bug reports: https://github.com/zxcvbniyuujy/soundcloud-suite/issues
-
-SoundCloud Suite is an independent project and is not affiliated with, endorsed by or sponsored by SoundCloud. The SoundCloud name and logo are used with permission.
+This is an independent project, not affiliated with or endorsed by SoundCloud. The SoundCloud name and logo are used with permission.
