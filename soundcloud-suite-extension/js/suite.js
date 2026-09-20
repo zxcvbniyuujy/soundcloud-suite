@@ -8007,7 +8007,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             // fire just BEFORE this track ends → the watcher arms
             // "pause after this track" instead of fading mid-song
             const m2 = App.meta();
-            const remS = m2 && m2.dur > 0 ? Math.max(5, m2.dur - Media.time()) : 0;
+            let rate = 1; try { const el = Media.el(); if (el && el.playbackRate > 0) rate = el.playbackRate; } catch (e) {}   // the timer is wall-clock: media seconds left ÷ the speed
+            const remS = m2 && m2.dur > 0 ? Math.max(5, (m2.dur - Media.time()) / rate) : 0;
             if (!remS) { toast('Play something first'); return; }
             SUITE.sleep.set(Math.max(0.01, remS / 60 - 0.12));
             toast('Pausing after this track');
@@ -12595,7 +12596,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
       try {
         const left = isFinite(m.duration) ? m.duration - m.currentTime : NaN;
-        if (CFG.skipSilence && fxRouted && !m.paused && left < 30 && left > 0.5 && meter.srcPeak < -60) {
+        // the taps sit after the element's own volume: undo the slider before comparing (a mute or a near-silent level is
+        // not a silent ending) and only read buffered audio (a stall reads silent too)
+        const vol = m.muted ? 0 : +m.volume;
+        if (CFG.skipSilence && fxRouted && !m.paused && m.readyState >= 3 && vol >= 0.02 && left < 30 && left > 0.5 && meter.srcPeak - 20 * Math.log10(vol) < -60) {
           if (!silentSince) silentSince = Date.now();
           else if (Date.now() - silentSince > 2000) { silentSince = 0; __sceUserSeek = Date.now(); m.currentTime = m.duration - 0.2; toast('Skipped the silent ending'); }
         } else silentSince = 0;
@@ -12618,18 +12622,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           // never remember a mute (M) or a near-silent level as "the volume": unmuting / the next session would restore silence
           // (nor a sleep-timer fade in flight: its stepped-down levels are not "the volume" either)
           let sleepFading = false; try { sleepFading = !!(SUITE.sleep && SUITE.sleep.fading && SUITE.sleep.fading()); } catch (e) {}
+          if (mutedVol != null && isFinite(m.volume) && m.volume >= 0.02) mutedVol = null;   // the slider raised the level: that is an unmute
           if (mutedVol == null && !sleepFading && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
         }
       }
     } catch (e) {}
   }
   /* A–B loop endpoints (live, not persisted) */
-  let abOn = false, abA = null, abB = null, abM = null, abT = 0, abI = 0;   // abM: the element the loop was set on · abT/abI: the wrap timers (armed by armAb)
+  let abOn = false, abA = null, abB = null, abM = null, abHref = null, abT = 0, abI = 0;   // abM / abHref: the element and the track the loop was set on · abT/abI: the wrap timers (armed by armAb)
   function abMark() {
     const m = activeMedia();
     if (!m || !isFinite(m.currentTime)) { toast('Play a track first'); return; }
     if (abA == null || abB != null) { abA = m.currentTime; abB = null; abOn = false; armAb(); toast('A set — mark B next'); }
-    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; abM = m; armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
+    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; abM = m; abHref = curTrackHref(); armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
     else { abA = m.currentTime; toast('A moved'); }
     refreshBar();
   }
@@ -12653,7 +12658,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   // quiet: the loop switched itself off (the user seeked out of it) — a softer toast than an explicit clear
-  function abClear(quiet) { abA = abB = null; abM = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
+  function abClear(quiet) { abA = abB = null; abM = null; abHref = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
   // 2.28: the wrap is a timer aimed 30 ms of media time before B (rate-aware) plus a 100 ms backstop that survives
   // seeks and rate changes; the 1 Hz enforce tick no longer takes part, so the loop lands within ~50 ms of B
   const abAimMs = (m) => ((abB - 0.03 - m.currentTime) / Math.max(0.25, +m.playbackRate || 1)) * 1000;   // wall ms until 30 ms (media) before B
@@ -12677,6 +12682,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // cannot tell from a loop whose A sits at the very start); a merely paused loop element keeps its loop and rests the backstop
       if (abM && m !== abM) { if (!m.paused) abClear(true); else { try { clearInterval(abI); } catch (e) {} abI = 0; } return; }
       if (!(++abMarkN % 10)) abMarkers();
+      // the same element with a new src (SoundCloud swaps tracks in place, restarting at 0 — inside a loop whose A sits at the
+      // start): the badge link tells the track; a link missing during a re-render never clears the loop
+      if (abHref) { const h = curTrackHref(); if (h && h !== abHref) { abClear(true); return; } }
       const t = m.currentTime;
       if (t < abA - 0.5 || t > abB + 1) { abClear(true); return; }   // the listener seeked outside the loop (checked first: a seek past B must not wrap)
       if (t >= abB - 0.05) { __sceUserSeek = Date.now(); m.currentTime = abA; armAb(); return; }
@@ -12715,7 +12723,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try {
           if (!CFG.volScroll) return;
           const bar = e.target && e.target.closest && e.target.closest('.playControls, .playControls__elements');
-          if (!bar) return;
+          if (!bar || (e.target.closest && e.target.closest('.queue, .playControls__queue'))) return;   // the Next Up panel sits inside the bar: its list keeps the wheel
           const m = activeMedia();
           if (!m) return;
           e.preventDefault();
@@ -12799,7 +12807,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (min === -1) {
         // fire just before this track ends → the watcher arms "pause after this track" instead of fading mid-song
         const m = activeMedia();
-        const remS = m && isFinite(m.duration) && m.duration > 0 ? Math.max(5, m.duration - m.currentTime) : 0;
+        const rate = m ? Math.max(0.25, +m.playbackRate || 1) : 1;   // the timer is wall-clock: media seconds left ÷ the speed
+        const remS = m && isFinite(m.duration) && m.duration > 0 ? Math.max(5, (m.duration - m.currentTime) / rate) : 0;
         if (!remS) { toast('Play something first'); return; }
         SUITE.sleep.set(Math.max(0.01, remS / 60 - 0.12)); sleepChipMin = -1; toast('Pausing after this track');
       } else if (min > 0) { SUITE.sleep.set(min); sleepChipMin = min; toast('💤 Sleep timer set · ' + (min >= 60 ? (min / 60) + 'h' : min + ' min')); }
@@ -12809,8 +12818,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   function likeCurrent() {
-    const b = D.querySelector('.playControls .sc-button-like, .playbackSoundBadge__actions .sc-button-like, .playControls__soundBadge .sc-button-like, button.sc-button-like');
-    if (b) { const was = b.classList.contains('sc-button-selected'); b.click(); toast(was ? 'Unliked' : 'Liked ♥'); } else toast('No like button here');
+    // the player bar only, most specific first: a selector list returns the first match in DOCUMENT order, i.e. a stream item's button
+    const b = ['.playbackSoundBadge__actions .sc-button-like', '.playbackSoundBadge__like', '.playControls__soundBadge .sc-button-like', '.playControls .sc-button-like'].map((s) => D.querySelector(s)).find(Boolean);
+    if (b) { const was = b.classList.contains('sc-button-selected'); b.click(); toast(was ? 'Unliked' : 'Liked ♥'); } else toast('Play a track first');
   }
   function gotoArtist() { const a = D.querySelector('.playbackSoundBadge__lightLink'); const h = a && a.getAttribute('href'); if (h) { try { W.open('https://soundcloud.com' + h.split('?')[0], '_blank'); } catch (e) {} } else toast('Play a track first'); }
   let topBtn = null;
@@ -12965,14 +12975,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       else toast('No download available');
     });
   }
-  let infoEl = null, infoAway = null, infoEsc = null;
+  let infoEl = null, infoAway = null, infoEsc = null, infoFrom = null;   // infoFrom: what had focus when the popover opened (focus goes back there on close)
   function closeInfo() {
     if (infoAway) { try { D.removeEventListener('mousedown', infoAway, true); } catch (e) {} infoAway = null; }
     if (infoEsc) { try { D.removeEventListener('keydown', infoEsc, true); } catch (e) {} infoEsc = null; }
     if (infoEl) { try { infoEl.remove(); } catch (e) {} infoEl = null; }
+    if (infoFrom) { const f = infoFrom; infoFrom = null; try { if (f.isConnected && (!D.activeElement || D.activeElement === D.body)) f.focus(); } catch (e) {} }
   }
   function showInfo() {
     if (infoEl) { closeInfo(); return; }
+    try { const a = D.activeElement; infoFrom = a && a !== D.body && a !== D.documentElement ? a : null; } catch (e) { infoFrom = null; }
     infoEl = D.createElement('div');
     infoEl.style.cssText = 'position:fixed;right:14px;bottom:62px;z-index:2147483350;width:302px;max-height:74vh;overflow:auto;'
       + 'background:linear-gradient(180deg,rgba(24,24,28,.85),rgba(11,11,14,.93));color:#f2f2f4;border-radius:18px;'
@@ -12985,11 +12997,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     setTimeout(() => {
       infoAway = (e) => { try { if (infoEl && !infoEl.contains(e.target) && !(e.target.closest && e.target.closest('.sce-info'))) closeInfo(); } catch (e2) {} };
       D.addEventListener('mousedown', infoAway, true);
-      infoEsc = (e) => { if (e.key === 'Escape') closeInfo(); };
+      infoEsc = (e) => { try { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeInfo(); } } catch (e2) {} };
       D.addEventListener('keydown', infoEsc, true);
     }, 0);
+    const el = infoEl;   // an earlier, slower fetch must not overwrite a re-opened popover
     fetchTrack().then((d) => {
-      if (!infoEl) return;
+      if (!infoEl || infoEl !== el) return;
       if (d && d.err) { infoEl.innerHTML = '<div style="opacity:.7;font-size:12px">' + esc(d.err) + '</div>'; return; }
       renderInfo(d);
     });
@@ -13046,6 +13059,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     mkA('Copy artist', () => uhref && clip(uhref, 'Artist link copied'));
     mkA('Copy link', () => clip(d.__url || d.permalink_url || '', 'Track link copied'));
     mkA('Copy embed', () => clip('<iframe width="100%" height="166" scrolling="no" frameborder="no" src="https://w.soundcloud.com/player/?url=' + encodeURIComponent(d.permalink_url || d.__url || '') + '"></iframe>', 'Embed code copied'));
+    const fb = acts.querySelector('button'); if (fb) { try { fb.focus({ preventScroll: true }); } catch (e) {} }   // keyboard: Tab walks the actions, Escape closes
   }
 
   /* ───────── keyboard shortcut cheat-sheet (press ?) ─────────
