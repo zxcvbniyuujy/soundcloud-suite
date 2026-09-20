@@ -1,0 +1,34 @@
+SoundCloud Suite turns the SoundCloud web player into the player it should have been: synced lyrics that follow the vocals, studio-grade audio you can actually hear, a shuffle that reaches your whole likes library, and a cleaner, darker SoundCloud with the clutter gone. Everything runs in your browser. Nothing is sent to us.
+
+LYRICS THAT FOLLOW THE SONG
+• Synced, line-by-line lyrics for the track that is playing, locked to the audio clock so the highlight glides with the vocals, even on sped-up or edited uploads.
+• Six sources searched for you: LRCLIB, Genius, Musixmatch, Kugou, NetEase and the open web. Plain lyrics get a smart estimated timing you can fix with two taps.
+• Tap-along calibration, an "Align to vocals" offer when the hub hears a constant lag, and a mini lyric bar that floats over SoundCloud while the hub is closed.
+• Translate any lyrics line by line, copy a quote with its timestamp, export as .lrc, or paste your own lyrics for tracks nobody has covered.
+
+STUDIO-GRADE AUDIO, RIGHT IN THE PLAYER
+• A ten-band equalizer you drag on a glowing live spectrum, 23 presets plus your own, per-track memory and automatic headroom so nothing clips.
+• Enhance: a five-stage tone shape, oversampled saturation, a harmonic exciter that rebuilds the top end a lossy stream lost, and a three-band compressor that follows the track's own loudness. Level-matched, so it never wins by simply being louder.
+• Loudness normalization that measures like the streaming services, Night mode, Volume boost to 300 %, and a true-peak clip guard.
+• Speed from 0.5× to 2× with pitch that follows or holds, fades, reverb, a "Slowed + reverb" chip, stereo width, crossfeed for headphones, balance, mono, and headphone correction from any AutoEQ profile.
+• Every control is an exact passthrough when it is off. Hold Compare to hear the original at the same level.
+
+SHUFFLE YOUR WHOLE LIBRARY
+• True random play across every track you have liked, not just the first page SoundCloud loads.
+• Genre and artist filters, a blocklist, skip-what-you-just-heard memory, listening stats, and optional ListenBrainz scrobbling.
+• A CSV export of your likes and a one-file backup of every setting.
+
+A CLEANER SOUNDCLOUD
+• Eleven dark themes including AMOLED black, Midnight, Nord, Dracula and Gruvbox, plus a light theme.
+• Hide the upsells, the sidebar, the footer and anything else you never look at. Zen mode strips the page down to the music.
+• Player tools in the bar: speed, A–B loop, sleep timer, waveform timeline, timecodes, track info with artist links, queue export, and a command palette (Ctrl+K) that reaches every setting.
+• Keyboard shortcuts for all of it. Press ? inside the hub for the full list.
+
+PRIVACY
+• No account, no servers, no analytics. Settings, stats and the lyric cache live in your own browser.
+• Lyrics lookups go straight from your browser to the lyric providers, without cookies. Translation is sent to Google Translate only while you have it switched on.
+• Full privacy policy: https://github.com/zxcvbniyuujy/soundcloud-suite/blob/main/soundcloud-suite-extension/PRIVACY.md
+
+Open source on GitHub. Questions and bug reports: https://github.com/zxcvbniyuujy/soundcloud-suite/issues
+
+SoundCloud Suite is an independent project and is not affiliated with, endorsed by or sponsored by SoundCloud. The SoundCloud name and logo are used with permission.
