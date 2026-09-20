@@ -4555,7 +4555,8 @@
       return { songs: it && it.id ? [lrcItem(it, 0)] : [] };
     } catch (e) {
       lrcHandleErr(e);
-      return { songs: [] };
+      if (/HTTP 404/.test(String(e && e.message))) return { songs: [] };   // "no exact match" is an answer, not a failure
+      throw e;
     }
   }
 
@@ -5423,7 +5424,7 @@
       if (om) { offset = parseInt(om[1], 10) || 0; if (!/\[\d{1,2}:\d{2}/.test(lineRaw)) continue; }
       const tags = [...lineRaw.matchAll(tagRe)];
       if (!tags.length) continue;
-      const text = lineRaw.replace(tagRe, '').trim();
+      const text = lineRaw.replace(tagRe, '').replace(/<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g, '').replace(/\s{2,}/g, ' ').trim();   // enhanced-LRC word tags too
       if (!text) continue;
       for (const m of tags) {
         const mm = parseInt(m[1], 10), ss = parseInt(m[2], 10);
@@ -5914,7 +5915,7 @@
           const r = readyResult(ly, true);
           if (r) { finish(r); return; }
         }
-        if (!pool.length && !lyricPool.length && !reserve.length && total > 0 && fails === total) { failNet(); return; }
+        if (!pool.length && !lyricPool.length && !reserve.length && ((total > 0 && fails === total) || navigator.onLine === false)) { failNet(); return; }
         // the title or SoundCloud's own genre/tags said "instrumental" and no
         // source disagreed strongly enough to win — believe them. (Never from
         // a lite pre-warm: wave-1-only evidence must not cache an instrumental.)
@@ -6099,9 +6100,10 @@
         }
       }
 
-      function track(p, primary) {
-        total++; left++; drained = false;
-        p.then((res) => add(res, primary)).catch(() => { fails++; }).finally(() => {
+      function track(p, primary, aux) {   // aux: metadata helpers that never fail, so they must not hide a dead network
+        if (!aux) total++;
+        left++; drained = false;
+        p.then((res) => add(res, primary)).catch(() => { if (!aux) fails++; }).finally(() => {
           if (--left === 0 && !done) {
             drained = true;
             if (!pool.some((x) => x.score >= 0.62)) fireWave2();
@@ -6285,11 +6287,11 @@
           track(geniusMulti(G.gq[0]), true);
         } else {
           if (!lite) { wsLaunched = true; track(webSearch(G.gq[0]), true); }
-          track(geniusSong(G.gq[0]).catch(() => ({ songs: [] })), true);
+          track(geniusSong(G.gq[0]), true);
         }
       }
       track(kugouSearch(G.gq[0] || G.clean.title, meta.dur));
-      track(scEnrich());
+      track(scEnrich(), false, true);
       if (!lite) {
         // v3.1: the big synced catalogs race from t=0 too — staggering them
         // was a VPN-era politeness that just made every search feel slow
@@ -6309,7 +6311,7 @@
           if (G.gq[0] && Gmode.get() === 'direct') track(geniusMulti(G.gq[0]), true);
           const h0 = G.hints[0];
           if (h0 && h0.conf >= 0.55) track(lrcSearch({ track: G.clean.title, artist: h0.a }));
-          track(itunesCanonical());
+          track(itunesCanonical(), false, true);
         }, 400);
 
         // wave 1.8 — web search joins; anything wave 1 skipped catches up
@@ -6367,13 +6369,14 @@
     let keys = null;   // mirror of idx for O(1) existence checks (no full-entry reads)
     const keySet = () => { if (!keys) keys = new Set(idx()); return keys; };
     return {
-      has(key) { try { return keySet().has(key); } catch (e) { return false; } },
+      has(key) { try { return GM_getValue(PFX + key, null) != null; } catch (e) { return false; } },   // the store, not this tab's mirror
       get(key) {
         try { return GM_getValue(PFX + key, null) || null; } catch (e) { return null; }
       },
       set(key, val) {
         try {
           GM_setValue(PFX + key, val);
+          if (GM_getValue(PFX + key, null) == null) return;   // the write was shed under quota pressure — nothing to index
           let i = idx();
           if (i[i.length - 1] !== key) {   // skip the index rewrite when already most-recent
             i = i.filter((k) => k !== key);
@@ -6869,7 +6872,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 /* the Audio & Tweaks tabs are built with hard-coded DARK inline styles (white text on
    faint cards); on a LIGHT panel that's unreadable — give those two bodies a dark
    surface so the dark-built content reads correctly (clipped to the panel's radius) */
-.panel.lite #abody, .panel.lite #ebody { background: #16171b; }
+.panel.lite #abody, .panel.lite #ebody { background: #16171b; color: #e6e6ea; }
 
 /* R32: visually-hidden live region for the active-line screen-reader announce */
 .srl { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); border: 0; white-space: nowrap; }
@@ -7090,6 +7093,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       host.style.cssText = 'position:fixed;inset:0 0 auto auto;width:0;height:0;z-index:2147483000;pointer-events:none;';
       (document.body || document.documentElement).appendChild(host);
       root = host.attachShadow({ mode: 'open' });
+      // SoundCloud sees every key typed in here as landing on the host <div> and runs its shortcuts
+      // (S focuses search, Space toggles play, digits seek); keep field input inside the panel
+      root.addEventListener('keydown', (e) => {
+        const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
+      });
 
       const style = document.createElement('style');
       style.textContent = CSS;
@@ -7204,14 +7213,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ── drag to move (header), double-click header to reset ──
       let drag = null;
       hdrEl.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('.hbtn') || maxOn) return;
+        if (e.button || e.target.closest('.hbtn') || maxOn) return;
         const r = panel.getBoundingClientRect();
-        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
-        try { hdrEl.setPointerCapture(e.pointerId); } catch (e2) {}
+        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false, id: e.pointerId, x0: e.clientX, y0: e.clientY };
       });
       hdrEl.addEventListener('pointermove', (e) => {
         if (!drag) return;
-        drag.moved = true;
+        // capture only once the pointer really travels: capturing on pointerdown retargets the
+        // click to the header, which killed the clock, title, source-line and artwork clicks
+        if (!drag.moved) {
+          if (Math.abs(e.clientX - drag.x0) < 3 && Math.abs(e.clientY - drag.y0) < 3) return;
+          drag.moved = true;
+          try { hdrEl.setPointerCapture(drag.id); } catch (e2) {}
+        }
         const x = Math.min(Math.max(4, e.clientX - drag.dx), innerWidth - 80);
         const y = Math.min(Math.max(4, e.clientY - drag.dy), innerHeight - 60);
         panel.style.left = x + 'px';
@@ -7267,6 +7281,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ── resize grip (bottom-right), persisted ──
       let rsz = null;
       gripEl.addEventListener('pointerdown', (e) => {
+        if (e.button) return;
         e.preventDefault(); e.stopPropagation();
         const r = panel.getBoundingClientRect();
         rsz = { w: r.width, h: r.height, x: e.clientX, y: e.clientY };
@@ -8312,6 +8327,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     // Esc backs out one layer at a time; returns true when it consumed the key
     function escStep() {
+      if (paletteOpen()) { closePalette(); return true; }   // the palette sits above everything
       if (tapOn) { endTapAlign(tapIdx > 0); return true; }                    // finish calibration (no "saved" toast when nothing was tapped)
       const ps = panel.querySelector('.keys.on');
       if (ps && ps !== keysEl && ps !== wnEl) { ps.remove(); return true; }   // paste sheet
@@ -8449,7 +8465,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     function showNone() {
       clearLyrics();
-      body.replaceChildren(stateEl(ICONS.sad, 'No lyrics found', 'Searched Genius, Musixmatch, Kugou, LRCLIB and the web. Underground tracks often aren’t transcribed anywhere — paste your own, or report it.', [
+      body.replaceChildren(stateEl(ICONS.sad, 'No lyrics found', 'Searched Genius, Musixmatch, LRCLIB, Kugou, NetEase and the web. Underground tracks often aren’t transcribed anywhere — paste your own, or report it.', [
         { label: 'Search', acc: true, fn: () => enterSearch() },
         { label: 'Paste lyrics', fn: () => pasteSheet() },
         { label: 'Retry', fn: () => App.retry() },
@@ -8484,13 +8500,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * sung; every tap drops an anchor and the timeline warps live. Far faster
      * than scattered double-taps, and the result persists per track. */
     function startTapAlign() {
+      if (searchMode) exitSearch();
       if (!lineEls.length) { toast('Play a track with lyrics first'); return; }
-      if (!estMode) { toast(isSynced ? 'Already synced — nudge with [ and ] if it drifts' : 'Needs timed lyrics to calibrate'); return; }
+      if (!estMode) { toast(isSynced ? 'Already synced — nudge with [ and ]' : 'Needs timed lyrics to calibrate'); return; }
       if (tab !== 'lyrics') setTab('lyrics');
       tapOn = true; tapIdx = 0;
       pauseScrollUntil = 0; activeI = -1;
       tapTick();
-      toast('Tap ⎵ (or click) right as you hear each line · Esc when done');
+      toast('Tap ⎵ as each line starts · Esc to finish');
     }
     function tapTick() {
       if (!tapOn) return;
@@ -8641,7 +8658,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         times = warpTimes(baseTimes, App.getAnchors());
         if (!estTip && lineEls.length) {
           estTip = true;   // once per session (no synced lyrics exist for this track \u2014 timing is a guess)
-          setTimeout(() => toast('No timed lyrics exist for this track \u2014 timing is a guess. For an exact lock, tap the \ud83c\udfa4 prompt (or \u22ef \u2192 Calibrate sync) and tap each line as you hear it.'), 900);
+          setTimeout(() => toast('Timing is a guess \u2014 press A to tap along'), 900);
         }
       } else {
         for (const text of lyr.lines) {
@@ -8693,7 +8710,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         if (!transOn || !body) return;
         const myToken = ++transToken;
-        const els = lineEls.filter((el) => el && el.classList && el.classList.contains('line'));
+        const els = Array.from(body.querySelectorAll('.line'));   // plain-text sheets never fill lineEls
         if (!els.length) return;
         const texts = els.map((el) => (el.textContent || '').trim());
         // chunk lines so each request stays well under the endpoint's length cap;
@@ -8826,6 +8843,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       if (i === activeI) return;
       if (activeI >= 0 && lineEls[activeI]) { lineEls[activeI].classList.remove('act'); lineEls[activeI].removeAttribute('aria-current'); }
+      else if (activeI < 0) lineEls.forEach((el) => { if (el && el.classList && el.classList.contains('act')) { el.classList.remove('act'); el.removeAttribute('aria-current'); } });   // a reset (tap-along, anchor) forgot the lit line
       if (i > activeI + 1 || i < activeI) {
         lineEls.forEach((el, k) => el.classList.toggle('past', k < i));
       } else {
@@ -8889,6 +8907,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let searchSeq = 0;
     function enterSearch() {
       if (searchMode) return;
+      if (tapOn) endTapAlign(false);   // the tap-along click capture would swallow every result click
       closeFind();
       searchMode = true;
       const meta = App.meta();
@@ -8912,9 +8931,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       const bs = panel.querySelector('#bSearch');
       bs.innerHTML = ICONS.back;
-      bs.title = 'Back to lyrics';
+      bs.title = 'Back to lyrics'; bs.setAttribute('aria-label', 'Back to lyrics');
 
-      body.replaceChildren(stateEl(ICONS.search, '', 'Searches Genius, Kugou + LRCLIB. Pick the right match.'));
+      body.replaceChildren(stateEl(ICONS.search, '', 'Searches Genius, Musixmatch, LRCLIB, Kugou, NetEase and the web. Pick the right match.'));
       setTimeout(() => { inp.focus(); inp.select(); }, 30);
     }
 
@@ -8925,7 +8944,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (srchWrap) { srchWrap.remove(); srchWrap = null; }
       const bs = panel.querySelector('#bSearch');
       bs.innerHTML = ICONS.search;
-      bs.title = 'Search lyrics manually (S)';
+      bs.title = 'Search lyrics manually (S)'; bs.setAttribute('aria-label', 'Search lyrics manually');
       if (!silent) App.rerender();
     }
 
@@ -9079,7 +9098,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       toastEl.textContent = msg;
       toastEl.classList.add('on');
       clearTimeout(toastT);
-      toastT = setTimeout(() => toastEl.classList.remove('on'), 2000);
+      toastT = setTimeout(() => toastEl.classList.remove('on'), Math.min(5000, 2000 + msg.length * 25));   // longer notes stay a little longer
     }
 
     /* ---------- keep the panel fully on-screen ---------- */
@@ -9184,10 +9203,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     /* ───────── command palette (⌘K) — one fuzzy launcher for the whole suite ───────── */
     let cmdkEl = null, cmdkIn = null, cmdkListEl = null, cmdkView = [], cmdkSel = 0;
+    function paletteOpen() { return !!(cmdkEl && cmdkEl.classList.contains('on')); }
     function paletteCommands() {
       const C = [];
       const add = (icon, label, hint, run) => C.push({ icon, label, hint, run });
-      const go = (p) => { try { location.assign('https://soundcloud.com' + p); } catch (e) { try { location.href = 'https://soundcloud.com' + p; } catch (e2) {} } };
+      // in-app navigation (a real anchor click goes through SoundCloud's router, so playback and the suite survive)
+      const go = (p) => { try { const a = document.createElement('a'); a.href = p; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (e) { try { location.assign('https://soundcloud.com' + p); } catch (e2) {} } };
       // hub / view
       add('◐', 'Open lyrics hub', 'View', () => { setOpen(true); setTab('lyrics'); });
       add('♫', 'Lyrics tab', 'View', () => { setOpen(true); setTab('lyrics'); });
@@ -9322,7 +9343,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
-      openPalette, closePalette, curTab: () => tab,
+      openPalette, closePalette, paletteOpen, curTab: () => tab,
     };
   })();
 
@@ -9522,6 +9543,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     function apply(result, myToken) {
       if (myToken !== token) return;
+      if (UI.inSearch && UI.inSearch()) { try { UI.setBusy(false); } catch (e) {} lyr = result; return; }   // the search view stays; Back paints it
       try { UI.setBusy(false); } catch (e) {}
       // a confirmed provisional: don't re-render identical content (flash),
       // just drop the "verifying…" tag from the source line
@@ -9631,10 +9653,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
 
     const keyGen = new Map();   // per-track search generation: a forced re-search (ban / retry) outranks older runs' cache writes
+    // the user's own choice wins: bump the generation so a still-running automatic search
+    // (or its late rescue) can neither repaint over it nor overwrite it in the cache
+    function supersede() { token++; if (meta) keyGen.set(meta.key, (keyGen.get(meta.key) || 0) + 1); return token; }
     function ensure(force) {
       if (!meta) { if (UI.isOpen()) UI.showIdle(); return; }
       const key = meta.key;
-      if (force) { token++; keyGen.set(key, (keyGen.get(key) || 0) + 1); }   // stale results from the superseded run must neither paint nor cache
+      if (force) { token++; keyGen.set(key, (keyGen.get(key) || 0) + 1); SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.last = null; }   // stale results from the superseded run must neither paint nor cache; the old match's auto-offset dies with it
       const myToken = token;
       const myGen = keyGen.get(key) || 0;
 
@@ -9862,10 +9887,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // a file read / paste can complete after the user skipped to another track;
       // bail so the imported lyrics never get filed under (or rendered on) the wrong song
       if (expectToken != null && expectToken !== token) { UI.toast('Track changed — import skipped'); return; }
+      const mine = supersede();
       off = 0;
       anch = [];
+      SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.last = null;
       if (meta) { Cache.set(meta.key, toCache(result)); Miss.del(meta.key); }
-      apply(result, token);
+      apply(result, mine);
     }
     function importLrc() {
       if (!meta) { UI.toast('Play a track first'); return; }
@@ -9940,6 +9967,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       UI.toast('Hover pre-warm ' + (hoverOn ? 'on' : 'off'));
     }
     const HOVER_SKIP = /^\/(you|discover|search|stream|library|settings|messages|notifications|tags|charts|people|popular|stations|upload|feed|mobile|pages|jobs|terms|imprint)(\/|$)/;
+    const HOVER_SKIP2 = /^\/[\w-]+\/(tracks|albums|sets|playlists|reposts|followers|following|likes|comments|popular-tracks)$/;   // profile tabs, not tracks
     let hoverT2 = null, hoverHref = '', hoverWarms = 0;
     const hoverSeen = new Map();
     function hoverWarmInit() {
@@ -9949,7 +9977,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
           if (!a) return;
           const href = (a.getAttribute('href') || '').split('?')[0].split('#')[0];
-          if (!/^\/[\w-]+\/[\w-]+$/.test(href) || HOVER_SKIP.test(href)) return;
+          if (!/^\/[\w-]+\/[\w-]+$/.test(href) || HOVER_SKIP.test(href) || HOVER_SKIP2.test(href)) return;
           const label = (a.getAttribute('title') || a.textContent || '').trim();
           if (label.length < 3 || href === hoverHref) return;
           hoverHref = href;
@@ -10021,10 +10049,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           return;
         }
         if (myToken !== token) return;   // track changed during the await — don't zero/cache the NEW track's state
+        const mine = supersede();
         off = 0;
         anch = [];
+        SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.last = null;
         if (meta) { Cache.set(meta.key, toCache(result)); Miss.del(meta.key); }
-        apply(result, myToken);
+        apply(result, mine);
       } catch (e) {
         if (myToken === token && UI.isOpen()) { UI.showError(); UI.toast('Source unreachable'); }
       }
@@ -10100,7 +10130,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // toast and leave anch+off untouched.
       const accepted = kept.some((a) => a._new);
       if (!accepted) {
-        try { UI && UI.toast && UI.toast('Anchor conflicts with calibration — reset sync to clear'); } catch (e) {}
+        try { UI && UI.toast && UI.toast('Anchor conflicts — press 0 to reset sync'); } catch (e) {}
         return anch.slice();
       }
       // strip the _new flag now that we're committing
@@ -10114,9 +10144,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function markInstrumental() {
       if (!meta) return;
       const r = { instr: true, src: 'user', a: meta.uploader || '', t: meta.title || '' };
+      const mine = supersede();
       Cache.set(meta.key, toCache(r));
       Miss.del(meta.key);
-      apply(r, token);
+      apply(r, mine);
       UI.toast('Marked instrumental — no more searching for this one');
     }
 
@@ -10185,7 +10216,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const artist = (lyr.a || meta.uploader || '').trim();
       if (!track || !artist) { UI.toast('Missing title/artist to publish'); return; }
       const plain = lyricsText();
-      const synced = lyricsLrc();   // synced or calibrated-estimated → timed LRC; else ''
+      const synced = (lyr.synced || anch.length) ? lyricsLrc() : '';   // real or calibrated timings only — a syllable guess must never reach the public database
       UI.toast('Publishing to LRCLIB… solving challenge (a few seconds)');
       lrclibPublish({ track, artist, album: track, duration: meta.dur, plain, synced })
         .then(() => UI.toast('Published to LRCLIB — thank you! Findable for everyone now.'))
@@ -10264,7 +10295,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // retarget e.target to the host div — check the REAL target too
       const rt = (e.composedPath ? e.composedPath()[0] : null) || e.target;
       const ae = document.activeElement;
-      const isTyping = (el2) => el2 && (el2.tagName === 'INPUT' || el2.tagName === 'TEXTAREA' || el2.isContentEditable);
+      const isTyping = (el2) => el2 && (el2.tagName === 'INPUT' || el2.tagName === 'TEXTAREA' || el2.tagName === 'SELECT' || el2.tagName === 'CANVAS' || el2.isContentEditable);
       // ⌘K / Ctrl+K — command palette, openable from anywhere (the palette's own
       // input stops propagation, so this never fights it once it's open)
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === 'KeyK') {
@@ -10272,12 +10303,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       if (isTyping(ae) || isTyping(rt)) return;
 
-      if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyL') {   // ctrl/meta guard: AltGr chords must not toggle the panel
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.repeat && e.code === 'KeyL') {   // ctrl/meta guard: AltGr chords must not toggle the panel; a held key must not flicker it
         e.preventDefault();
         UI.setOpen(!UI.isOpen());
         return;
       }
+      // the palette floats above everything and can be open with the panel closed: Esc belongs to it first
+      if (e.key === 'Escape' && UI.paletteOpen()) { e.preventDefault(); e.stopPropagation(); UI.closePalette(); return; }
       if (!UI.isOpen()) return;
+      // a held key auto-repeats ~30×/s: only the seek / nudge / text-size keys may repeat
+      if (e.repeat && !/^(?:Arrow(?:Left|Right|Up|Down)|[-=+[\]{}<>,.])$/.test(e.key)) { e.preventDefault(); e.stopPropagation(); return; }
+      // every key the panel consumes is also stopped, so SoundCloud's own shortcuts (R repost, M mute,
+      // S search, 0-9 seek, G chords…) never fire alongside — it listens on window after us
+      const own = () => { e.preventDefault(); e.stopPropagation(); };
 
       if (e.key === 'Escape') {
         if (SUITE.cardOpen && SUITE.cardOpen()) return; // shuffle's card closes first
@@ -10291,49 +10329,53 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ctrl+alt set. But never on Cmd+[ / plain Ctrl+[ — those are browser
       // Back/Forward and must not silently nudge sync.
       if (!e.metaKey && (!e.ctrlKey || e.altKey)) {
-        if (e.key === '[') { App.nudge(-100); return; }
-        if (e.key === ']') { App.nudge(100); return; }
-        if (e.key === '{') { App.nudge(-25); return; }
-        if (e.key === '}') { App.nudge(25); return; }
+        if (e.key === '[') { own(); App.nudge(-100); return; }
+        if (e.key === ']') { own(); App.nudge(100); return; }
+        if (e.key === '{') { own(); App.nudge(-25); return; }
+        if (e.key === '}') { own(); App.nudge(25); return; }
       }
       if (e.altKey || e.ctrlKey || e.metaKey) return; // Alt+S = shuffle, never lyric search
+      // SoundCloud's own Shift chords (⇧←/→ previous/next, ⇧↑/↓ volume, ⇧L repeat, ⇧S shuffle) pass through untouched
+      if (e.shiftKey && (e.key.startsWith('Arrow') || e.key === 'L' || e.key === 'S')) return;
 
       // the Audio tab owns A (compare) · N (night) · , . (speed): tap-align, the mini bar and lyric nudging keep them elsewhere
-      if (UI.curTab && UI.curTab() === 'audio' && SUITE.audioKey && SUITE.audioKey(e)) { e.preventDefault(); return; }
-      if (e.key === 's' || e.key === 'S') { e.preventDefault(); UI.setTab('lyrics'); UI.enterSearch(); return; }
-      if (e.key === 'f' || e.key === 'F') { e.preventDefault(); UI.toggleMax(); return; }
-      if (e.key === 'k' || e.key === 'K') { e.preventDefault(); UI.toggleFocus(); return; }
-      if (e.key === 'c' || e.key === 'C') { e.preventDefault(); UI.jumpChorus(); return; }
-      if (e.key === 't' || e.key === 'T') { e.preventDefault(); UI.cycleTheme(); return; }
-      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); UI.toggleMini(); return; }
-      if (e.key === 'm' || e.key === 'M') { e.preventDefault(); UI.cycleMood(); return; }
-      if (e.key === 'g' || e.key === 'G') { e.preventDefault(); UI.cycleGlass(); return; }
-      if (e.key === '/') { e.preventDefault(); UI.setTab('lyrics'); UI.openFind(); return; }
+      if (UI.curTab && UI.curTab() === 'audio' && SUITE.audioKey && SUITE.audioKey(e)) { own(); return; }
+      if (e.key === 's' || e.key === 'S') { own(); UI.setTab('lyrics'); UI.enterSearch(); return; }
+      if (e.key === 'f' || e.key === 'F') { own(); UI.toggleMax(); return; }
+      if (e.key === 'k' || e.key === 'K') { own(); UI.toggleFocus(); return; }
+      if (e.key === 'c' || e.key === 'C') { own(); UI.jumpChorus(); return; }
+      if (e.key === 't' || e.key === 'T') { own(); UI.cycleTheme(); return; }
+      if (e.key === 'n' || e.key === 'N') { own(); UI.toggleMini(); return; }
+      if (e.key === 'm' || e.key === 'M') { own(); UI.cycleMood(); return; }
+      if (e.key === 'g' || e.key === 'G') { own(); UI.cycleGlass(); return; }
+      if (e.key === '/') { own(); UI.setTab('lyrics'); UI.openFind(); return; }
       // playback keys own the event when the panel is open — stopPropagation
       // so SoundCloud's native Space/arrow shortcuts don't ALSO fire (which
       // would double-toggle play or double-seek)
-      if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); e.stopPropagation(); if (UI.tapActive()) UI.tapAdvance(); else App.playPause(); return; }
-      if (e.key === 'a' || e.key === 'A') { e.preventDefault(); UI.startTapAlign(); return; }
-      if (e.key === 'j' || e.key === 'J') { e.preventDefault(); e.stopPropagation(); App.seekBy(-10); return; }
-      if (e.key === 'l' || e.key === 'L') { e.preventDefault(); e.stopPropagation(); App.seekBy(10); return; }
-      if (e.key === 'ArrowUp') { if (UI.seekLine(-1)) { e.preventDefault(); e.stopPropagation(); } return; }
-      if (e.key === 'ArrowDown') { if (UI.seekLine(1)) { e.preventDefault(); e.stopPropagation(); } return; }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); App.seekBy(-5); return; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); App.seekBy(5); return; }
-      if (e.key === 'r' || e.key === 'R') { if (UI.replayLine()) e.preventDefault(); return; }
-      if (e.key === ',' || e.key === '<') { App.nudge(-500); return; }
-      if (e.key === '.' || e.key === '>') { App.nudge(500); return; }
-      if (e.key === '?') { e.preventDefault(); UI.showKeys(true); return; }
-      if (e.key === '1') { UI.setTab('lyrics'); return; }
-      if (e.key === '2') { UI.setTab('queue'); return; }
-      if (e.key === '3') { UI.setTab('stats'); return; }
-      if (e.key === '4') { UI.setTab('audio'); return; }
-      if (e.key === '5') { UI.setTab('tweaks'); return; }
-      if (e.key === '-' || e.key === '=' || e.key === '+') { e.preventDefault(); UI.bumpFont(e.key === '-' ? -1 : 1); return; }
-      if (e.key === '0') { App.nudge(0); return; }
+      // a focused panel button (switch, tab, chip) keeps Space for itself — and SoundCloud must not see it either
+      if ((e.key === ' ' || e.key === 'Spacebar') && rt && rt.tagName === 'BUTTON' && !UI.tapActive()) { e.stopPropagation(); return; }
+      if (e.key === ' ' || e.key === 'Spacebar') { own(); if (UI.tapActive()) UI.tapAdvance(); else App.playPause(); return; }
+      if (e.key === 'a' || e.key === 'A') { own(); UI.startTapAlign(); return; }
+      if (e.key === 'j' || e.key === 'J') { own(); App.seekBy(-10); return; }
+      if (e.key === 'l' || e.key === 'L') { own(); App.seekBy(10); return; }
+      if (e.key === 'ArrowUp') { if (UI.seekLine(-1)) own(); return; }
+      if (e.key === 'ArrowDown') { if (UI.seekLine(1)) own(); return; }
+      if (e.key === 'ArrowLeft') { own(); App.seekBy(-5); return; }
+      if (e.key === 'ArrowRight') { own(); App.seekBy(5); return; }
+      if (e.key === 'r' || e.key === 'R') { own(); UI.replayLine(); return; }
+      if (e.key === ',' || e.key === '<') { own(); App.nudge(-500); return; }
+      if (e.key === '.' || e.key === '>') { own(); App.nudge(500); return; }
+      if (e.key === '?') { own(); UI.showKeys(true); return; }
+      if (e.key === '1') { own(); UI.setTab('lyrics'); return; }
+      if (e.key === '2') { own(); UI.setTab('queue'); return; }
+      if (e.key === '3') { own(); UI.setTab('stats'); return; }
+      if (e.key === '4') { own(); UI.setTab('audio'); return; }
+      if (e.key === '5') { own(); UI.setTab('tweaks'); return; }
+      if (e.key === '-' || e.key === '=' || e.key === '+') { own(); UI.bumpFont(e.key === '-' ? -1 : 1); return; }
+      if (e.key === '0') { own(); App.nudge(0); return; }
     }, true);
     // keyup: a held A (compare) on the Audio tab is released here, since the hub owns the keys while open
-    window.addEventListener('keyup', (e) => { try { if (UI.isOpen() && UI.curTab && UI.curTab() === 'audio' && SUITE.audioKey) SUITE.audioKey(e); } catch (e2) {} }, true);
+    window.addEventListener('keyup', (e) => { try { if (UI.isOpen() && SUITE.audioKey) SUITE.audioKey(e); } catch (e2) {} }, true);   // any tab: a release must always clear a held compare
   }
 
   function boot() {
@@ -10368,12 +10410,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         // not frozen at one version (the old bug: hard-coded !== '4.31.0' meant it
         // only ever fired once), and not on every patch bump.
         const sv = VER.split('.').slice(0, 2).join('.');
-        if (GM_getValue('sl:ver', '') !== sv) {
+        const prevVer = GM_getValue('sl:ver', '');
+        if (prevVer !== sv) {
           GM_setValue('sl:ver', sv);
           // the engine often changed between releases: stale "no lyrics here"
           // verdicts must re-search so improvements actually reach the user
           try { Miss.clearAll(); } catch (e) {}
-          Ticker.after(() => { try { UI.setOpen(true); UI.showWhatsNew(); } catch (e) {} }, 2500);
+          // upgrades only: a first install already gets the welcome card, and two sheets at once bury both
+          if (prevVer) Ticker.after(() => { try { UI.setOpen(true); UI.showWhatsNew(); } catch (e) {} }, 2500);
         }
       } catch (e) {}
       // one-time: clear any dragged position/size so the panel returns to its
@@ -10576,7 +10620,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mhCoverBlur', 'Hide more', 'Blurred cover backgrounds', 'hide', '.fullHero__background,.listenHero__background,.l-hero-bg'],
     ['mhGenre', 'Hide more', 'Genre labels', 'hide', '.sc-tag.genre,.soundTitle__additionalContainer .sc-tag,.genreLabel'],
     ['mhListenHistory', 'Hide more', '“Recently played”', 'hide', '.historyList,[class*="recentlyPlayed" i]'],
-    ['mhWaveTime', 'Hide more', 'Waveform timestamps', 'hide', '.waveform__timeline,.playbackTimeline__timestamp'],
+    ['mhWaveTime', 'Hide more', 'Waveform timeline (under the wave)', 'hide', '.waveform__timeline,.playbackTimeline__timestamp'],
     // ── Layout (wave 2) ──
     ['mlFlat', 'Layout', 'Flat design (no shadows)', 'css', '.l-container *,.playControls{box-shadow:none !important}'],
     ['mlDarkScroll', 'Layout', 'Dark scrollbars', 'css', '::-webkit-scrollbar-thumb{background:#555 !important;border-radius:6px}::-webkit-scrollbar-track{background:transparent}'],
@@ -10589,7 +10633,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mlStickyPlayer', 'Layout', 'Emphasize player bar', 'css', '.playControls{box-shadow:0 -2px 18px rgba(0,0,0,.18) !important}'],
     ['mlWideSidebar', 'Layout', 'Wider right sidebar', 'css', '.l-sidebar-right{flex-basis:340px !important;max-width:340px !important}'],
     // ── Reading / focus (wave 2) ──
-    ['mrZen', 'Reading', 'Zen mode (hide nav, sidebar, footer)', 'hide', '.l-sidebar-right,.sidebar,#app__footer,.footer__inner,.header__nav .header__moreMenu'],
+    ['mrZen', 'Reading', 'Zen mode (hide sidebar, footer & header menu)', 'hide', '.l-sidebar-right,.sidebar,#app__footer,.footer__inner,.header__nav .header__moreMenu'],
     ['mrA11yFocus', 'Reading', 'Always-visible focus rings', 'css', '.l-container a:focus,.sc-button:focus{outline:2px solid #ff5500 !important;outline-offset:2px}'],
     ['mrReduceTransparency', 'Reading', 'Reduce transparency', 'css', '.l-container [style*="rgba"],.modal__modal{backdrop-filter:none !important}'],
     // ── Hide more (wave 3) ──
@@ -10604,7 +10648,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mhPartnerOffers', 'Hide more', 'Partner offers', 'hide', '[class*="partnerOffer" i],a[href*="partner-offers"],a[href$="/partners"]'],
     ['mhInsightsNag', 'Hide more', 'Insights / studio nags', 'hide', '.insightsUpsell,[class*="insights" i].upsell,.creatorUpsell'],
     ['mhFollowProfile', 'Hide more', 'Follow button on profiles', 'hide', '.profileHeaderInfo .sc-button-follow,.userInfoBar .sc-button-follow'],
-    ['mhWaveNumbers', 'Hide more', 'Waveform time labels', 'hide', '.playbackTimeline__duration,.waveform__layer .timecode'],
+    ['mhWaveNumbers', 'Hide more', 'Player-bar duration & timecodes', 'hide', '.playbackTimeline__duration,.waveform__layer .timecode'],
     ['mhTrendingTags', 'Hide more', 'Trending tags bar', 'hide', '.trendingTags,.g-tags-trending,[class*="trendingTag" i]'],
     // ── Layout (wave 3) ──
     ['mlSharp', 'Layout', 'Sharp corners (no rounding)', 'css', '.sc-artwork,.sc-button,.image,.image__rounded{border-radius:0 !important}'],
@@ -10625,10 +10669,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mlWideMain', 'Layout', 'Wider main column', 'css', '.l-main,.l-middle-fixed{max-width:none !important;flex:1 1 auto !important}'],
     ['mlTallTiles', 'Layout', 'Taller artwork tiles', 'css', '.audibleTile__artwork,.sound__coverArt{min-height:auto}'],
     // ── Delight ──
-    ['mdSpinArt', 'Delight', 'Spin artwork while playing', 'css', '@keyframes sceSpin{to{transform:rotate(360deg)}}.playControls.playing .playbackSoundBadge__avatar .sc-artwork,.playControls.playing .playbackSoundBadge .image{animation:sceSpin 12s linear infinite;border-radius:50% !important}'],
-    ['mdGrayPause', 'Delight', 'Grayscale art when paused', 'css', '.playControls:not(.playing) .playbackSoundBadge .sc-artwork{filter:grayscale(1);transition:filter .3s}'],
-    ['mdPulsePlay', 'Delight', 'Pulse the play button', 'css', '@keyframes scePulse{50%{transform:scale(1.08)}}.playControls.playing .playControls__play{animation:scePulse 1.6s ease-in-out infinite}'],
-    ['mdGlowArt', 'Delight', 'Glow around now-playing art', 'css', '.playControls.playing .playbackSoundBadge__avatar{box-shadow:0 0 16px rgba(255,85,0,.5) !important;border-radius:8px}'],
+    ['mdSpinArt', 'Delight', 'Spin artwork while playing', 'css', '@keyframes sceSpin{to{transform:rotate(360deg)}}.playControls:has(.playControls__play.playing) .playbackSoundBadge__avatar .sc-artwork,.playControls:has(.playControls__play.playing) .playbackSoundBadge .image{animation:sceSpin 12s linear infinite;border-radius:50% !important}'],
+    ['mdGrayPause', 'Delight', 'Grayscale art when paused', 'css', '.playControls:not(:has(.playControls__play.playing)) .playbackSoundBadge .sc-artwork{filter:grayscale(1);transition:filter .3s}'],
+    ['mdPulsePlay', 'Delight', 'Pulse the play button', 'css', '@keyframes scePulse{50%{transform:scale(1.08)}}.playControls__play.playing{animation:scePulse 1.6s ease-in-out infinite}'],
+    ['mdGlowArt', 'Delight', 'Glow around now-playing art', 'css', '.playControls:has(.playControls__play.playing) .playbackSoundBadge__avatar{box-shadow:0 0 16px rgba(255,85,0,.5) !important;border-radius:8px}'],
     ['mdRainbowWave', 'Delight', 'Rainbow waveform sheen', 'css', '@keyframes sceHue{to{filter:hue-rotate(360deg)}}.waveform__layer{animation:sceHue 8s linear infinite}'],
     ['mdTiltHover', 'Delight', 'Tilt tiles on hover', 'css', '.audibleTile{transition:transform .18s}.audibleTile:hover{transform:perspective(600px) rotateX(3deg) scale(1.02)}'],
     ['mdShimmerTitle', 'Delight', 'Shimmer the page title', 'css', '.contentTitle,.profileHeaderInfo__userName{background:linear-gradient(90deg,#ff5500,#ff8a3d,#ff5500);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}'],
@@ -10699,6 +10743,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function clampAudioCfg() { try { for (const k of AUDIO_KEYS) CFG[k] = clampAudioKey(k, CFG[k]); } catch (e) {} }
   // one-shot schema migration for existing users (idempotent; runs before any
   // Web Audio capture so the chain never sees a pre-migration CFG)
+  // pre-v2 settings (a stored config or an imported backup): widen → stereo width, and no
+  // automatic level drop for boost-heavy EQs, so what they hear stays the same
+  function migrateFrom(src) {
+    try {
+      if (!src || typeof src !== 'object' || (src.cfgVer | 0) >= 2) return;
+      if ('widenAmt' in src) { const w = Math.max(0, Math.min(100, +src.widenAmt || 0)); CFG.stereoWidth = Math.round(100 + w * 0.9); }
+      if (!('eqAutoPre' in src)) {
+        const b = Array.isArray(src.eqBands) ? src.eqBands : [];
+        if (src.eqOn && (Math.max(0, ...b.map(Number)) > 0 || (+src.eqPreamp || 0) > 0)) CFG.eqAutoPre = false;
+      }
+    } catch (e) {}
+  }
   function migrateCfg() {
     try {
       const stored = GET('enh:cfg', null);
@@ -10706,17 +10762,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // DEFAULTS cfgVer, so reading it there would skip every existing user
       const ver = (stored && typeof stored === 'object') ? (stored.cfgVer | 0) : 2;
       if (ver >= 2) return;
-      if (stored && typeof stored === 'object') {                       // an existing user
-        if ('widenAmt' in stored) { const w = Math.max(0, Math.min(100, +stored.widenAmt || 0)); CFG.stereoWidth = Math.round(100 + w * 0.9); }
-        // keep what they hear: no automatic level drop for boost-heavy EQs
-        const b = Array.isArray(stored.eqBands) ? stored.eqBands : [];
-        if (stored.eqOn && (Math.max(0, ...b.map(Number)) > 0 || (+stored.eqPreamp || 0) > 0)) CFG.eqAutoPre = false;
-      }
+      migrateFrom(stored);
       delete CFG.widenAmt; delete CFG.abLoop; delete CFG.rumbleOn;
       CFG.cfgVer = 2; save();
     } catch (e) {}
   }
   migrateCfg();
+  // a correction switch that was left on without a profile did nothing but route the chain
+  try { if (CFG.peqOn && !(Array.isArray(CFG.peq) && CFG.peq.length)) { CFG.peqOn = false; save(); } } catch (e) {}
 
   const activeMedia = () => {
     // SoundCloud plays through the Web Audio API with a DETACHED media element
@@ -10880,7 +10933,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       '::-webkit-scrollbar-thumb{background:' + t.bd + ' !important;border-radius:7px}::-webkit-scrollbar-track{background:transparent}',
       // hide the leftover Pro / distribution / "100% royalties" promo banners
       // for a clean top — upsell-scoped so it never touches real content
-      '.upsellBanner,[class*="upsell" i],[class*="distributionBanner" i],[class*="distribution" i][class*="anner" i],[class*="creatorSubscription" i],[class*="nextPro" i],[class*="goPlus" i],[class*="royalt" i],[class*="monetiz" i],.l-banner-promo,.newFeatureBanner,[data-testid*="upsell" i],[data-testid*="banner" i][data-testid*="promo" i]{display:none !important}',
+      (CFG.hideUpsell ? '.upsellBanner,[class*="upsell" i],[class*="distributionBanner" i],[class*="distribution" i][class*="anner" i],[class*="creatorSubscription" i],[class*="nextPro" i],[class*="goPlus" i],[class*="royalt" i],[class*="monetiz" i],.l-banner-promo,.newFeatureBanner,[data-testid*="upsell" i],[data-testid*="banner" i][data-testid*="promo" i]{display:none !important}' : ''),   // follows the Hide Go+ upsells toggle
       // ── FIX (real classes from the live DOM): the timed-comment popover over the
       //    waveform (.commentPopover…) is a FULL-WIDTH overlay; the generic
       //    [class*="popover"] rule above painted its layers near-black and buried the
@@ -12809,6 +12862,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // last left with, saved when a canvas drag ends, a band is double-clicked or a preset is picked (never mid-drag) and
   // restored on the 1 Hz tick when the track changes. Untracked tracks keep whatever is current, like speed.
   let lastEqUrl = null;
+  let eqMemT = 0;
+  const rememberEqSoon = () => { clearTimeout(eqMemT); eqMemT = setTimeout(rememberEq, 300); };   // slider drags settle first
   function rememberEq() {
     if (!CFG.eqPerTrack) return;
     try {
@@ -12910,39 +12965,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       else toast('No download available');
     });
   }
-  // Download MP3 — resolve the track's PROGRESSIVE transcoding to its real media
-  // URL (works on any streamable track, not just ones the artist marked
-  // downloadable); falls back to the original-file endpoint when present.
-  function downloadMp3(d) {
-    const c = cid();
-    if (!c) { toast('Try again in a moment'); return; }
-    const tr = d && d.media && d.media.transcodings;
-    const prog = Array.isArray(tr) ? tr.find((x) => x && x.format && x.format.protocol === 'progressive') : null;
-    if (!prog || !prog.url) {
-      if (d && d.downloadable && d.has_downloads_left) { downloadTrack(d); return; }
-      toast('No MP3 available for this track'); return;
-    }
-    toast('Preparing MP3…');
-    gmGetJSON(prog.url + (prog.url.indexOf('?') >= 0 ? '&' : '?') + 'client_id=' + encodeURIComponent(c)).then((j) => {
-      if (j && j.url) {
-        const name = String(d.title || 'track').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120) + '.mp3';
-        // the CDN is cross-origin, so <a download> would just navigate this tab
-        // away from SoundCloud — pull the file as a blob first, then save it
-        fetch(j.url, { mode: 'cors', credentials: 'omit' })
-          .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
-          .then((b) => {
-            const a = D.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; a.rel = 'noopener';
-            (D.body || D.documentElement).appendChild(a); a.click(); a.remove();
-            setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 60000);
-            toast('MP3 download started');
-          })
-          .catch(() => { try { W.open(j.url, '_blank', 'noopener'); } catch (e2) {} toast('Opened the MP3 in a new tab — save it from there'); });
-      } else toast('Could not fetch MP3');
-    });
-  }
-  let infoEl = null, infoAway = null;
+  let infoEl = null, infoAway = null, infoEsc = null;
   function closeInfo() {
     if (infoAway) { try { D.removeEventListener('mousedown', infoAway, true); } catch (e) {} infoAway = null; }
+    if (infoEsc) { try { D.removeEventListener('keydown', infoEsc, true); } catch (e) {} infoEsc = null; }
     if (infoEl) { try { infoEl.remove(); } catch (e) {} infoEl = null; }
   }
   function showInfo() {
@@ -12959,6 +12985,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     setTimeout(() => {
       infoAway = (e) => { try { if (infoEl && !infoEl.contains(e.target) && !(e.target.closest && e.target.closest('.sce-info'))) closeInfo(); } catch (e2) {} };
       D.addEventListener('mousedown', infoAway, true);
+      infoEsc = (e) => { if (e.key === 'Escape') closeInfo(); };
+      D.addEventListener('keydown', infoEsc, true);
     }, 0);
     fetchTrack().then((d) => {
       if (!infoEl) return;
@@ -13013,8 +13041,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       b.addEventListener('click', fn);
       acts.appendChild(b);
     };
-    mkA('⤓  Download MP3', () => downloadMp3(d), true, true);
-    if (dl) mkA('Original file', () => downloadTrack(d));
+    if (dl) mkA('⤓  Download', () => downloadTrack(d), true, true);   // only when the artist allows downloads
     mkA('Open artist', () => { if (uhref) { try { W.open(uhref, '_blank'); } catch (e) {} } });
     mkA('Copy artist', () => uhref && clip(uhref, 'Artist link copied'));
     mkA('Copy link', () => clip(d.__url || d.permalink_url || '', 'Track link copied'));
@@ -13246,8 +13273,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const ACC = '#ff5500';
       const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
       // one clean switch style, shared by EQ / Enhance / Loudness / Fade
-      const makeSwitch = (get, toggle) => {
+      const makeSwitch = (get, toggle, name) => {
         const sw = D.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch');
+        if (name) sw.setAttribute('aria-label', name);
         sw.style.cssText = 'position:relative;width:38px;height:22px;border-radius:22px;border:0;cursor:pointer;flex:none;padding:0;transition:background .2s ease';
         const kn = D.createElement('span'); kn.style.cssText = 'position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s cubic-bezier(.3,1.5,.5,1);box-shadow:0 1px 2px rgba(0,0,0,.35)';
         sw.appendChild(kn);
@@ -13258,9 +13286,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const sliderRow = (label, mn, mx, st, get, set, fmt, resetTo) => {
         const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0';
         const l = D.createElement('span'); l.textContent = label; l.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
-        const r = D.createElement('input'); r.type = 'range'; r.min = mn; r.max = mx; r.step = st; r.value = get(); r.className = 'sxr'; r.style.cssText = 'flex:1';
+        const r = D.createElement('input'); r.type = 'range'; r.min = mn; r.max = mx; r.step = st; r.value = get(); r.className = 'sxr'; r.style.cssText = 'flex:1'; r.setAttribute('aria-label', label);
         const v = D.createElement('span'); v.style.cssText = 'flex:none;width:46px;text-align:right;font-size:11.5px;color:#86868e;font-variant-numeric:tabular-nums';
-        const paint = () => { const cur = +r.value; const pct = (cur - mn) / (mx - mn) * 100; r.style.background = 'linear-gradient(90deg,' + ACC + ' ' + pct + '%,rgba(255,255,255,.12) ' + pct + '%)'; v.textContent = fmt(cur); };
+        const paint = () => { const cur = +r.value; const pct = (cur - mn) / (mx - mn) * 100; r.style.background = 'linear-gradient(90deg,' + ACC + ' ' + pct + '%,rgba(255,255,255,.12) ' + pct + '%)'; v.textContent = fmt(cur); r.setAttribute('aria-valuetext', v.textContent); };
         paint(); r.addEventListener('input', () => { set(+r.value); paint(); }); r._paint = paint;
         if (resetTo != null) { l.title = label + ' · double-click resets'; l.style.cursor = 'default'; l.addEventListener('dblclick', () => { try { r.value = resetTo; set(+r.value); paint(); } catch (e) {} }); }
         row.append(l, r, v); return { row, input: r, paint };
@@ -13281,13 +13309,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const liveSync = [];
       const syncSlider = (r, get) => () => { const v = get(); if (String(r.input.value) !== String(v)) r.input.value = v; r.paint(); };
       const num = (k, lo, hi) => { const v = +CFG[k]; return isFinite(v) ? cl(v, lo, hi) : 0; };
-      const toggleRow = (label, desc, key) => {
+      const toggleRow = (label, desc, key, guard) => {   // guard() === false keeps the switch where it is
         const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.05)';
         const tx = D.createElement('div'); tx.style.cssText = 'flex:1';
         const t1 = D.createElement('div'); t1.style.cssText = 'font-size:12.5px;color:#e6e6ea'; t1.textContent = label;
         const t2 = D.createElement('div'); t2.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:2px'; t2.textContent = desc;
         tx.append(t1, t2);
-        const sw = makeSwitch(() => CFG[key], () => { CFG[key] = !CFG[key]; save(); applyFx(); });
+        const sw = makeSwitch(() => CFG[key], () => { if (guard && guard() === false) return; CFG[key] = !CFG[key]; save(); applyFx(); }, label);
         row.append(tx, sw); bodyEl.appendChild(row); return { row, sw, desc: t2 };
       };
 
@@ -13301,7 +13329,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // boost or the clip guard is in play (LUFS / applied only with loudness on, boost only
       // above 100 %, guard only while it reduces); the plain hint otherwise. Real minus signs.
       const fmtDb = (v, plus) => (v < 0 ? '−' : plus ? '+' : '') + Math.abs(v).toFixed(1);
-      let cmpLatched = false, frame = 0, lastSub = '', lastGuard = '', lastLoud = '', lastNight = '';
+      let cmpLatched = fxBypass, frame = 0, lastSub = '', lastGuard = '', lastLoud = '', lastNight = '';   // a rebuild while latched keeps the latch
       const subText = () => {
         if (fxBypass) return 'Comparing · original tone' + (cmpLatched ? ' — click Compare to return' : '');
         const boost = CFG.boostAmt | 0, loud = !!CFG.loudnessOn, gr = +meter.limGr;
@@ -13319,7 +13347,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // click (or the tab closes). Tint + body dim make it obvious the switches do not apply.
       const cmp = mkBtn('Compare'); cmp.style.padding = '7px 11px'; cmp.style.marginRight = '10px'; cmp.style.userSelect = 'none'; cmp.style.touchAction = 'none';
       cmp.title = 'Hold to hear the original · click to keep comparing';
-      const tintCmp = (v) => { cmp.style.background = v ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; cmp.style.color = v ? '#ffb083' : '#c4c4ca'; };
+      const tintCmp = (v) => { cmp.style.background = v ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; cmp.style.color = v ? '#ffb083' : '#c4c4ca'; cmp.setAttribute('aria-pressed', String(!!v)); };
       // mkBtn's own hover handlers run first; these keep the tint while comparing
       cmp.addEventListener('mouseenter', () => { if (fxBypass) tintCmp(true); });
       cmp.addEventListener('mouseleave', () => { if (fxBypass) tintCmp(true); });
@@ -13332,8 +13360,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         else { cmpLatched = false; setBypass(false); }
       };
       cmp.addEventListener('pointerup', cmpUp); cmp.addEventListener('pointerleave', cmpUp); cmp.addEventListener('pointercancel', cmpUp);
+      cmp.addEventListener('click', (ev) => { if (ev.detail === 0) { cmpLatched = !cmpLatched; setBypass(cmpLatched); } });   // keyboard Enter: a click with no pointer
       paintCmp = (v) => { v = !!v; if (!v) cmpLatched = false; tintCmp(v); bodyEl.style.opacity = v ? '.45' : '1'; try { paintSub(); } catch (e) {} };
-      const eqSw = makeSwitch(() => CFG.eqOn, () => { CFG.eqOn = !CFG.eqOn; save(); applyFx(); });
+      const eqSw = makeSwitch(() => CFG.eqOn, () => { CFG.eqOn = !CFG.eqOn; save(); applyFx(); rememberEq(); }, 'Equalizer');
       hd.append(htx, cmp, eqSw); host.appendChild(hd);
 
       // ── EQ curve stage (flat, calm) ──
@@ -13344,7 +13373,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       // ── pre-amp: the value also shows what auto-headroom (2.9) took off ("0 dB · auto −4") ──
       const fmtAuto = () => { const h = Math.round(lastHeadroomDb * 10) / 10; return h > 0 ? ' · auto −' + h : ''; };
-      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB' + fmtAuto(), 0);
+      const pre = sliderRow('Pre-amp', -12, 12, 1, () => CFG.eqPreamp | 0, (x) => { CFG.eqPreamp = x | 0; if (!CFG.eqOn) { CFG.eqOn = true; eqSw._paint(); } saveSoon(); applyFx(); rememberEqSoon(); }, (x) => (x > 0 ? '+' : '') + (x | 0) + ' dB' + fmtAuto(), 0);
       pre.row.style.cssText += ';margin-top:6px;border-top:1px solid rgba(255,255,255,.05)';
       pre.row.lastChild.style.cssText += ';width:auto;min-width:104px;white-space:nowrap';   // a fixed reserve for the auto part, so the track does not shift as it changes
       bodyEl.appendChild(pre.row);
@@ -13378,7 +13407,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       okBtn.addEventListener('click', commitName); noBtn.addEventListener('click', () => showName(false));
       nIn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); commitName(); } else if (ev.key === 'Escape') { ev.preventDefault(); showName(false); } });
       const saveBtn = mkBtn('Save'); saveBtn.addEventListener('click', () => showName(nRow.style.display === 'none'));
-      const flatBtn = mkBtn('Reset'); flatBtn.addEventListener('click', () => applyEqPreset(EQ_PRESETS.Flat));
+      const flatBtn = mkBtn('Reset'); flatBtn.addEventListener('click', () => applyEqPreset({ b: EQ_PRESETS.Flat, pre: 0 }));   // flat AND unity, never a stray pre-amp
       pRow.append(sel, delBtn, saveBtn, flatBtn); bodyEl.appendChild(pRow);
       nRow.append(nIn, okBtn, noBtn); bodyEl.appendChild(nRow);
       // auto-headroom (2.9) closes the EQ block
@@ -13425,7 +13454,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const VINYL_DESC = 'Vinyl / tape feel · slowed sounds deeper, sped-up sounds higher';
       const vinR = toggleRow('Pitch follows speed', VINYL_DESC, 'vinylMode');
       const semis = () => { const st = 12 * Math.log2(wantedRate()); return Math.abs(st) < 0.05 ? '' : ' · ' + (st < 0 ? '−' : '+') + Math.abs(st).toFixed(1) + ' semitones'; };
-      const paintVinyl = () => { const t = VINYL_DESC + semis(); if (vinR.desc.textContent !== t) vinR.desc.textContent = t; };
+      const paintVinyl = () => { const t = VINYL_DESC + (CFG.vinylMode ? semis() : ''); if (vinR.desc.textContent !== t) vinR.desc.textContent = t; };
       // (no click handler of its own: toggleRow's switch saves and runs applyFx, which syncs preservesPitch)
       // reverb (WP10) + the "Slowed + reverb" chip: speed 85 · pitch follows speed · reverb 25, lit while all three hold; a second tap undoes it
       const rvR = sliderRow('Reverb', 0, 100, 5, () => num('reverbAmt', 0, 100), (x) => { CFG.reverbAmt = cl(x | 0, 0, 100); saveSoon(); applyFx(); }, (x) => ((x | 0) ? (x | 0) + '%' : 'Off'), 0);
@@ -13489,7 +13518,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const enhTx = D.createElement('div'); enhTx.style.cssText = 'flex:1';
       enhTx.innerHTML = '<div style="font-size:12.5px;color:#e6e6ea">Enhance audio</div><div style="font-size:10.5px;color:#7c7c84;margin-top:2px">Clarity, warmth &amp; punch — level-matched, no loudness trick</div>';
       const intR = sliderRow('Intensity', 0, 100, 5, () => CFG.enhanceAmt | 0, (x) => { CFG.enhanceAmt = x | 0; if (!CFG.enhanceOn) { CFG.enhanceOn = true; enhSw._paint(); intR.row.style.opacity = '1'; } saveSoon(); applyFx(); }, (x) => (x | 0) + '%', 50);
-      const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; });
+      const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; }, 'Enhance audio');
       enhHead.append(enhTx, enhSw); bodyEl.appendChild(enhHead);
       intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; bodyEl.appendChild(intR.row);
 
@@ -13581,16 +13610,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const shelf = CFG.peq.some((f) => f && f.t !== 'PK');   // Web Audio shelves have a fixed slope: the profile's shelf Q cannot be honoured
         return CFG.peqName + ' · ' + n + (n === 1 ? ' filter' : ' filters') + (shelf ? ' (shelf Q ignored)' : '');
       };
-      const peqRow = toggleRow('Headphone correction', peqDesc(), 'peqOn');
+      // without a profile the switch cannot do anything: it opens the paste box instead of routing an empty chain
+      let pqUi = null;
+      const peqRow = toggleRow('Headphone correction', peqDesc(), 'peqOn', () => { if (!CFG.peqOn && !(Array.isArray(CFG.peq) && CFG.peq.length)) { pqUi.show(true); return false; } });
       const pqBtns = D.createElement('div'); pqBtns.style.cssText = 'display:flex;gap:8px;margin-top:4px';
       const pqPaste = mkBtn('Paste AutoEQ'), pqClear = mkBtn('Clear');
       pqBtns.append(pqPaste, pqClear); bodyEl.appendChild(pqBtns);
-      const pqUi = pasteUi('Preamp: -6.2 dB\nFilter 1: ON PK Fc 105 Hz Gain 3.1 dB Q 0.7 …', (t) => importAudioText(t));
+      pqUi = pasteUi('Preamp: -6.2 dB\nFilter 1: ON PK Fc 105 Hz Gain 3.1 dB Q 0.7 …', (t) => importAudioText(t));
       const paintPeq = () => { peqRow.sw._paint(); const d = peqDesc(); if (peqRow.desc.textContent !== d) peqRow.desc.textContent = d; pqClear.style.display = (Array.isArray(CFG.peq) && CFG.peq.length) ? '' : 'none'; };
       pqPaste.addEventListener('click', () => pqUi.show(true));
       pqClear.addEventListener('click', () => { clearAutoEq(); paintPeq(); });
-      // the switch alone can do nothing without a profile: turning it on opens the paste box
-      peqRow.sw.addEventListener('click', () => { if (CFG.peqOn && !(Array.isArray(CFG.peq) && CFG.peq.length)) pqUi.show(true); });
       paintPeq(); liveSync.push(paintPeq);
 
       // ── footer (2.22): Copy / Paste / Reset all audio, then the engine footnote (2.24) ──
@@ -13656,12 +13685,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let dragBand = -1, hoverBand = -1;
       const evToC = (ev) => { const r = canvas.getBoundingClientRect(); return { x: (ev.clientX - r.left) / r.width * CW, y: (ev.clientY - r.top) / r.height * CH }; };
       const nearest = (x) => { let bi = 0, bd = 1e9; for (let i = 0; i < N; i++) { const d = Math.abs(x - bandX(i)); if (d < bd) { bd = d; bi = i; } } return bi; };
-      canvas.addEventListener('pointerdown', (ev) => { const p = evToC(ev); dragBand = nearest(p.x); try { canvas.setPointerCapture(ev.pointerId); } catch (e) {} setBand(dragBand, gainFromY(p.y)); });
+      canvas.addEventListener('pointerdown', (ev) => { if (ev.button) return; const p = evToC(ev); dragBand = nearest(p.x); try { canvas.setPointerCapture(ev.pointerId); } catch (e) {} setBand(dragBand, gainFromY(p.y)); });
       canvas.addEventListener('pointermove', (ev) => { const p = evToC(ev); if (dragBand >= 0) setBand(dragBand, gainFromY(p.y)); else hoverBand = nearest(p.x); });
       canvas.addEventListener('pointerup', () => { if (dragBand >= 0) rememberEq(); dragBand = -1; });   // per-track memory (WP10): once the hand stops
       canvas.addEventListener('pointercancel', () => { dragBand = -1; });
       canvas.addEventListener('pointerleave', () => { hoverBand = -1; });
       canvas.addEventListener('dblclick', (ev) => { const p = evToC(ev); setBand(nearest(p.x), 0); rememberEq(); });
+      // keyboard: the curve is focusable — ← → pick a band, ↑ ↓ move it by 1 dB, Home or 0 flattens it
+      canvas.tabIndex = 0; canvas.setAttribute('role', 'slider'); canvas.setAttribute('aria-label', 'Equalizer bands');
+      const eqAria = (i) => { const g = ensureEqBands()[i] | 0; canvas.setAttribute('aria-valuenow', String(g)); canvas.setAttribute('aria-valuetext', EQ_LABELS[i] + ' Hz ' + (g > 0 ? '+' : '') + g + ' dB'); };
+      canvas.addEventListener('focus', () => { if (hoverBand < 0) hoverBand = 0; eqAria(hoverBand); });
+      canvas.addEventListener('blur', () => { hoverBand = -1; });
+      canvas.addEventListener('keydown', (ev) => {
+        const i = hoverBand >= 0 ? hoverBand : 0; let handled = true;
+        if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') hoverBand = cl(i + (ev.key === 'ArrowRight' ? 1 : -1), 0, N - 1);
+        else if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') { hoverBand = i; setBand(i, (ensureEqBands()[i] | 0) + (ev.key === 'ArrowUp' ? 1 : -1)); rememberEq(); }
+        else if (ev.key === 'Home' || ev.key === '0') { hoverBand = i; setBand(i, 0); rememberEq(); }
+        else handled = false;
+        if (handled) { ev.preventDefault(); ev.stopPropagation(); eqAria(hoverBand); }
+      });
       // the composite is read from the probe bank only when applyFx changed something (eqCurveVer)
       let drawnVer = -1, curve = null, peqCurve = null, peqAny = false, drawnHover = -2, drawnDrag = -2;
       const refreshCurve = () => { const cd = compositeDb(); curve = cd.userDb; for (let i = 0; i < curve.length; i++) curve[i] += cd.enhDb[i]; peqCurve = cd.peqDb; peqAny = false; for (let i = 0; i < peqCurve.length; i++) if (Math.abs(peqCurve[i]) > 0.05) { peqAny = true; break; } };
@@ -13925,7 +13967,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     mid.appendChild(ttl); mid.appendChild(ctr);
     miniEl.appendChild(art); miniEl.appendChild(mid);
     let dg = null;
-    miniEl.addEventListener('pointerdown', (e) => { if (e.target.closest && e.target.closest('button')) return; const r = miniEl.getBoundingClientRect(); dg = { dx: e.clientX - r.left, dy: e.clientY - r.top }; try { miniEl.setPointerCapture(e.pointerId); } catch (e2) {} miniEl.style.cursor = 'grabbing'; });
+    miniEl.addEventListener('pointerdown', (e) => { if (e.button || (e.target.closest && e.target.closest('button'))) return; const r = miniEl.getBoundingClientRect(); dg = { dx: e.clientX - r.left, dy: e.clientY - r.top }; try { miniEl.setPointerCapture(e.pointerId); } catch (e2) {} miniEl.style.cursor = 'grabbing'; });
     miniEl.addEventListener('pointermove', (e) => { if (!dg) return; dg.moved = true; const x = Math.min(Math.max(4, e.clientX - dg.dx), innerWidth - 232); const y = Math.min(Math.max(4, e.clientY - dg.dy), innerHeight - 60); miniEl.style.left = x + 'px'; miniEl.style.top = y + 'px'; miniEl.style.right = 'auto'; });
     miniEl.addEventListener('pointerup', () => { if (dg && dg.moved) { try { SET('enh:minipos', { x: parseInt(miniEl.style.left, 10) || 0, y: parseInt(miniEl.style.top, 10) || 0 }); } catch (e) {} } dg = null; miniEl.style.cursor = 'grab'; });   // a plain click must not save x:0
     (D.body || D.documentElement).appendChild(miniEl);
@@ -14023,7 +14065,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       barWrap.appendChild(mk('sce-restart', I.restart, 'Restart track', 'Restart this track from the beginning', restartTrack, true));
       barWrap.appendChild(mk('sce-speed', (CFG.speed / 100) + '×', 'Playback speed', 'Playback speed — click to cycle 0.5×–2×', cycleSpeed, false));
       barWrap.appendChild(mk('sce-ab', 'A·B', 'A–B loop', 'A–B loop: click for A, again for B (right-click clears)', abMark, false));
-      barWrap.appendChild(mk('sce-info', I.info, 'Track info', 'Track info, MP3 download & artist links', showInfo, true));
+      barWrap.appendChild(mk('sce-info', I.info, 'Track info', 'Track info & artist links', showInfo, true));
       barWrap.appendChild(mk('sce-copy', I.copy, 'Copy link', 'Copy this track’s link', copyTrackLink, true));
       barWrap.appendChild(mk('sce-gear', I.gear, 'Settings', 'Open / close all settings (Tweaks)', () => { try { if (SUITE.toggleTweaks) SUITE.toggleTweaks(); else openSettings(); } catch (e) {} }, true));
       const ab = barWrap.querySelector('.sce-ab');
@@ -14158,6 +14200,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     host.style.cssText = 'position:fixed;inset:0 0 auto auto;width:0;height:0;z-index:2147483300';
     (D.body || D.documentElement).appendChild(host);
     root = host.attachShadow({ mode: 'open' });
+    root.addEventListener('keydown', (e) => {   // typing in the panel's fields must not trigger SoundCloud's shortcuts
+      const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
+    });
     const st = D.createElement('style'); st.textContent = PANEL_CSS; root.appendChild(st);
     const wrap = D.createElement('div'); wrap.className = 'wrap';
     const hd = D.createElement('div'); hd.className = 'hd';
@@ -14226,8 +14272,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
     });
     const foot = D.createElement('div'); foot.className = 'foot';
-    const mkF = (txt, fn) => { const b = D.createElement('button'); b.className = 'btn'; b.textContent = txt; b.addEventListener('click', fn); foot.appendChild(b); };
-    mkF('Reset all', () => { CFG = Object.assign({}, DEFAULTS); save(); rebuildPanel(); applyAll(); toast('Enhancer reset'); });
+    const mkF = (txt, fn) => { const b = D.createElement('button'); b.className = 'btn'; b.textContent = txt; b.addEventListener('click', fn); foot.appendChild(b); return b; };
+    let resetArm = 0, resetB = null;
+    resetB = mkF('Reset all', () => {
+      if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset all'; }, 4000); return; }   // one more click confirms
+      clearTimeout(resetArm); resetArm = 0;
+      CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); rebuildPanel(); applyAll(); toast('Enhancer reset');
+    });
     mkF('Export', () => {
       try {
         const blob = new Blob([JSON.stringify(CFG, null, 2)], { type: 'application/json' });
@@ -14247,6 +14298,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               const d = JSON.parse(rd.result);
               if (d && typeof d === 'object') {
                 for (const k of Object.keys(DEFAULTS)) if (k !== 'abLoop' && k in d && typeof d[k] === typeof DEFAULTS[k]) CFG[k] = d[k];   // A–B endpoints are live-only
+                migrateFrom(d); CFG.cfgVer = DEFAULTS.cfgVer;
                 ensureEqBands(); clampAudioCfg();
                 save(); rebuildPanel(); applyAll(); toast('Settings imported');
               }
@@ -14481,8 +14533,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (sections.length) setSecOpen(sections[0], true);   // first group open as a hint they expand
       // footer actions
       const foot = D.createElement('div'); foot.style.cssText = 'display:flex;gap:7px;margin-top:14px';
-      const mkF = (txt, fn) => { const b = D.createElement('button'); b.textContent = txt; b.style.cssText = 'flex:1;background:rgba(255,255,255,.07);border:0;border-radius:9px;color:#eaeaee;font:600 11px inherit;padding:8px;cursor:pointer'; b.addEventListener('click', fn); foot.appendChild(b); };
-      mkF('Reset all', () => { CFG = Object.assign({}, DEFAULTS); save(); applyAll(); enhancerRender(container); toast('Enhancer reset'); });
+      const mkF = (txt, fn) => { const b = D.createElement('button'); b.textContent = txt; b.style.cssText = 'flex:1;background:rgba(255,255,255,.07);border:0;border-radius:9px;color:#eaeaee;font:600 11px inherit;padding:8px;cursor:pointer'; b.addEventListener('click', fn); foot.appendChild(b); return b; };
+      let resetArm = 0, resetB = null;
+      resetB = mkF('Reset all', () => {
+        if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset all'; }, 4000); return; }   // one more click confirms
+        clearTimeout(resetArm); resetArm = 0;
+        CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); applyAll(); enhancerRender(container); toast('Enhancer reset');
+      });
       // whole-suite backup (shuffle + lyrics + enhancer in one file)
       mkF('Back up all', () => { if (SUITE.backupAll) SUITE.backupAll(); else toast('Backup unavailable'); });
       mkF('Restore', () => {
@@ -14526,6 +14583,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         if (!obj || typeof obj !== 'object') return;
         for (const k of Object.keys(DEFAULTS)) if (k !== 'abLoop' && k in obj && typeof obj[k] === typeof DEFAULTS[k]) CFG[k] = obj[k];   // A–B endpoints are live-only
+        migrateFrom(obj); CFG.cfgVer = DEFAULTS.cfgVer;
         ensureEqBands(); clampAudioCfg();
         save(); applyAll();
       } catch (e) {}
