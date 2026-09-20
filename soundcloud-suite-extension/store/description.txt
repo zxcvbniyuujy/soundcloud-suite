@@ -1,18 +1,53 @@
-SoundCloud Suite adds the things the web player has always been missing: lyrics that stay in sync with the song, real audio processing, a shuffle that reaches your whole likes library, and a darker, quieter page. Everything runs in your browser and nothing is sent to us.
+Lyrics that stay in sync. Sound that finally hits. A shuffle that plays your whole library. And a SoundCloud that looks the way it should.
 
-Lyrics that follow the song
-Synced lyrics appear line by line for the track that is playing, locked to the audio clock so the highlight keeps pace even on sped-up or edited uploads. Six lyric sources are searched for you, and plain lyrics get an estimated timing you can correct with two taps. Translate lines in place, copy a quote with its timestamp, export to .lrc, or paste your own lyrics for tracks nobody has covered. A small floating bar shows the current line while the panel is closed.
+Everything runs in your browser. Nothing is sent to us.
 
-Sound you can actually hear
-A ten-band equalizer you drag on a live spectrum, with presets, per-track memory and automatic headroom so nothing clips. Enhance adds tone shaping, saturation, a harmonic exciter and a loudness-aware three-band compressor, level-matched so it never wins by simply being louder. Loudness normalization, Night mode, volume boost, a true-peak clip guard, speed from 0.5× to 2× with pitch that follows or holds, fades, reverb, stereo width, crossfeed, balance, mono and headphone correction. Every control is an exact passthrough when it is off, and holding Compare plays the original at the same level.
 
-Shuffle your whole library
-True random play across every track you have liked, not just the first page the site loads. Genre and artist filters, a blocklist, a memory of what you just heard, listening stats, optional scrobbling, a CSV export of your likes and a one-file backup of every setting.
+Lyrics
 
-A quieter page
-Eleven dark themes and a light one. Hide the upsells, the sidebar, the footer and anything else you never look at, or switch on Zen mode and keep only the music. The player bar gains speed, an A–B loop, a sleep timer, a waveform timeline, timecodes, track info with artist links and queue export. A command palette (Ctrl+K) reaches every setting, and every feature has a keyboard shortcut; press ? inside the panel for the list.
+Open the hub and the words are right there, line by line, moving with the vocals. Sped-up upload? Edited version? It still lands on the beat.
+
+• Six lyric sources, searched for you
+• Two taps fix the timing on anything unsynced
+• Translate in place, copy a quote with its timestamp, export .lrc
+• A small floating line while the hub is closed
+
+
+Audio
+
+Drag an equalizer curve on a live spectrum, or just switch on Enhance and hear the top end come back. Level-matched, so it never cheats by being louder.
+
+• Loudness normalization, Night mode, volume boost
+• A true-peak clip guard, so nothing distorts
+• Speed from 0.5× to 2×, pitch that follows or holds
+• Stereo width, crossfeed, headphone correction
+• Every control is an exact passthrough when off. Hold Compare to hear the original.
+
+
+Shuffle
+
+True random across every track you have ever liked, not the first page the site bothers to load.
+
+• Filter by genre or artist
+• Block what you are tired of
+• Skip what you just heard
+• Listening stats, a likes export, a one-file backup
+
+
+Look
+
+Eleven dark themes. A light one. Zen mode for when you want nothing but the music.
+
+• Hide the upsells, the sidebar, the footer, the noise
+• Speed, an A–B loop and a sleep timer in the player bar
+• Track info, timecodes, a waveform timeline
+• Ctrl+K opens a command palette for everything. Press ? for every shortcut.
+
 
 Privacy
-No account, no servers, no analytics. Settings, stats and the lyric cache stay in your browser. Lyric lookups go directly from your browser to the lyric providers without cookies, and lines are sent for translation only while Translate is on. The full privacy policy, source code and issue tracker are at https://github.com/zxcvbniyuujy/soundcloud-suite
 
-This is an independent project, not affiliated with or endorsed by SoundCloud. The SoundCloud name and logo are used with permission.
+No account. No servers. No analytics. Your settings and lyric cache stay on your machine. Lyric lookups go straight to the providers, without cookies. Translation runs only while you switch it on.
+
+Source code, privacy policy and bug reports: https://github.com/zxcvbniyuujy/soundcloud-suite
+
+Independent project, not affiliated with or endorsed by SoundCloud. Name and logo used with permission.
