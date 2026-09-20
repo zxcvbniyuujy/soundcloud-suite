@@ -14206,12 +14206,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     root.addEventListener('keydown', (e) => {   // typing in the panel's fields must not trigger SoundCloud's shortcuts
       const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
+      if (e.key === 'Escape') { e.stopPropagation(); setPanel(false); try { const g = D.querySelector('.sce-gear'); if (g) g.focus(); } catch (e2) {} }
     });
     const st = D.createElement('style'); st.textContent = PANEL_CSS; root.appendChild(st);
     const wrap = D.createElement('div'); wrap.className = 'wrap';
     const hd = D.createElement('div'); hd.className = 'hd';
     hd.innerHTML = '<span style="color:#f50">✦</span><span>SoundCloud Enhancer</span>';
-    const x = D.createElement('button'); x.className = 'x'; x.textContent = '×';
+    const x = D.createElement('button'); x.className = 'x'; x.textContent = '×'; x.type = 'button'; x.setAttribute('aria-label', 'Close settings');
     x.addEventListener('click', () => setPanel(false));
     hd.appendChild(x); wrap.appendChild(hd);
     const bd = D.createElement('div'); bd.className = 'bd';
@@ -14653,7 +14654,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       CFG.eqOn = false; CFG.eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
       CFG.loudnessOn = true;
       CFG.enhanceOn = true; CFG.enhanceAmt = 60;
-      CFG.stereoWidth = 112;
+      CFG.stereoWidth = 110;   // on the slider's 5-step grid, so the tab shows what plays
       CFG.hideUpsell = true;
       save();
       try { applyAll(); } catch (e) {}
