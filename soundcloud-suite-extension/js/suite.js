@@ -6941,6 +6941,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .qrow .qa { flex: none; max-width: 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; color: #84848a; }
 .qrow.now { background: rgba(255,255,255,0.07); color: #fff; box-shadow: inset 2px 0 0 var(--acc); }
 .qrow.ch { cursor: pointer; }
+.line.sel { background: rgba(255,85,0,0.16); color: #fff; box-shadow: inset 3px 0 0 var(--acc); }
+.sharebar { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 6; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 14px; background: rgba(18,18,22,0.97); box-shadow: 0 12px 34px rgba(0,0,0,0.45); font-size: 11.5px; color: #cfcfd6; }
+.sharebar canvas { width: 46px; height: 46px; border-radius: 9px; flex: none; background: #222; }
+.sharebar .st { flex: 1; min-width: 0; line-height: 1.35; }
+.sharebar .st b { display: block; color: #fff; font-size: 12px; }
+.sharebar .btn { padding: 7px 11px; }
 .qrow.ch:hover { background: rgba(255,255,255,0.05); }
 .qrow.ch:focus-visible { outline: 2px solid var(--acc); outline-offset: -2px; }
 .qrow.ch .n { width: 50px; font-size: 10.5px; }
@@ -7216,6 +7222,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let rafOn = false;           // the loop only runs while the panel is open
     let tab = 'lyrics';          // hub tabs: lyrics | queue | stats
     let chapToldFor = '';        // the track whose chapter count was announced
+    let uiMeta = null;           // the header's metadata (title, uploader, artwork), for the share card
     let maxOn = false;           // immersive fullscreen
     let menuOn = false, keysOn = false, keysBuilt = false;
     let chipShown = false, lastTm = -1;
@@ -7791,6 +7798,123 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
 
     /* ---------- paste-lyrics sheet ---------- */
+    /* ---------- lyric share card: a few lines on the artwork, as an image ---------- */
+    let shareBar = null, shareSel = [], shareSelClick = null;
+    function shareFont(px, w) { return (w || 700) + ' ' + px + 'px Inter, "SF Pro Display", "Segoe UI", system-ui, sans-serif'; }
+    function shareWrap(ctx, text, maxW) {   // greedy word wrap on the canvas's own measure
+      const words = String(text).split(/\s+/), out = []; let cur = '';
+      for (const w of words) { const t = cur ? cur + ' ' + w : w; if (ctx.measureText(t).width > maxW && cur) { out.push(cur); cur = w; } else cur = t; }
+      if (cur) out.push(cur);
+      return out;
+    }
+    function shareArtwork(src) {   // the artwork CDN answers CORS, so the canvas stays exportable; a miss just means no photo
+      return new Promise((res) => {
+        if (!src) { res(null); return; }
+        const img = new Image(); img.crossOrigin = 'anonymous';
+        img.onload = () => res(img); img.onerror = () => res(null);
+        img.src = String(src).replace(/-t\d+x\d+(\.\w+)/, '-t500x500$1');
+        setTimeout(() => res(null), 4000);
+      });
+    }
+    async function shareRender(lines, size) {
+      const S = size || 1080, c = document.createElement('canvas'); c.width = S; c.height = S;
+      const ctx = c.getContext('2d'); if (!ctx) return c;
+      const m = uiMeta || {}, artist = (curLyr && curLyr.a) || m.uploader || '', title = (curLyr && curLyr.t) || m.title || '';
+      const img = await shareArtwork(m.art);
+      const acc = (getComputedStyle(panel).getPropertyValue('--acc') || '#ff5500').trim() || '#ff5500';
+      // backdrop: the artwork blown up and blurred under a dark wash; without one, a deep gradient
+      ctx.fillStyle = '#141318'; ctx.fillRect(0, 0, S, S);
+      if (img) {
+        try { ctx.save(); ctx.filter = 'blur(' + Math.round(S * 0.045) + 'px) saturate(1.2)'; ctx.drawImage(img, -S * 0.15, -S * 0.15, S * 1.3, S * 1.3); ctx.restore(); } catch (e) {}
+        const g = ctx.createLinearGradient(0, 0, 0, S); g.addColorStop(0, 'rgba(8,8,12,0.42)'); g.addColorStop(1, 'rgba(8,8,12,0.82)'); ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+      } else {
+        const g = ctx.createLinearGradient(0, 0, S, S); g.addColorStop(0, '#1d1a22'); g.addColorStop(1, '#0d0d10'); ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+        ctx.fillStyle = acc; ctx.globalAlpha = 0.16; ctx.beginPath(); ctx.arc(S * 0.85, S * 0.1, S * 0.36, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+      }
+      const pad = Math.round(S * 0.085), u = S / 1080;
+      // header: artwork thumb, title, artist
+      const th = Math.round(132 * u);
+      if (img) { try { ctx.save(); ctx.beginPath(); const r = 22 * u; ctx.roundRect(pad, pad, th, th, r); ctx.clip(); ctx.filter = 'none'; ctx.drawImage(img, pad, pad, th, th); ctx.restore(); } catch (e) {} }
+      const tx = pad + (img ? th + 28 * u : 0);
+      ctx.fillStyle = '#fff'; ctx.font = shareFont(Math.round(40 * u), 700); ctx.textBaseline = 'top';
+      const tl = shareWrap(ctx, title, S - tx - pad); ctx.fillText(tl[0] || '', tx, pad + 14 * u);
+      ctx.fillStyle = 'rgba(255,255,255,0.72)'; ctx.font = shareFont(Math.round(30 * u), 500); ctx.fillText(artist, tx, pad + 70 * u);
+      // the lines: bigger when there are fewer, wrapped to the card, with an accent bar
+      const px = Math.round((lines.length <= 2 ? 64 : lines.length === 3 ? 56 : lines.length === 4 ? 50 : 44) * u);
+      ctx.font = shareFont(px, 700);
+      const maxW = S - pad * 2 - 34 * u, rows = [];
+      for (const l of lines) for (const w of shareWrap(ctx, l, maxW)) rows.push(w);
+      const lh = Math.round(px * 1.28), top = Math.max(pad + th + 60 * u, Math.round((S - rows.length * lh) / 2));
+      ctx.fillStyle = acc; ctx.fillRect(pad, top + 6 * u, 8 * u, Math.max(lh, rows.length * lh - 12 * u));
+      ctx.fillStyle = '#fff';
+      rows.forEach((r, i) => ctx.fillText(r, pad + 34 * u, top + i * lh));
+      // footer
+      ctx.fillStyle = acc; ctx.font = shareFont(Math.round(24 * u), 700); ctx.fillText('SoundCloud Suite', pad, S - pad - 26 * u);
+      return c;
+    }
+    function shareLinesText() { return shareSel.slice().sort((a, b) => a - b).map((i) => (lineEls[i] && lineEls[i].textContent) || '').filter(Boolean); }
+    function shareClose() {
+      if (shareBar) { try { shareBar.remove(); } catch (e) {} shareBar = null; }
+      if (shareSelClick) { try { body.removeEventListener('click', shareSelClick, true); } catch (e) {} shareSelClick = null; }
+      for (const el of lineEls) if (el) el.classList.remove('sel');
+      shareSel = [];
+    }
+    function sharePreview() {
+      if (!shareBar) return;
+      const lines = shareLinesText();
+      shareBar.querySelector('.st b').textContent = lines.length + (lines.length === 1 ? ' line' : ' lines') + ' picked';
+      shareRender(lines, 360).then((c) => { if (!shareBar) return; const pv = shareBar.querySelector('canvas'); const px = pv.getContext('2d'); px.clearRect(0, 0, pv.width, pv.height); px.drawImage(c, 0, 0, pv.width, pv.height); });
+    }
+    function shareToggle(i) {
+      const k = shareSel.indexOf(i);
+      if (k >= 0) { shareSel.splice(k, 1); lineEls[i].classList.remove('sel'); }
+      else { if (shareSel.length >= 6) { toast('Six lines is the most a card can hold'); return; } shareSel.push(i); lineEls[i].classList.add('sel'); }
+      sharePreview();
+    }
+    async function shareExport(copy) {
+      const lines = shareLinesText();
+      if (!lines.length) { toast('Pick a line first'); return; }
+      const c = await shareRender(lines, 1080);
+      const blob = await new Promise((r) => { try { c.toBlob(r, 'image/png'); } catch (e) { r(null); } });
+      if (!blob) { toast('Could not build the image'); return; }
+      if (copy) {
+        try { if (!window.ClipboardItem) throw new Error('no ClipboardItem'); await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })]); toast('Card copied · paste it anywhere'); return; } catch (e) {}
+      }
+      try {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        const m = uiMeta || {};
+        a.download = 'lyric-card-' + String(m.title || 'lyrics').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) + '.png';
+        (document.body || document.documentElement).appendChild(a); a.click();
+        setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1000);
+        toast(copy ? 'Clipboard unavailable · saved as a file instead' : 'Card saved');
+      } catch (e) { toast('Could not save the image'); }
+    }
+    function shareSheet() {
+      if (!lineEls.length || !curLyr || curLyr.instr) { toast('No lyrics to share yet'); return; }
+      if (shareBar) { shareClose(); return; }
+      setTab('lyrics');
+      shareSel = [];
+      let start = activeI >= 0 ? activeI : 0, n = 0;
+      for (let i = start; i < lineEls.length && n < 3; i++) { if (lineEls[i] && lineEls[i].classList.contains('line') && lineEls[i].textContent.trim()) { shareSel.push(i); lineEls[i].classList.add('sel'); n++; } }
+      shareBar = document.createElement('div'); shareBar.className = 'sharebar'; shareBar.setAttribute('role', 'region'); shareBar.setAttribute('aria-label', 'Lyric card');
+      const pv = document.createElement('canvas'); pv.width = 92; pv.height = 92;
+      const st = document.createElement('div'); st.className = 'st'; st.innerHTML = '<b></b>Click lines to pick up to six · Esc to close';
+      const copyB = document.createElement('button'); copyB.className = 'btn acc'; copyB.textContent = 'Copy image'; copyB.addEventListener('click', () => shareExport(true));
+      const saveB = document.createElement('button'); saveB.className = 'btn'; saveB.textContent = 'Save'; saveB.addEventListener('click', () => shareExport(false));
+      const x = document.createElement('button'); x.className = 'btn'; x.textContent = '✕'; x.title = 'Close'; x.setAttribute('aria-label', 'Close the lyric card'); x.addEventListener('click', shareClose);
+      shareBar.append(pv, st, copyB, saveB, x);
+      panel.appendChild(shareBar);
+      shareSelClick = (ev) => {   // while the bar shows, a click on a line picks it instead of seeking
+        const el = ev.target && ev.target.closest ? ev.target.closest('.line') : null;
+        if (!el) return;
+        const i = lineEls.indexOf(el); if (i < 0) return;
+        ev.stopPropagation(); ev.preventDefault(); shareToggle(i);
+      };
+      body.addEventListener('click', shareSelClick, true);
+      sharePreview();
+      toast('Pick the lines for your card');
+    }
+
     function pasteSheet() {
       const wrap = document.createElement('div');
       wrap.className = 'keys on';
@@ -8386,6 +8510,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Jump to chorus', () => jumpChorus(), 'C');
       mi('Focus mode: ' + (focusOn ? 'on' : 'off'), () => toggleFocus(), 'K');
       mi('Copy lyrics', () => App.copyLyrics());
+      mi('Share a lyric card…', () => shareSheet());
       mi('Export .lrc file', () => App.exportLrc());
       if (Chapters.list.length || curDur() >= 600) {
         sep();
@@ -8663,6 +8788,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let hdrGen = 0;   // a slow artwork error/load from the previous track must not repaint the next one's header
     function setHeader(meta) {
       const gen = ++hdrGen;
+      uiMeta = meta || null;
       tt.textContent = meta && meta.title ? meta.title : 'SoundCloud Suite';
       tt.title = tt.textContent;
       const eqHtml = '<div class="eq"><i></i><i></i><i></i></div>';
@@ -8800,6 +8926,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
 
     function clearLyrics() {
+      if (shareBar) shareClose();
       closeFind();   // stale hits over the next track's state would point at detached lines
       lineEls = []; times = []; lineWords = []; activeI = -1; isSynced = false; estMode = false;
       estBaseTimes = null;
@@ -9543,6 +9670,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('✕', 'Close hub', 'View', () => setOpen(false));
       // lyrics
       add('⟳', 'Re-search this track', 'Lyrics', () => { setOpen(true); setTab('lyrics'); App.retry(); });
+      add('▣', 'Share a lyric card', 'Lyrics', () => { setOpen(true); shareSheet(); });
       // chapters / cue points
       if (Chapters.list.length) {
         add('☰', 'Chapters (' + Chapters.list.length + ')', 'Chapters', () => { setOpen(true); setTab('queue'); });
@@ -9674,6 +9802,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       setHeader, setSrcLine, setReady, setBusy,
       showIdle, showLoading, showNone, showError, showInstrumental, showDiag, showWhatsNew,
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
+      shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
       toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, cycleTheme,
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
@@ -10661,6 +10790,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       // the palette floats above everything and can be open with the panel closed: Esc belongs to it first
       if (e.key === 'Escape' && UI.paletteOpen()) { e.preventDefault(); e.stopPropagation(); UI.closePalette(); return; }
+      if (e.key === 'Escape' && UI.shareOpen && UI.shareOpen()) { e.preventDefault(); e.stopPropagation(); UI.shareClose(); return; }
       if (!UI.isOpen()) return;
       // a held key auto-repeats ~30×/s: only the seek / nudge / text-size keys may repeat
       if (e.repeat && !/^(?:Arrow(?:Left|Right|Up|Down)|[-=+[\]{}<>,.])$/.test(e.key)) { e.preventDefault(); e.stopPropagation(); return; }
