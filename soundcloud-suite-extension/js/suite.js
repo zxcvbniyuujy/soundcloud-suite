@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         SoundCloud SuperSuite — Lyrics + Shuffle
+// @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.52.0
+// @version      4.53.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -43,7 +43,7 @@
 //   @downloadURL https://example.com/soundcloud-suite.user.js
 // ==/UserScript==
 
-/* ════════════════════ SOUNDCLOUD SUPERSUITE ════════════════════
+/* ════════════════════ SOUNDCLOUD SUITE ═════════════════════════
  *
  *  ONE script, TWO engines, shared power.
  *
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.52.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.53.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -153,7 +153,7 @@
       return {
         err(where, e) {
           try { ring.push(ts() + '  ' + where + ': ' + ((e && (e.message || e.name)) || e)); if (ring.length > 60) ring.shift(); } catch (x) {}
-          if (dbg) { try { console.warn('[SuperSuite]', where, e); } catch (x) {} }
+          if (dbg) { try { console.warn('[SoundCloud Suite]', where, e); } catch (x) {} }
         },
         note(s) { try { ring.push(ts() + '  · ' + s); if (ring.length > 60) ring.shift(); } catch (x) {} },
         metric(name, by) { try { metrics[name] = (metrics[name] || 0) + (by == null ? 1 : +by); } catch (x) {} },
@@ -614,7 +614,7 @@
                 listened_at: Math.round(Date.now() / 1000),
                 track_metadata: {
                     artist_name: artist, track_name: title,
-                    additional_info: { origin_url: url, music_service: 'soundcloud.com', submission_client: 'SC SuperSuite', duration_ms: hit[2] || undefined },
+                    additional_info: { origin_url: url, music_service: 'soundcloud.com', submission_client: 'SoundCloud Suite', duration_ms: hit[2] || undefined },
                 },
             });
             LS.set(LB_QKEY, q.slice(-50));
@@ -2565,7 +2565,7 @@
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = 'supersuite-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+            a.download = 'soundcloud-suite-backup-' + new Date().toISOString().slice(0, 10) + '.json';
             document.body.appendChild(a);
             a.click();
             setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -2617,7 +2617,7 @@
                 }
                 showToast('Backup imported — settings, history and stats restored');
                 closeCard();
-            } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a SuperSuite backup'); }
+            } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a SoundCloud Suite backup'); }
         };
         r.onerror = () => showToast('Couldn’t read that file');
         r.readAsText(file);
@@ -3665,10 +3665,10 @@
     // The standalone SuperLyrics script grabbed the guard first — the suite's
     // lyrics module (library-fed matching, client_id resolve, pre-warm) is NOT
     // running. Say so instead of failing silently.
-    try { console.warn('[SC SuperSuite] Standalone SuperLyrics detected — disable it; the suite already includes a newer copy.'); } catch (e) {}
+    try { console.warn('[SoundCloud Suite] Standalone SuperLyrics detected — disable it; the suite already includes a newer copy.'); } catch (e) {}
     try {
       GM_registerMenuCommand('⚠ Lyrics conflict — disable standalone SuperLyrics', () => {
-        try { SUITE.W.alert('Two SuperLyrics installs are running.\n\nDisable or remove the standalone "SuperLyrics for SoundCloud" userscript in Tampermonkey (keep only the SuperSuite), then reload SoundCloud.'); } catch (e) {}
+        try { SUITE.W.alert('Two SuperLyrics installs are running.\n\nDisable or remove the standalone "SuperLyrics for SoundCloud" userscript in Tampermonkey (keep only the SoundCloud Suite), then reload SoundCloud.'); } catch (e) {}
       });
     } catch (e) {}
     return;
@@ -7245,7 +7245,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // via standard browser controls — VoiceOver / NVDA expect dialogs to be
       // modal, so labelling as a region matches actual behavior.
       panel.setAttribute('role', 'region');
-      panel.setAttribute('aria-label', 'SoundCloud SuperSuite — lyrics & player hub');
+      panel.setAttribute('aria-label', 'SoundCloud Suite — lyrics & player hub');
       panel.innerHTML = `
         <div class="glow" id="glow" aria-hidden="true"></div>
         <div class="hdr" id="hdr">
@@ -7732,7 +7732,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         spark.style.cssText = 'width:40px;height:40px;border-radius:13px;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px;background:linear-gradient(135deg,#f50,#ff8a3d);box-shadow:0 8px 22px -6px rgba(255,85,0,.65)';
         const htext = document.createElement('div');
         const ht = document.createElement('div'); ht.textContent = 'What’s new'; ht.style.cssText = 'font-size:18px;font-weight:800;letter-spacing:-.3px;color:#fff';
-        const hv = document.createElement('div'); hv.textContent = 'SoundCloud SuperSuite · v' + VER; hv.style.cssText = 'font-size:11.5px;color:#9a9aa2;margin-top:1px';
+        const hv = document.createElement('div'); hv.textContent = 'SoundCloud Suite · v' + VER; hv.style.cssText = 'font-size:11.5px;color:#9a9aa2;margin-top:1px';
         htext.append(ht, hv); head.append(spark, htext);
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
@@ -8319,7 +8319,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             pick.forEach((i) => samp.push('  t=' + (times[i] != null ? times[i].toFixed(2) : '?') + 's  "' + (lineEls[i].textContent || '').slice(0, 42) + '"'));
           } catch (e) {}
           const out = [
-            'SuperSuite sync debug · v' + VER,
+            'SoundCloud Suite sync debug · v' + VER,
             'track: "' + (m.title || '?') + '" — ' + (m.uploader || '?'),
             'SC duration: ' + (m.dur || '?') + 's   href: ' + (m.href || '?'),
             'lyric source: ' + (L.src || '?') + '   type: ' + type + '   score: ' + (L.score != null ? +L.score.toFixed(2) : '?'),
@@ -8334,7 +8334,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           // route through the shared redactor before any clipboard sink so a track
           // href with ?client_id=… or a swallowed Bearer can never ride along
           const safe = (Log && Log.redact) ? Log.redact(out) : out;
-          console.log('%c[SuperSuite sync]', 'color:#ff5500;font-weight:700', '\n' + safe);
+          console.log('%c[SoundCloud Suite sync]', 'color:#ff5500;font-weight:700', '\n' + safe);
           try { GM_setClipboard(safe); toast('Sync debug copied — paste it to me'); return; } catch (e) {}
           try { navigator.clipboard.writeText(safe).then(() => toast('Sync debug copied — paste it to me'), () => toast('Logged to console (clipboard blocked)')); } catch (e) { toast('Logged to console'); }
         } catch (e) { toast('Sync debug failed'); }
@@ -8358,7 +8358,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             try { bg = getComputedStyle(el).backgroundColor; } catch (e) {}
             out.push(el.tagName.toLowerCase() + '  class="' + cls.slice(0, 110) + '"  bg=' + bg);
           });
-          const raw = 'SuperSuite theme debug · v' + VER + '\n' + out.length + ' elements (comments / fans / leaderboard / related / sidebar):\n' + out.join('\n');
+          const raw = 'SoundCloud Suite theme debug · v' + VER + '\n' + out.length + ' elements (comments / fans / leaderboard / related / sidebar):\n' + out.join('\n');
           const txt = (Log && Log.redact) ? Log.redact(raw) : raw;
           console.log(txt);
           try { GM_setClipboard(txt); toast('Theme debug copied — paste it to me'); return; } catch (e) {}
@@ -8366,7 +8366,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } catch (e) { toast('Theme debug failed'); }
       });
       mi('Copy error log', () => {
-        const txt = 'SuperSuite error log · v' + VER + '\n' + Log.dump();
+        const txt = 'SoundCloud Suite error log · v' + VER + '\n' + Log.dump();
         try { GM_setClipboard(txt); toast('Error log copied'); return; } catch (e) {}
         try { navigator.clipboard.writeText(txt).then(() => toast('Error log copied'), () => toast('Logged to console')); console.log(txt); } catch (e) { toast('Logged to console'); }
       });
@@ -8491,7 +8491,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let hdrGen = 0;   // a slow artwork error/load from the previous track must not repaint the next one's header
     function setHeader(meta) {
       const gen = ++hdrGen;
-      tt.textContent = meta && meta.title ? meta.title : 'SuperSuite';
+      tt.textContent = meta && meta.title ? meta.title : 'SoundCloud Suite';
       tt.title = tt.textContent;
       const eqHtml = '<div class="eq"><i></i><i></i><i></i></div>';
       // the artwork URL derives from user-uploaded data and lands in a CSS
@@ -10338,7 +10338,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const head2 = [];
       if (lyr.t) head2.push('[ti:' + lyr.t + ']');
       if (lyr.a) head2.push('[ar:' + lyr.a + ']');
-      head2.push('[re:SC SuperSuite]');
+      head2.push('[re:SoundCloud Suite]');
       if (lyr.synced) return head2.concat(lyr.lines.map(([t, txt]) => fmt(t) + txt)).join('\n');
       // estimated/calibrated mode: rebuild exactly what the panel shows —
       // the user's double-tap anchors are baked into the exported times.
@@ -10421,7 +10421,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       hoverOn: () => hoverOn, toggleHover,
       diagnose: (onStep) => runDiagnostics(onStep),
       diagReport(results) {
-        const head = `SC SuperSuite v${VER} lyrics diagnostics · gmode=${Gmode.get()} · token=${Gtok.has() ? 'yes' : 'no'} · ${new Date().toISOString()}`;
+        const head = `SoundCloud Suite v${VER} lyrics diagnostics · gmode=${Gmode.get()} · token=${Gtok.has() ? 'yes' : 'no'} · ${new Date().toISOString()}`;
         const lines = (results || []).map((r) => `${r.ok ? 'OK  ' : 'FAIL'} ${r.name} (${r.ms}ms)${r.ok ? '' : ' — ' + (r.msg || '')}`);
         return head + '\n' + lines.join('\n') + '\n\n-- last find trail --\n' + Trail.dump();
       },
@@ -10429,7 +10429,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // need to run full diagnostics first
       quickReport() {
         const m = meta || {};
-        const head = `SC SuperSuite v${VER} — track report · gmode=${Gmode.get()} · token=${Gtok.has() ? 'yes' : 'no'}`;
+        const head = `SoundCloud Suite v${VER} — track report · gmode=${Gmode.get()} · token=${Gtok.has() ? 'yes' : 'no'}`;
         const facts = `\nTitle: ${m.title || '?'}\nUploader: ${m.uploader || '?'}\nDuration: ${m.dur || '?'}s`
           + `\nURL: ${m.href ? 'https://soundcloud.com' + m.href : '?'}`;
         const raw = head + facts + '\n\n-- find trail --\n' + Trail.dump();
@@ -11102,7 +11102,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       '::-webkit-scrollbar-thumb{background:' + t.bd + ' !important;border-radius:7px}::-webkit-scrollbar-track{background:transparent}',
       // hide the leftover Pro / distribution / "100% royalties" promo banners
       // for a clean top — upsell-scoped so it never touches real content
-      (CFG.hideUpsell ? '.upsellBanner,[class*="upsell" i],[class*="distributionBanner" i],[class*="distribution" i][class*="anner" i],[class*="creatorSubscription" i],[class*="nextPro" i],[class*="goPlus" i],[class*="royalt" i],[class*="monetiz" i],.l-banner-promo,.newFeatureBanner,[data-testid*="upsell" i],[data-testid*="banner" i][data-testid*="promo" i]{display:none !important}' : ''),   // follows the Hide Go+ upsells toggle
+      (CFG.hideUpsell ? '.upsellBanner,[class*="upsell" i],[class*="distributionBanner" i],[class*="distribution" i][class*="anner" i],[class*="creatorSubscription" i],[class*="nextPro" i],[class*="goPlus" i],[class*="royalt" i],[class*="monetiz" i],.l-banner-promo,.newFeatureBanner,[data-testid*="upsell" i],[data-testid*="banner" i][data-testid*="promo" i],.l-product-banners .banner.m-promotion,.l-product-banners:not(:has(.banner:not(.m-promotion))){display:none !important}' : ''),   // follows the Hide Go+ upsells toggle; .m-promotion is the 2026 Go+ banner
       // ── FIX (real classes from the live DOM): the timed-comment popover over the
       //    waveform (.commentPopover…) is a FULL-WIDTH overlay; the generic
       //    [class*="popover"] rule above painted its layers near-black and buried the
@@ -11166,7 +11166,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         + '.sc-text-orange,.sc-text-primary,[class*="-orange"]{color:' + a + ' !important}'
         + '.playControls__play:hover{color:' + a + ' !important}';
     }
-    if (CFG.hideUpsell) css += '.upsell,.upsellHeader,[class*="upsell" i],[class*="goPlus" i],[class*="go-plus" i],.playControls__upsell,.header__upsell,.l-upsell,.upgradeButton,.go-plus-upsell{display:none !important}';
+    if (CFG.hideUpsell) css += '.upsell,.upsellHeader,[class*="upsell" i],[class*="goPlus" i],[class*="go-plus" i],.playControls__upsell,.header__upsell,.l-upsell,.upgradeButton,.go-plus-upsell,.l-product-banners .banner.m-promotion,.l-product-banners:not(:has(.banner:not(.m-promotion))){display:none !important}';
     if (CFG.hidePromoted) css += '[class*="promoted" i],[class*="sponsored" i],.promotedTrack{display:none !important}';
     if (CFG.hideComments) css += '.commentNode,.waveform__layer.commentsLayer,.commentForm{display:none !important}';
     if (CFG.grayArt) css += '.sc-artwork,.image__full{filter:grayscale(1);transition:filter .25s}.sc-artwork:hover,.listenArtworkWrapper:hover .sc-artwork{filter:none !important}';
@@ -13082,7 +13082,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // one-line diagnostic so we can see whether SoundCloud's audio element even
     // accepts the rate (open DevTools console → change speed → read this)
     try {
-      console.log('%c[SuperSuite speed]', 'color:#ff5500;font-weight:700', 'wanted=' + (CFG.speed / 100) + '×',
+      console.log('%c[SoundCloud Suite speed]', 'color:#ff5500;font-weight:700', 'wanted=' + (CFG.speed / 100) + '×',
         'domMedia=' + D.querySelectorAll('audio,video').length,
         'capturedEls=' + sceMediaEls.size, 'rates=[' + [...sceMediaEls].map((m) => m.playbackRate).join(',') + ']',
         'bufferNodes=' + sceBufNodes.size);
@@ -14496,7 +14496,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } catch (e) { toast('Import failed'); }
     });
     bd.appendChild(foot);
-    bd.appendChild(Object.assign(D.createElement('div'), { className: 'hint', textContent: 'All local · toggles apply instantly · part of SuperSuite' }));
+    bd.appendChild(Object.assign(D.createElement('div'), { className: 'hint', textContent: 'All local · toggles apply instantly · part of SoundCloud Suite' }));
     wrap.appendChild(bd);
     root.appendChild(wrap);
     requestAnimationFrame(() => wrap.classList.add('on'));
@@ -14813,7 +14813,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   function debugDump() {
     const s = audioStatus(); const L = [];
-    L.push('SoundCloud SuperSuite — debug snapshot'); L.push('version: ' + VER);
+    L.push('SoundCloud Suite — debug snapshot'); L.push('version: ' + VER);
     try { L.push('url: ' + location.href); } catch (e) {}
     try { L.push('ua: ' + navigator.userAgent); } catch (e) {}
     L.push('audio: domMedia=' + s.dom + ' captured=' + s.cap + ' bufNodes=' + s.buf + ' control=' + (s.ok || s.cap > 0 ? 'available' : 'UNAVAILABLE'));
@@ -14856,7 +14856,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     card.style.cssText = 'width:min(440px,92vw);background:linear-gradient(180deg,rgba(24,24,28,.985),rgba(13,13,16,.99));color:#f2f2f4;border-radius:22px;box-shadow:0 34px 90px -22px rgba(0,0,0,.85),inset 0 0 0 1px rgba(255,255,255,.08);padding:26px 24px 20px;font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;transform:translateY(10px) scale(.985);transition:transform .24s cubic-bezier(.3,1,.4,1);text-align:center';
     card.addEventListener('click', (e) => e.stopPropagation());
     card.innerHTML = '<div style="width:54px;height:54px;margin:0 auto 14px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:27px;background:linear-gradient(135deg,#ff8a3d,#f50);box-shadow:0 12px 30px -8px rgba(255,90,0,.7)">✨</div>'
-      + '<div style="font-size:19px;font-weight:800;letter-spacing:-.4px">Welcome to SuperSuite</div>'
+      + '<div style="font-size:19px;font-weight:800;letter-spacing:-.4px">Welcome to SoundCloud Suite</div>'
       + '<div style="font-size:12.5px;color:#a8a8b0;margin:8px auto 20px;max-width:330px;line-height:1.5">Want me to set up the recommended look &amp; sound — a clean dark theme, the audio enhancer, loudness leveling and a touch of stereo width? Or set it all up yourself.</div>';
     const rec = D.createElement('button'); rec.type = 'button'; rec.textContent = '✨  Use recommended';
     rec.style.cssText = 'display:block;width:100%;border:0;border-radius:13px;padding:13px;font:800 13px inherit;cursor:pointer;background:linear-gradient(135deg,#f50,#ff8a3d);color:#fff;box-shadow:0 10px 26px -8px rgba(255,90,0,.6);transition:filter .14s';
@@ -14870,7 +14870,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     card.append(rec, man, hint);
     onbEl.appendChild(card);
     onbEl.addEventListener('click', () => { SET('sce:onboarded', 1); closeOnboarding(); });   // dismiss = treat as handled
-    card.setAttribute('role', 'dialog'); card.setAttribute('aria-modal', 'true'); card.setAttribute('aria-label', 'Welcome to SuperSuite');
+    card.setAttribute('role', 'dialog'); card.setAttribute('aria-modal', 'true'); card.setAttribute('aria-label', 'Welcome to SoundCloud Suite');
     onbEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); SET('sce:onboarded', 1); closeOnboarding(); } };
     D.addEventListener('keydown', onbEsc, true);
     (D.body || D.documentElement).appendChild(onbEl);
@@ -14896,7 +14896,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // expose a tiny bus hook so the lyrics menu / bar button open the hub
       try { SUITE.openEnhancer = openSettings; } catch (e) {}
       try {
-        GM_registerMenuCommand('SuperSuite settings', () => setPanel(true));
+        GM_registerMenuCommand('SoundCloud Suite settings', () => setPanel(true));
       } catch (e) {}
     } catch (e) { try { console.warn('[SC Enhancer] failed to start:', e); } catch (e2) {} }
   }

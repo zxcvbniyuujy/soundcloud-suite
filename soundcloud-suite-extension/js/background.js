@@ -1,4 +1,4 @@
-/* SoundCloud SuperSuite — background service worker.
+/* SoundCloud Suite — background service worker.
  * Performs the cross-origin fetches the lyric engine needs (host_permissions
  * exempt these from CORS). Three guards keep this from becoming an open proxy
  * for anything else running on soundcloud.com:

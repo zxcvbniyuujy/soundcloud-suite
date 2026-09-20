@@ -1,4 +1,4 @@
-/* SoundCloud SuperSuite — GM_* shim (extension build)
+/* SoundCloud Suite — GM_* shim (extension build)
  *
  * Loads in the page's MAIN world BEFORE js/suite.js (order is guaranteed by
  * the manifest's js array). Two constraints shape this file:
@@ -22,7 +22,7 @@
 
   // GM_info: the suite reads GM_info.script.version as its single source of truth
   // for the displayed version. build.sh keeps this in lockstep with the manifest.
-  window.GM_info = { script: { name: 'SoundCloud SuperSuite', version: '4.52.0' } };
+  window.GM_info = { script: { name: 'SoundCloud Suite', version: '4.53.0' } };
 
   window.GM_getValue = function (key, fallback) {
     try {
@@ -144,5 +144,5 @@
     return { abort: () => settle(null) };
   };
 
-  try { console.info('[SuperSuite] GM shim ready (extension build)'); } catch (e) {}
+  try { console.info('[SoundCloud Suite] GM shim ready (extension build)'); } catch (e) {}
 })();

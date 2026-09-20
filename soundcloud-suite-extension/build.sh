@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SoundCloud SuperSuite — build / package the extension.
+# SoundCloud Suite — build / package the extension.
 #
 # Keeps js/suite.js, manifest.json, js/gm-shim.js and the suite's own VER
 # fallback in lockstep, so the four version strings can never drift.
@@ -20,7 +20,7 @@
 #   ./build.sh                 sync versions, verify token policy, syntax-check
 #   ./build.sh 4.52.0          also bump the version everywhere first
 #   ./build.sh --public        refuse to build if any token is present
-#   ./build.sh --zip           also write ../supersuite-<version>.zip for the store
+#   ./build.sh --zip           also write ../soundcloud-suite-<version>.zip for the store
 #   ./build.sh --public --zip 4.52.0
 set -euo pipefail
 
@@ -133,7 +133,7 @@ fi
 
 # ── optional store zip (dev files excluded) ──────────────────────────────────
 if [ "$ZIP" = "1" ]; then
-  OUT="$EXT_DIR/../supersuite-$VER.zip"
+  OUT="$EXT_DIR/../soundcloud-suite-$VER.zip"
   rm -f "$OUT"
   ( cd "$EXT_DIR" && zip -qr "$OUT" manifest.json icons js -x '*/.*' '.*' )
   note "store package → $OUT"

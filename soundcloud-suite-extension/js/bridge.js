@@ -1,4 +1,4 @@
-/* SoundCloud SuperSuite — isolated-world relay.
+/* SoundCloud Suite — isolated-world relay.
  * The main-world shim can't touch chrome.runtime, so this script forwards
  * its xhr requests to the background service worker and posts the result
  * back, and relays the toolbar-click toggle into the page. */

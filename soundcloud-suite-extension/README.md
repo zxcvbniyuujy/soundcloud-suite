@@ -1,6 +1,6 @@
-# SoundCloud SuperSuite — Chrome extension
+# SoundCloud Suite — Chrome extension
 
-Native Chrome (Manifest V3) build of SoundCloud SuperSuite: page themes and
+Native Chrome (Manifest V3) build of SoundCloud Suite: page themes and
 declutter, player upgrades (speed, loop, volume memory, sleep timer, audio FX),
 a synced-lyrics hub with six sources, and full-library shuffle with stats.
 No Tampermonkey needed. Version: see `manifest.json`.
@@ -92,7 +92,7 @@ and enforces the token policy. It works on macOS and Linux.
 ```sh
 ./build.sh                    # sync versions, verify blank Genius token, syntax-check
 ./build.sh 4.52.0             # bump the version everywhere first
-./build.sh --public --zip     # release build: refuses any token, writes ../supersuite-<v>.zip
+./build.sh --public --zip     # release build: refuses any token, writes ../soundcloud-suite-<v>.zip
 ```
 
 If you keep the userscript as a separate file, point the script at it with
@@ -125,9 +125,9 @@ The debug accessor it reads (`window.__sceAudioDebug`) exists only while
 
 ## Troubleshooting
 
-- `chrome://extensions` → SuperSuite card → **Errors** shows loader problems.
+- `chrome://extensions` → SoundCloud Suite card → **Errors** shows loader problems.
 - On soundcloud.com the DevTools console prints
-  `[SuperSuite] GM shim ready (extension build)` at page load.
+  `[SoundCloud Suite] GM shim ready (extension build)` at page load.
 - Set `localStorage['scss:debug'] = '1'` on soundcloud.com to see the suite's
   caught errors in the console; **⋯ → Copy error log** in the hub copies the
   same ring (tokens redacted).

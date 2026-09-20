@@ -1,8 +1,8 @@
-# SoundCloud SuperSuite — Privacy Policy
+# SoundCloud Suite — Privacy Policy
 
 _Last updated: 20 September 2026._
 
-SoundCloud SuperSuite is a browser extension that enhances soundcloud.com.
+SoundCloud Suite is a browser extension that enhances soundcloud.com.
 **The extension has no servers and collects nothing.**
 
 ## What it stores

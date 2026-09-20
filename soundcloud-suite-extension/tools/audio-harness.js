@@ -161,7 +161,7 @@ const FIXTURE_SRC = `
   const page = ctx.pages()[0] || await ctx.newPage();
   const logs = [], pageerrors = [];
   const wire = (p) => {
-    p.on('console', (m) => { const t = m.text(); if (/SuperSuite|scss|sce-|Uncaught|TypeError|ReferenceError/i.test(t)) logs.push(`[${m.type()}] ${t.slice(0, 240)}`); });
+    p.on('console', (m) => { const t = m.text(); if (/SoundCloud Suite|SoundCloud Suite|scss|sce-|Uncaught|TypeError|ReferenceError/i.test(t)) logs.push(`[${m.type()}] ${t.slice(0, 240)}`); });
     p.on('pageerror', (e) => pageerrors.push(String(e).slice(0, 300)));
   };
   wire(page);

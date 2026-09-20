@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "SoundCloud SuperSuite",
-  "version": "4.52.0",
+  "name": "SoundCloud Suite",
+  "version": "4.53.0",
   "description": "All-in-one SoundCloud upgrade: themes & declutter, player tools, studio-grade audio, a synced-lyrics hub and full-library shuffle.",
   "minimum_chrome_version": "111",
   "icons": {
@@ -11,7 +11,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Toggle SuperSuite lyrics (Alt+L)",
+    "default_title": "Toggle SoundCloud Suite lyrics (Alt+L)",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
