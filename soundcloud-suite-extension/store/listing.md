@@ -38,6 +38,13 @@ Paste these into the developer dashboard. Files referenced are in this folder.
 | Privacy policy URL (now) | https://github.com/zxcvbniyuujy/soundcloud-suite/blob/claude/focused-tesla-p6n356/soundcloud-suite-extension/PRIVACY.md |
 | Privacy policy URL (after merging to main) | https://github.com/zxcvbniyuujy/soundcloud-suite/blob/main/soundcloud-suite-extension/PRIVACY.md |
 
+## Test instructions tab
+
+| Field | Value |
+|---|---|
+| Username / Password | Leave empty. Lyrics, audio and themes work signed out. If you want the reviewer to exercise Shuffle, create a throwaway SoundCloud account, like ten tracks, and enter its login here. |
+| Additional instructions (477 chars) | No login needed for core features. 1) Open https://soundcloud.com/rexorangecounty/best-friend and press play. Dismiss the one-time welcome card. 2) Press Alt+L (or the note icon in the player bar): the hub opens with synced lyrics that follow the song. 3) Audio tab: drag the EQ curve, switch on Enhance, hold Compare to hear the original. 4) Tweaks tab: pick a theme. 5) Shuffle needs any SoundCloud account with a few liked tracks: sign in, then click the bar's shuffle icon. |
+
 ## Distribution
 
 | Field | Value |
