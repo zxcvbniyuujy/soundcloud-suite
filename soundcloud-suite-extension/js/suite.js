@@ -10681,6 +10681,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     focusMode: false,       // hide the right sidebar entirely
     maxWidth: false,        // cap content width for big screens
     hideReposts: false,     // hide reposts in the stream
+    resumePos: 'ask',       // long tracks remember their position: 'ask' | 'auto' | 'off'
     hidePlaylistsFeed: false, // hide playlists in the stream
     compactFeed: false,     // tighter stream rows
     biggerWave: false,      // taller waveform
@@ -10868,7 +10869,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
     fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1], reverbAmt: [0, 100, 5],
-    peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
+    resumePos: { one: ['ask', 'auto', 'off'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
   };
   const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
   // one PEQ filter entry, re-validated field by field (data only)
@@ -11239,6 +11240,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
+      m.addEventListener('playing', () => { try { offerResume(m); } catch (e) {} });   // long tracks: offer to resume when one starts from the top
+      m.addEventListener('ended', () => { try { resumeForget(curTrackHref()); } catch (e) {} });
       // A–B (2.28): a seek, a rate change or a (re)start moves the wrap point — re-aim the timer
       const abRe = () => { try { if (abOn) armAb(); } catch (e) {} };
       m.addEventListener('ratechange', abRe); m.addEventListener('seeking', abRe); m.addEventListener('play', abRe);
@@ -12748,6 +12751,70 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
     } catch (e) {}
   }
+  /* ── resume long tracks: per-track position memory for mixes and podcasts ──
+   * SoundCloud restores only the queue's current track after a reload; a two-hour mix you left
+   * on Tuesday starts from the top on Friday. While a track of ten minutes or more plays, its
+   * position is saved every 5 s (from 60 s in; a finished track drops its entry). When such a
+   * track later starts from the top, a chip offers "Resume at h:mm:ss" (or auto mode seeks at
+   * once). Up to 60 tracks, a month each, all local. */
+  const RESUME_KEY = 'enh:resumeMap', RESUME_MIN_DUR = 600, RESUME_MAX = 60, RESUME_TTL = 30 * 864e5;
+  let resumeSavedAt = 0, resumePending = null, resumeChip = null, resumeChipT = 0, resumeSeenHref = null, resumeOfferedFor = null;
+  function fmtClock(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); }
+  function resumeMap() { const o = GET(RESUME_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  function resumeForget(href) { const map = resumeMap(); if (href in map) { delete map[href]; SET(RESUME_KEY, map); } }
+  function recordResume(m) {
+    if (CFG.resumePos === 'off' || !m || m.paused || !isFinite(m.duration) || m.duration < RESUME_MIN_DUR) return;
+    const now = Date.now(); if (now - resumeSavedAt < 5000) return;
+    resumeSavedAt = now;
+    const href = curTrackHref(); if (!href) return;
+    const pos = m.currentTime, left = m.duration - pos;
+    if (left < 30) { resumeForget(href); return; }   // finished: never offered again
+    if (pos < 60) return;
+    const map = resumeMap();
+    map[href] = { pos: Math.round(pos), dur: Math.round(m.duration), t: now };
+    const keys = Object.keys(map);
+    if (keys.length > RESUME_MAX) { keys.sort((a, b) => (map[a].t || 0) - (map[b].t || 0)); keys.slice(0, keys.length - RESUME_MAX).forEach((k) => { delete map[k]; }); }
+    SET(RESUME_KEY, map);
+  }
+  function hideResumeChip() { clearTimeout(resumeChipT); if (resumeChip) { try { resumeChip.remove(); } catch (e) {} resumeChip = null; } }
+  function showResumeChip(pos) {
+    hideResumeChip();
+    const c = D.createElement('div'); c.setAttribute('data-sce-resume', '1'); c.setAttribute('role', 'status');
+    c.style.cssText = 'position:fixed;left:50%;bottom:62px;transform:translateX(-50%);z-index:2147483399;display:flex;align-items:center;gap:2px;background:rgba(22,22,26,.94);color:#fff;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 4px 3px 6px;box-shadow:0 10px 30px rgba(0,0,0,.45);font:600 12.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;backdrop-filter:blur(10px)';
+    const go = D.createElement('button'); go.type = 'button'; go.textContent = '▶  Resume at ' + fmtClock(pos);
+    go.style.cssText = 'all:unset;cursor:pointer;padding:7px 10px;border-radius:999px;color:#fff';
+    go.addEventListener('click', () => { const m = activeMedia(); if (m) applyResume(m, true); else hideResumeChip(); });
+    const no = D.createElement('button'); no.type = 'button'; no.textContent = '✕'; no.title = 'Start from the top'; no.setAttribute('aria-label', 'Start from the top');
+    no.style.cssText = 'all:unset;cursor:pointer;padding:7px 9px;border-radius:999px;color:#9a9aa2';
+    no.addEventListener('click', () => { resumePending = null; hideResumeChip(); });
+    for (const b of [go, no]) { b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.1)'; }); b.addEventListener('mouseleave', () => { b.style.background = ''; }); b.addEventListener('focus', () => { b.style.boxShadow = '0 0 0 2px #ff5500'; }); b.addEventListener('blur', () => { b.style.boxShadow = ''; }); }
+    c.append(go, no); (D.body || D.documentElement).appendChild(c); resumeChip = c;
+    resumeChipT = setTimeout(() => { resumePending = null; hideResumeChip(); }, 30000);   // an unanswered offer expires
+  }
+  function offerResume(m) {   // once per track start: from the tick and from the element's `playing`
+    if (CFG.resumePos === 'off' || !m || m.paused) return;
+    const href = curTrackHref(); if (!href) return;
+    if (href !== resumeSeenHref) { resumeSeenHref = href; resumeOfferedFor = null; if (resumePending && resumePending.href !== href) { resumePending = null; hideResumeChip(); } }
+    if (resumeOfferedFor === href) return;
+    if (!isFinite(m.duration) || m.duration < RESUME_MIN_DUR) return;   // duration arrives a moment after `playing`: try again next tick
+    resumeOfferedFor = href;
+    const e = resumeMap()[href];
+    if (!e || !(e.pos >= 60) || Date.now() - (e.t || 0) > RESUME_TTL) return;
+    if (m.currentTime > 8) return;   // not starting from the top (SoundCloud's own queue restore, or a seek)
+    resumePending = { href, pos: e.pos };
+    if (CFG.resumePos === 'auto') applyResume(m, true); else showResumeChip(e.pos);
+  }
+  function applyResume(m, now) {   // `now` = the user asked (chip) or auto mode; otherwise only a pending offer that is still valid
+    if (!resumePending || !m || !isFinite(m.duration)) return;
+    if (curTrackHref() !== resumePending.href) { resumePending = null; hideResumeChip(); return; }
+    if (!now) return;
+    const pos = Math.min(resumePending.pos, m.duration - 5);
+    resumePending = null; hideResumeChip();
+    __sceUserSeek = Date.now(); try { m.currentTime = pos; } catch (e) {}
+    resumeSavedAt = 0;
+    toast('Resumed at ' + fmtClock(pos));
+  }
+
   function enforce() {
     try {
       applySpeed();   // runs every tick + immediately on cycleSpeed; works even before activeMedia resolves
@@ -12760,6 +12827,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
       const m = activeMedia();
       if (!m) return;
+      try { offerResume(m); recordResume(m); applyResume(m); } catch (e) {}
       // end-of-track silence trim (WP10): source peak < −60 dBFS for 2 s with under 30 s left → seek to the end.
       // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
       try {
@@ -14114,7 +14182,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           sleep: () => ({ rem: SUITE.sleep ? SUITE.sleep.remainingMs() : -1, armed: !!(SUITE.sleep && SUITE.sleep.armed()), chip: sleepChipMin }),
           sleepSet: (min) => { if (SUITE.sleep) SUITE.sleep.set(+min); }, sleepFading: () => sleepFadeOn,
           muted: () => mutedVol != null,
-          seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; },
+          seek: (t) => { const m = activeMedia(); if (m) m.currentTime = +t; }, time: () => { const m = activeMedia(); return m ? m.currentTime : null; },
           fade: () => fadeCtl.state(), restartTrack, nudgeSeek, seekPct, applySpeed, status: () => audioStatus(),
           toggleMute, bumpVol, lastClip: () => _lastClip, latency: () => SUITE.audioLatency(),
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
@@ -14356,6 +14424,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
+    ['resumePos', 'select', 'Resume long tracks', 'Mixes and podcasts over 10 minutes remember where you stopped, for a month', [['ask', 'Offer to resume'], ['auto', 'Resume automatically'], ['off', 'Off']]],
     ['SEC', 'Artist / track'],
     ['barInfo', 'toggle', 'Track info button', 'ⓘ — metadata, download, artist links, embed'],
     ['hideFollowFeed', 'toggle', 'Hide “who to follow”', 'Suggested-people boxes'],
