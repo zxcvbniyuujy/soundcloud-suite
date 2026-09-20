@@ -8062,16 +8062,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['☰', 'Chapters for mixes', 'A set whose description carries a timestamped tracklist gets a chapter list at the top of the Queue tab that follows the playhead. Click to jump, Next / Previous chapter from the palette, Copy tracklist, and your own cue points on any track.'],
+          ['⏯', 'Long tracks resume', 'Anything over ten minutes remembers where you stopped for a month and offers to pick up there when it starts again. Tweaks → Player → Resume long tracks: ask, automatic or off.'],
+          ['🧹', 'Feed rules', 'Tweaks → Declutter: mute words, hide tracks shorter or longer than a limit, hide what you already liked. They run on SoundCloud’s own feed, search and related lists, so a hidden track never shows and never plays.'],
+          ['▣', 'Lyric share cards', '⋯ menu → Share a lyric card: pick up to six lines and get a 1080 × 1080 image, artwork and all, on the clipboard or as a file.'],
+          ['⌨', 'Media keys, timestamps, runtimes', 'Title, artwork and seek now reach your media keys and the system now-playing panel. Every 12:34 in a description or comment jumps there, #t= links land where they were copied, and playlists show their total length.'],
           ['✨', 'Enhance, remastered', 'A five-stage tone shape, 4× saturation, a harmonic exciter and a three-band compressor that follows the track’s own loudness — level-matched, so it never wins by simply being louder.'],
           ['🎯', 'Lyrics locked to the vocals', 'The highlight follows the audio clock to the frame. For synced sheets the hub listens to the first 90 s and offers “Align to vocals” in the ⋯ menu when it hears a constant lag.'],
           ['⌨️', 'Keys stay in the hub', 'R, M, S and the digits no longer reach SoundCloud’s own shortcuts while the hub is open, Escape closes every sheet and dialog, and the EQ curve, switches and sliders work from the keyboard.'],
           ['🎚️', 'A complete Audio tab', 'Loudness normalize that measures like the streaming services (with a per-track memory), a clip guard, volume boost to 300 %, Night mode, hold-to-compare, headphone correction from AutoEQ, bass, vocals, tilt, crossfeed, balance, mono, tempo chips, pitch-follows-speed, fades — every control an exact passthrough when off.'],
-          ['⏱️', 'Pinpoint lyric sync', 'Synced lyrics auto-stretch to THIS upload’s real length (SoundCloud is full of sped-up / edited versions), and a phase-locked clock makes the highlight glide exactly with the audio — locked to the track that’s actually playing, no more creeping out by the last chorus. For tracks with no synced lyrics anywhere, the timing is estimated — tap the 🎤 prompt (or ⋯ → Calibrate sync) and tap each line as you hear it to lock it perfectly.'],
           ['🌐', 'Lyric translation', 'Lyrics ⋯ menu → Translate: each line gets a dimmed translation in your language, right under the original.'],
-          ['🚀', 'One-tap recommended setup', 'First run offers a “Use recommended” option — a dark theme, the audio enhancer, loudness leveling & a touch of stereo width, all in one tap. Or set it up yourself.'],
           ['🎛️', 'Interactive equalizer', 'A drag-the-curve 10-band EQ — pull the dots over a glowing live spectrum, just like a pro plugin, with presets you can save.'],
-          ['🔊', 'Loudness & fade', 'Also in the Audio tab: auto-level quiet vs. loud uploads and fade tracks in/out. All experimental & instantly reversible.'],
-          ['💤', 'Sleep timer & shortcuts', 'Pause after 15m–1.5h, per-track speed memory, and press ? in the hub for every shortcut.'],
         ];
         const list = document.createElement('div');
         list.style.cssText = 'display:flex;flex-direction:column;gap:9px';

@@ -11,6 +11,7 @@ Open the hub and the words are right there, line by line, moving with the vocals
 • Two taps fix the timing on anything unsynced
 • Translate in place, copy a quote with its timestamp, export .lrc
 • A small floating line while the hub is closed
+• Share a lyric card: pick up to six lines, get an image for your story
 
 
 Audio
@@ -22,6 +23,17 @@ Drag an equalizer curve on a live spectrum, or just switch on Enhance and hear t
 • Speed from 0.5× to 2×, pitch that follows or holds
 • Stereo width, crossfeed, headphone correction
 • Every control is an exact passthrough when off. Hold Compare to hear the original.
+
+
+Mixes and podcasts
+
+A two-hour set is no longer one flat waveform.
+
+• Chapters from the tracklist in the description, following the playhead
+• Your own cue points on any track
+• Long tracks remember where you stopped and offer to resume
+• Every 12:34 in a description or comment jumps there
+• Playlists show their track count, total length and when they would end
 
 
 Shuffle
@@ -39,6 +51,8 @@ Look
 Eleven dark themes. A light one. Zen mode for when you want nothing but the music.
 
 • Hide the upsells, the sidebar, the footer, the noise
+• Mute words, hide over-long mixes or tracks you already liked, straight from the feed
+• Title, artwork and seek on your media keys and the system now-playing panel
 • Speed, an A–B loop and a sleep timer in the player bar
 • Track info, timecodes, a waveform timeline
 • Ctrl+K opens a command palette for everything. Press ? for every shortcut.

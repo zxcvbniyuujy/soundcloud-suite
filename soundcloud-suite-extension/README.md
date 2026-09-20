@@ -5,6 +5,37 @@ declutter, player upgrades (speed, loop, volume memory, sleep timer, audio FX),
 a synced-lyrics hub with six sources, and full-library shuffle with stats.
 No Tampermonkey needed. Version: see `manifest.json`.
 
+## For mixes, podcasts and long listens
+
+- **Chapters** — a mix whose description carries a timestamped tracklist gets a
+  chapter list at the top of the hub's Queue tab that follows the playhead;
+  click to jump, `Next / Previous chapter` from the palette, `Copy tracklist`.
+- **Cue points** — your own markers on any track (`+ Cue here`, the ⋯ menu or
+  the palette), renamed by double-click, kept per track.
+- **Resume long tracks** — anything over ten minutes remembers where you
+  stopped for a month and offers to pick up there when it starts again
+  (Tweaks → Player, ask / automatic / off).
+- **Clickable timestamps** — any `12:34` in a description or comment jumps
+  there; `#t=12:34` on a track URL lands the same way, and the track-info
+  popover copies such a link at the current time.
+- **Playlist runtime** — track count, total length and the clock time a full
+  play-through would end, under every playlist and album title.
+
+## Feed rules
+
+Tweaks → Declutter: **Mute words** (title, artist, tags or genre), **Hide tracks
+shorter / longer than**, **Hide tracks you already liked** and **Hide reposts**
+run on SoundCloud's own feed, search and related-tracks responses before the
+page renders them, so a hidden track never shows and never plays.
+
+## Player and system
+
+- **System media controls** — title, artist and artwork in the OS now-playing
+  panel; play, pause and seek from media keys (SoundCloud itself registers
+  only next / previous).
+- **Lyric share card** — ⋯ menu → *Share a lyric card*: pick up to six lines,
+  get a 1080×1080 image on the clipboard or as a file.
+
 ## Install / reload
 
 1. Open `chrome://extensions/` and enable **Developer mode** (top right).
