@@ -2,8 +2,7 @@
   "manifest_version": 3,
   "name": "SoundCloud SuperSuite",
   "version": "4.51.0",
-  "description": "All-in-one SoundCloud enhancer — themes & declutter, player upgrades, a powerful synced-lyrics hub, and full-library shuffle with stats.",
-  "author": "you + bhackel",
+  "description": "All-in-one SoundCloud upgrade: themes & declutter, player tools, studio-grade audio, a synced-lyrics hub and full-library shuffle.",
   "minimum_chrome_version": "111",
   "icons": {
     "16": "icons/icon-16.png",
