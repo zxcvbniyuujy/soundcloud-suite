@@ -11667,8 +11667,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
-      m.addEventListener('playing', () => { try { offerResume(m); applyPendingJump(m); mediaSessionSync(m); } catch (e) {} });   // long tracks: offer to resume when one starts from the top
-      m.addEventListener('pause', () => { try { mediaSessionSync(m); } catch (e) {} });
+      m.addEventListener('playing', () => { try { offerResume(m); applyPendingJump(m); } catch (e) {} setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // long tracks: offer to resume when one starts from the top; the session update stays off the play-start path
+      m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
+      m.addEventListener('seeked', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
       m.addEventListener('ended', () => { try { resumeForget(curTrackHref()); } catch (e) {} });
       // A–B (2.28): a seek, a rate change or a (re)start moves the wrap point — re-aim the timer
       const abRe = () => { try { if (abOn) armAb(); } catch (e) {} };
@@ -13246,9 +13247,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   /* ── system media controls: SoundCloud registers only next / previous and no metadata, so the OS
    * now-playing panel and the media keys know nothing about the track. Title, artist and artwork come
    * from the player bar; play / pause / seek and the position state from the captured element. ── */
-  let msKey = '', msHooked = false, msLastPos = -1;
+  let msKey = '', msHooked = false, msLastPos = -1, msPosAt = 0, msLastPaused = null;
   function clickPlayBtn() { try { const b = D.querySelector('.playControls__play'); if (b) b.click(); } catch (e) {} }
-  function mediaSessionSync(m) {
+  function mediaSessionSync(m, force) {   // `force` = a play / pause / seek just happened; the tick only refreshes every few seconds
     const ms = navigator.mediaSession;
     if (!ms) return;
     if (!CFG.mediaKeys) {
@@ -13278,11 +13279,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { ms.metadata = new W.MediaMetadata({ title, artist, album: 'SoundCloud', artwork: art ? [{ src: art, sizes: '500x500', type: 'image/jpeg' }] : [] }); } catch (e) {}
     }
     if (!m) return;
-    try { ms.playbackState = m.paused ? 'paused' : 'playing'; } catch (e) {}
+    const paused = !!m.paused, now = Date.now();
+    if (paused !== msLastPaused) { msLastPaused = paused; try { ms.playbackState = paused ? 'paused' : 'playing'; } catch (e) {} }
+    // the browser extrapolates the position from the rate itself, so the state is pushed on changes and
+    // every few seconds, never every tick
+    if (!force && now - msPosAt < 5000) return;
     try {
       if (isFinite(m.duration) && m.duration > 0 && typeof ms.setPositionState === 'function') {
         const pos = Math.min(Math.max(0, m.currentTime), m.duration);
-        if (Math.abs(pos - msLastPos) > 0.75) { msLastPos = pos; ms.setPositionState({ duration: m.duration, playbackRate: m.playbackRate || 1, position: pos }); }
+        if (force || Math.abs(pos - msLastPos) > 0.75) { msLastPos = pos; msPosAt = now; ms.setPositionState({ duration: m.duration, playbackRate: m.playbackRate || 1, position: pos }); }
       }
     } catch (e) {}
   }
