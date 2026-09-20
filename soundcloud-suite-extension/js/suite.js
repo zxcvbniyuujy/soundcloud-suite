@@ -7561,15 +7561,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const h = document.createElement('h3');
       h.textContent = 'Paste lyrics for this track';
       const ta = document.createElement('textarea');
-      ta.style.cssText = 'width:100%;flex:1;min-height:120px;background:rgba(128,128,128,0.12);color:inherit;border:1px solid rgba(128,128,128,0.25);border-radius:10px;padding:10px;font:12px/1.5 inherit;resize:none;outline:none;';
+      ta.style.cssText = 'width:100%;flex:1;min-height:120px;background:rgba(128,128,128,0.12);color:inherit;border:1px solid rgba(128,128,128,0.25);border-radius:10px;padding:10px;font:inherit;font-size:12px;line-height:1.5;resize:none;outline:none;';
       ta.placeholder = 'Plain text, or .lrc with [mm:ss.xx] timestamps for true sync…';
-      ta.addEventListener('keydown', (ev) => ev.stopPropagation());
+      ta.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') { ev.preventDefault(); wrap.remove(); } });
       const row = document.createElement('div');
       row.className = 'row';
       const save = document.createElement('button');
       save.className = 'btn acc';
       save.textContent = 'Save';
-      save.addEventListener('click', () => { App.acceptPasted(ta.value); wrap.remove(); });
+      save.addEventListener('click', () => { if (App.acceptPasted(ta.value) !== false) wrap.remove(); });   // no track yet: keep the text
       const cancel = document.createElement('button');
       cancel.className = 'btn';
       cancel.textContent = 'Cancel';
@@ -7609,7 +7609,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ['✨', 'Enhance audio + stereo width', 'Audio tab → Enhance: restores high-end clarity, warmth & punch, plus a stereo-width slider for a fuller, more “HQ” sound.'],
           ['🎛️', 'Interactive equalizer', 'A drag-the-curve 10-band EQ — pull the dots over a glowing live spectrum, just like a pro plugin, with presets you can save.'],
           ['🔊', 'Loudness & fade', 'Also in the Audio tab: auto-level quiet vs. loud uploads and fade tracks in/out. All experimental & instantly reversible.'],
-          ['💤', 'Sleep timer & shortcuts', 'Pause after 15m–1.5h, per-track speed memory, and press ? for every keyboard shortcut.'],
+          ['💤', 'Sleep timer & shortcuts', 'Pause after 15m–1.5h, per-track speed memory, and press ? in the hub for every shortcut.'],
         ];
         const list = document.createElement('div');
         list.style.cssText = 'display:flex;flex-direction:column;gap:9px';
@@ -7741,7 +7741,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!open) return;
       if (tab === 'queue') renderQueue();
       else if (tab === 'stats') renderStats();
-      else if (tab === 'tweaks') renderTweaks();
+      // Tweaks is not rebuilt here: a track change would throw away focus, scroll, open groups and any unsaved edit
     }
 
     function renderQueue() {
@@ -7755,7 +7755,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const list = SUITE.queueList && SUITE.queueList();
       if (!list) {
         qbody.appendChild(stateEl(ICONS.note, 'No shuffle queue', 'Run Shuffle Play and the full shuffled order shows up here.', [
-          { label: 'Shuffle now', acc: true, fn: () => { if (SUITE.shuffleNow) SUITE.shuffleNow(); toast('Shuffling…'); } },
+          { label: 'Shuffle now', acc: true, fn: () => { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; toast(m || 'Shuffling…'); } },
         ]));
         return;
       }
@@ -7800,7 +7800,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       reB.className = 'sbtn';
       reB.textContent = '↻';
       reB.title = 'Reshuffle';
-      reB.addEventListener('click', () => { if (SUITE.shuffleNow) SUITE.shuffleNow(); toast('Shuffling…'); });
+      reB.addEventListener('click', () => { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; toast(m || 'Shuffling…'); });
       const exB = document.createElement('button');
       exB.className = 'sbtn';
       exB.textContent = 'M3U';
@@ -8151,8 +8151,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Clear lyric cache (' + cn + ')', () => { Cache.clear(); Miss.clearAll(); toast('Lyric cache cleared'); });
       if (mn) mi('Retry ' + mn + ' missed track' + (mn === 1 ? '' : 's'), () => { Miss.clearAll(); toast('Miss list cleared — they’ll search again'); });
       sep();
-      mi('SoundCloud Enhancer settings ✦', () => { if (SUITE.openEnhancer) SUITE.openEnhancer(); });
-      mi('Shuffle my Likes', () => { if (SUITE.shuffleNow) SUITE.shuffleNow(); }, '⌥S');
+      mi('Tweaks & settings ✦', () => { if (SUITE.openEnhancer) SUITE.openEnhancer(); });
+      mi('Shuffle my Likes', () => { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; if (m) toast(m); }, 'Alt+S');
       mi('Hotkeys', () => showKeys(true), '?');
       mi(transOn ? 'Stop translating lyrics' : ('Translate lyrics → ' + transLang.toUpperCase()), () => toggleTranslate());
       mi("What's new in v" + VER, () => showWhatsNew());
@@ -8300,7 +8300,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const h = document.createElement('h3');
         h.textContent = 'Keyboard shortcuts';
         keysEl.appendChild(h);
-        [['⌥ L', 'Toggle this panel'], ['⌥ S', 'Shuffle your Likes'], ['⌥ B', 'Block current track'],
+        [['Alt+L', 'Toggle this panel'], ['Alt+S', 'Shuffle your Likes'], ['Alt+B', 'Block current track'],
          ['F', 'Immersive fullscreen'], ['K', 'Focus (karaoke) mode'], ['S', 'Search lyrics manually'],
          ['/', 'Find in lyrics'], ['C', 'Jump to chorus'], ['↑ / ↓', 'Seek previous / next line'],
          ['R', 'Replay current line'], ['A', 'Calibrate sync (tap along)'], ['1 – 5', 'Lyrics · Queue · Stats · Audio · Tweaks'],
@@ -8308,7 +8308,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
          ['[ / ]', 'Nudge sync ±100 ms'], ['{ / }', 'Fine nudge ±25 ms'], ['< / >', 'Coarse nudge ±500 ms'],
          ['0', 'Reset sync & anchors'], ['− / =', 'Lyrics text size'], ['T', 'Cycle theme'],
          ['M', 'Accent mood'], ['G', 'Backdrop density'], ['N', 'Mini lyric bar'],
-         ['2× click a line', 'Seek to that line'], ['⌥ click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
+         ['Audio tab', 'A hold = compare · N night · , . speed (with Global hotkeys on)'],
+         ['Click a line', 'Seek there'], ['2× click a line', 'On guessed timing: pin that line as an anchor'], ['Alt+click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
          ['2× click artwork', 'Immersive fullscreen'], ['Click title', 'Copy track link'], ['Click the clock', 'Time left ↔ elapsed'],
          ['Esc', 'Back out (sheet → menu → find → fullscreen → search → close)'], ['?', 'This sheet']]
           .forEach(([k, d]) => {
@@ -8352,7 +8353,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let hdrGen = 0;   // a slow artwork error/load from the previous track must not repaint the next one's header
     function setHeader(meta) {
       const gen = ++hdrGen;
-      tt.textContent = meta && meta.title ? meta.title : 'SuperLyrics';
+      tt.textContent = meta && meta.title ? meta.title : 'SuperSuite';
       tt.title = tt.textContent;
       const eqHtml = '<div class="eq"><i></i><i></i><i></i></div>';
       // the artwork URL derives from user-uploaded data and lands in a CSS
@@ -8488,6 +8489,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
 
     function clearLyrics() {
+      closeFind();   // stale hits over the next track's state would point at detached lines
       lineEls = []; times = []; lineWords = []; activeI = -1; isSynced = false; estMode = false;
       estBaseTimes = null;
       ++transToken;   // invalidate any in-flight translation so it can't decorate the next track's lines
@@ -9139,6 +9141,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         requestAnimationFrame(clampPanel);   // never reveal an off-screen panel
         App.onOpen();
         syncTabs();
+        if (tab === 'tweaks') renderTweaks();   // restored from storage without setTab: build it on open
         try { if (tab === 'audio') { if (SUITE.audioTabActive) SUITE.audioTabActive(true); renderAudio(); } } catch (e) {}
       } else {
         try { if (SUITE.audioTabActive) SUITE.audioTabActive(false); } catch (e) {}   // stop the EQ spectrum + bypass routing
@@ -9214,8 +9217,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('♫', 'Lyrics tab', 'View', () => { setOpen(true); setTab('lyrics'); });
       add('≣', 'Queue tab', 'View', () => { setOpen(true); setTab('queue'); });
       add('▤', 'Stats tab', 'View', () => { setOpen(true); setTab('stats'); });
-      add('🎛', 'Equalizer & audio FX', 'View', () => { setOpen(true); setTab('audio'); });
-      add('⚙', 'Tweaks & settings', 'View', () => { setOpen(true); setTab('tweaks'); });
+      add('🎛', 'Audio tab', 'View', () => { setOpen(true); setTab('audio'); });
+      add('⚙', 'Tweaks tab', 'View', () => { setOpen(true); setTab('tweaks'); });
       add('⛶', 'Immersive mode', 'View', () => { setOpen(true); toggleMax(true); });
       add('◑', 'Toggle focus mode', 'View', () => { setOpen(true); toggleFocus(); });
       add('▭', 'Toggle mini lyric bar', 'View', () => toggleMini());
@@ -9931,7 +9934,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } catch (e) { UI.toast('Import failed'); }
     }
     function acceptPasted(text) {
-      if (!meta) { UI.toast('Play a track first'); return; }
+      if (!meta) { UI.toast('Play a track first'); return false; }
       const lines = parseLRC(text, '', '');
       if (lines.length >= 4) {
         adopt({ src: 'paste', synced: true, lines, a: meta.uploader || '', t: meta.title || '', picked: true });
@@ -13024,8 +13027,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + '<div style="position:absolute;left:14px;right:14px;bottom:12px;display:flex;gap:11px;align-items:flex-end">'
       + '<div style="width:58px;height:58px;border-radius:12px;flex:none;background:#222 center/cover no-repeat' + (artUrl ? ' url(&quot;' + artUrl + '&quot;)' : '') + ';box-shadow:0 8px 22px -4px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.14)"></div>'
       + '<div style="min-width:0;flex:1;padding-bottom:2px">'
-      + '<div style="font-weight:800;font-size:14.5px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 10px rgba(0,0,0,.6)">' + esc(d.title || '') + '</div>'
-      + '<div style="font-size:11.5px;color:#cdcdd5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">' + esc(u) + '</div>'
+      + '<div title="' + esc(d.title || '').replace(/"/g, '&quot;') + '" style="font-weight:800;font-size:14.5px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 10px rgba(0,0,0,.6)">' + esc(d.title || '') + '</div>'
+      + '<div title="' + esc(u).replace(/"/g, '&quot;') + '" style="font-size:11.5px;color:#cdcdd5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">' + esc(u) + '</div>'
       + '</div></div></div>';
     html += '<div style="display:flex;gap:7px;margin-bottom:11px">' + statTile(d.playback_count, 'Plays') + statTile(d.likes_count || d.favoritings_count, 'Likes') + statTile(d.reposts_count, 'Reposts') + '</div>';
     if (chipHtml) html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:13px">' + chipHtml + '</div>';
@@ -13076,7 +13079,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         [['A'], 'Hold to compare with the original'],
         [['N'], 'Night mode on / off'],
         [[',', '.'], 'Speed −5 % / +5 %'],
-      ], 'Also work inside the hub on the Audio tab'],
+      ], 'Also work inside the hub on the Audio tab once Global hotkeys is on'],
       ['Suite', [
         [['?'], 'Show / hide this sheet'],
       ]],
@@ -13100,7 +13103,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (note) html += '<div style="font-size:10px;color:#7e7e88;margin-top:5px">' + esc(note) + '</div>';
     }
     html += '<div style="margin-top:14px;padding:10px 12px;border-radius:11px;background:rgba(255,90,0,.08);font-size:11.5px;color:#cdb6a6;line-height:1.45">Open the <b style="color:#ffb083">lyrics hub</b> (♪ in the player bar) and press <b style="color:#fff">?</b> inside it for 20+ lyric, sync & navigation keys.</div>';
-    html += '<div style="text-align:center;font-size:10px;color:#6a6a72;margin-top:12px;letter-spacing:.03em">Esc or click away to close · enable keys under Settings → Player</div>';
+    html += '<div style="text-align:center;font-size:10px;color:#6a6a72;margin-top:12px;letter-spacing:.03em">Esc or click away to close · turn on Global hotkeys in the Tweaks tab</div>';
     card.innerHTML = html;
     card.addEventListener('click', (e) => e.stopPropagation());
     keysEl.appendChild(card);
@@ -13948,22 +13951,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + 'background:linear-gradient(180deg,rgba(22,22,26,.95),rgba(12,12,14,.97));color:#f2f2f4;border-radius:14px;'
       + 'box-shadow:0 16px 44px -14px rgba(0,0,0,.66),inset 0 0 0 1px rgba(255,255,255,.07);'
       + 'font:600 12px/1.3 -apple-system,BlinkMacSystemFont,sans-serif;cursor:grab';
-    try { const p = GET('enh:minipos', null); if (p && isFinite(p.x)) { miniEl.style.left = p.x + 'px'; miniEl.style.top = p.y + 'px'; } else { miniEl.style.right = '14px'; miniEl.style.top = '70px'; } } catch (e) {}
+    try { const p = GET('enh:minipos', null); if (p && isFinite(p.x)) { miniEl.style.left = Math.min(Math.max(4, +p.x), Math.max(4, innerWidth - 232)) + 'px'; miniEl.style.top = Math.min(Math.max(4, +p.y || 0), Math.max(4, innerHeight - 60)) + 'px'; } else { miniEl.style.right = '14px'; miniEl.style.top = '70px'; } } catch (e) {}   // a smaller window must not hide it
     const art = D.createElement('div'); art.className = 'sce-mini-art'; art.style.cssText = 'width:38px;height:38px;border-radius:8px;background:#222 center/cover no-repeat;flex:none';
     const mid = D.createElement('div'); mid.style.cssText = 'flex:1;min-width:0';
     const ttl = D.createElement('div'); ttl.className = 'sce-mini-title'; ttl.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
     const ctr = D.createElement('div'); ctr.style.cssText = 'display:flex;gap:2px;margin-top:3px';
-    const mkb = (txt, sel) => {
-      const b = D.createElement('button'); b.textContent = txt;
+    const mkb = (txt, sel, name) => {
+      const b = D.createElement('button'); b.textContent = txt; b.type = 'button'; b.title = name; b.setAttribute('aria-label', name);
       b.style.cssText = 'background:none;border:0;color:#cfcfd4;cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px';
       b.addEventListener('click', (e) => { e.stopPropagation(); const el = D.querySelector(sel); if (el) el.click(); });
       b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.1)'; });
       b.addEventListener('mouseleave', () => { b.style.background = 'none'; });
       return b;
     };
-    ctr.appendChild(mkb('⏮', '.skipControl__previous'));
-    const playB = mkb('⏯', '.playControls__play'); playB.className = 'sce-mini-play'; ctr.appendChild(playB);
-    ctr.appendChild(mkb('⏭', '.skipControl__next'));
+    ctr.appendChild(mkb('⏮', '.skipControl__previous', 'Previous track'));
+    const playB = mkb('⏯', '.playControls__play', 'Play or pause'); playB.className = 'sce-mini-play'; ctr.appendChild(playB);
+    ctr.appendChild(mkb('⏭', '.skipControl__next', 'Next track'));
     mid.appendChild(ttl); mid.appendChild(ctr);
     miniEl.appendChild(art); miniEl.appendChild(mid);
     let dg = null;
@@ -13981,7 +13984,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       miniEl.style.display = 'flex';
       const ttl = miniEl.querySelector('.sce-mini-title');
       const title = (tl.getAttribute('title') || tl.textContent || '').trim();
-      if (ttl && ttl.textContent !== title) ttl.textContent = title;
+      if (ttl && ttl.textContent !== title) { ttl.textContent = title; ttl.title = title; }
       const a = D.querySelector('.playbackSoundBadge span.sc-artwork, .playbackSoundBadge .image__full');
       let src = '';
       if (a) { const m = (a.style.backgroundImage || '').match(/url\(["']?(.+?)["']?\)/); if (m) src = m[1]; }
@@ -14001,7 +14004,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (sp) {
         sp.textContent = (CFG.speed / 100) + '×';
         const on = (CFG.speed | 0) !== 100;   // not 1× → a subtle accent so it's clearly engaged
-        sp.style.color = on ? '#ff6a1f' : ''; sp.style.opacity = on ? '.95' : '';
+        sp.style.color = on ? '#ff6a1f' : ''; sp.style.opacity = on ? '.95' : '.55';
         sp.style.textShadow = on ? '0 0 10px rgba(255,106,31,.55)' : '';
       }
       show('.sce-speed', CFG.barSpeed);
@@ -14009,14 +14012,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       show('.sce-restart', CFG.barRestart);
       show('.sce-info', CFG.barInfo);
       const ab = barWrap.querySelector('.sce-ab');
-      if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (abOn ? '#ff6a1f' : ''); ab.style.opacity = abOn ? '.95' : ''; ab.style.textShadow = abOn ? '0 0 10px rgba(255,106,31,.55)' : ''; }
+      if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (abOn ? '#ff6a1f' : ''); ab.style.opacity = abOn ? '.95' : '.55'; ab.style.textShadow = abOn ? '0 0 10px rgba(255,106,31,.55)' : ''; }
       // FX glow (WP10): the hub button wears the speed pill's accent while the listener's own audio settings are
       // engaged (an open tab alone routes the chain but changes nothing audible); the tooltip names it and the boost
       abMarkers();
       const hb = barWrap.querySelector('.sce-hub');
       if (hb) {
         const fx = fxUserOn() && !fxBypass, bst = CFG.boostAmt | 0;
-        hb.style.color = fx ? '#ff6a1f' : ''; hb.style.opacity = fx ? '.95' : ''; hb.style.textShadow = fx ? '0 0 10px rgba(255,106,31,.55)' : '';
+        hb.style.color = fx ? '#ff6a1f' : ''; hb.style.opacity = fx ? '.95' : '.55'; hb.style.textShadow = fx ? '0 0 10px rgba(255,106,31,.55)' : '';
         hb._tip = fx ? 'Audio FX on' + (bst > 100 ? ' · boost ' + bst + ' %' : '') : '';
         const t = 'Open / close the lyrics hub' + (hb._tip ? ' · ' + hb._tip : ''); if (hb.title !== t) hb.title = t;
       }
@@ -14054,13 +14057,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;background:none;border:0;color:inherit;opacity:.55;cursor:pointer;font:800 10px/1 inherit;padding:0 ' + (isHtml ? '0' : '5px') + ';min-width:26px;height:26px;border-radius:7px;transition:opacity .14s ease,background .14s ease,color .14s ease';
         if (isHtml) b.innerHTML = content; else b.textContent = content;
         b.addEventListener('mouseenter', () => { b.style.opacity = '1'; b.style.background = 'rgba(255,90,0,.15)'; b.style.color = '#ff6a1f'; showTip(b, b._tip || label); });
-        b.addEventListener('mouseleave', () => { b.style.background = 'none'; b.style.color = ''; b.style.opacity = ''; hideTip(); refreshBar(); });
+        b.addEventListener('mouseleave', () => { b.style.background = 'none'; b.style.color = ''; b.style.opacity = '.55'; hideTip(); refreshBar(); });
         b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
         return b;
       };
       // ONE consolidated pill: the Suite/lyrics button leads, then shuffle, etc.
       // (the lyrics module suppresses its own standalone button when this exists)
-      barWrap.appendChild(mk('sce-hub', I.hub, 'Suite hub', 'Open / close the lyrics hub', () => { try { if (SUITE.toggleLyrics) SUITE.toggleLyrics(); else if (SUITE.openLyrics) SUITE.openLyrics(); else openSettings(); } catch (e) {} }, true));
+      barWrap.appendChild(mk('sce-hub', I.hub, 'Lyrics hub', 'Open / close the lyrics hub', () => { try { if (SUITE.toggleLyrics) SUITE.toggleLyrics(); else if (SUITE.openLyrics) SUITE.openLyrics(); else openSettings(); } catch (e) {} }, true));
       barWrap.appendChild(mk('sce-shuffle', I.shuffle, 'Shuffle Likes', 'Shuffle your entire Likes library', () => { try { if (SUITE.shuffleNow) SUITE.shuffleNow(); else toast('Open your Likes to shuffle'); } catch (e) {} }, true));
       barWrap.appendChild(mk('sce-restart', I.restart, 'Restart track', 'Restart this track from the beginning', restartTrack, true));
       barWrap.appendChild(mk('sce-speed', (CFG.speed / 100) + '×', 'Playback speed', 'Playback speed — click to cycle 0.5×–2×', cycleSpeed, false));
@@ -14142,7 +14145,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['squareArt', 'toggle', 'Square artwork', ''],
     ['dimSidebar', 'toggle', 'Dim right sidebar', 'Fades until you hover'],
     ['focusMode', 'toggle', 'Focus mode', 'Hide the right sidebar entirely'],
-    ['maxWidth', 'toggle', 'Cap content width', 'Centre on wide screens'],
+    ['maxWidth', 'toggle', 'Cap content width', 'Center on wide screens'],
     ['bigPlay', 'toggle', 'Bigger play button', ''],
     ['biggerWave', 'toggle', 'Taller waveform', ''],
     ['thinScroll', 'toggle', 'Slim scrollbars', ''],
@@ -14338,6 +14341,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function enhancerRender(container) {
     try {
       if (!container) return;
+      // a rebuild (theme swatch, preset, reset…) keeps what the user had open, typed and scrolled to
+      const prevQ = (container.querySelector('input[aria-label="Search settings"]') || {}).value || '';
+      const prevOpen = Array.from(container.querySelectorAll('[data-sec][data-open="1"]')).map((h) => h.getAttribute('data-sec'));
+      const prevTop = container.scrollTop, hadPrev = !!container.firstChild;
       container.replaceChildren();
       container.style.padding = '8px 14px 26px';
       container.style.webkitMaskImage = 'none'; container.style.maskImage = 'none';   // no edge fade on settings
@@ -14350,11 +14357,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const meta = [];
       const sections = [];
       let curSec = null, curGrp = null;
-      const setSecOpen = (sec, open) => { sec.open = open; sec.grp.style.display = open ? '' : 'none'; sec.chev.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)'; sec.dot.style.background = open ? ACC : 'rgba(255,255,255,.22)'; sec.el.style.background = open ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.04)'; };
+      const setSecOpen = (sec, open) => { sec.open = open; sec.el.setAttribute('data-open', open ? '1' : '0'); sec.grp.style.display = open ? '' : 'none'; sec.chev.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)'; sec.dot.style.background = open ? ACC : 'rgba(255,255,255,.22)'; sec.el.style.background = open ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.04)'; };
       // each category is a collapsible accordion group, so the whole panel reads
       // as a short tidy list of headers instead of one endless scroll
       const addSection = (title) => {
-        const head = D.createElement('button'); head.type = 'button';
+        const head = D.createElement('button'); head.type = 'button'; head.setAttribute('data-sec', title);
         head.style.cssText = 'width:100%;display:flex;align-items:center;gap:9px;margin:7px 0 2px;padding:10px 11px;background:rgba(255,255,255,.04);border:0;border-radius:11px;cursor:pointer;font:800 10px/1 inherit;letter-spacing:.13em;text-transform:uppercase;color:#c2c2ca;transition:background .14s ease';
         const dot = D.createElement('span'); dot.style.cssText = 'width:10px;height:2px;border-radius:2px;flex:none;background:rgba(255,255,255,.22);transition:background .16s ease';
         const tt = D.createElement('span'); tt.textContent = title; tt.style.cssText = 'flex:1;text-align:left';
@@ -14427,7 +14434,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:7px;padding:2px 0';
           // [id, label, bg, accent-dot]
           const SW = [['none', 'Light', '#f3f3f5', '#ff5500']];
-          for (const id of Object.keys(DARK_THEMES)) { const t = DARK_THEMES[id]; SW.push([id, id, t.bg, t.tx]); }
+          const TNAME = { dark: 'Dark', amoled: 'AMOLED black', midnight: 'Midnight', dracula: 'Dracula', nord: 'Nord', ocean: 'Ocean', gruvbox: 'Gruvbox', rosepine: 'Rosé Pine', solar: 'Solarized', coffee: 'Coffee', slate: 'Slate' };
+          for (const id of Object.keys(DARK_THEMES)) { const t = DARK_THEMES[id]; SW.push([id, TNAME[id] || id, t.bg, t.tx]); }
           SW.push(['custom', 'Custom', (CFG.customTheme && CFG.customTheme.bg) || '#16181c', (CFG.customTheme && CFG.customTheme.tx) || '#e7e7ec']);
           const paintSel = () => { for (const c of grid.children) c.style.borderColor = (c.getAttribute('data-t') === CFG.theme) ? ACC : 'rgba(255,255,255,.14)'; };
           for (const [id, tname, bg, dot] of SW) {
@@ -14522,7 +14530,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           row2.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid rgba(255,255,255,.05)';
           const lab2 = D.createElement('div'); lab2.style.cssText = 'flex:1;min-width:0;font-size:12px;font-weight:500';
           const ls2 = D.createElement('span'); ls2.textContent = 'Keyboard shortcuts'; lab2.appendChild(ls2);
-          const sub = D.createElement('small'); sub.style.cssText = 'display:block;font-size:10px;color:#888;font-weight:400;margin-top:1px'; sub.textContent = 'See every global key (or press ?)'; lab2.appendChild(sub);
+          const sub = D.createElement('small'); sub.style.cssText = 'display:block;font-size:10px;color:#888;font-weight:400;margin-top:1px'; sub.textContent = 'See every global key'; lab2.appendChild(sub);
           const vb = D.createElement('button'); vb.type = 'button'; vb.textContent = 'View ⌨'; vb.style.cssText = 'background:rgba(255,255,255,.08);border:0;border-radius:8px;color:#eaeaee;font:600 10.5px inherit;padding:6px 11px;cursor:pointer;flex:none';
           vb.addEventListener('click', () => { try { showShortcuts(); } catch (e) {} });
           row2.append(lab2, vb);
@@ -14530,7 +14538,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           meta.push({ el: row2, text: 'keyboard shortcuts hotkeys cheat sheet keys help question mark', sec: curSec });
         }
       }
-      if (sections.length) setSecOpen(sections[0], true);   // first group open as a hint they expand
+      if (hadPrev) {
+        for (const sec of sections) setSecOpen(sec, prevOpen.indexOf(sec.el.getAttribute('data-sec')) !== -1);
+        if (prevQ) { find.value = prevQ; find.dispatchEvent(new Event('input')); }
+      } else if (sections.length) setSecOpen(sections[0], true);   // first group open as a hint they expand
       // footer actions
       const foot = D.createElement('div'); foot.style.cssText = 'display:flex;gap:7px;margin-top:14px';
       const mkF = (txt, fn) => { const b = D.createElement('button'); b.textContent = txt; b.style.cssText = 'flex:1;background:rgba(255,255,255,.07);border:0;border-radius:9px;color:#eaeaee;font:600 11px inherit;padding:8px;cursor:pointer'; b.addEventListener('click', fn); foot.appendChild(b); return b; };
@@ -14541,7 +14552,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); applyAll(); enhancerRender(container); toast('Enhancer reset');
       });
       // whole-suite backup (shuffle + lyrics + enhancer in one file)
-      mkF('Back up all', () => { if (SUITE.backupAll) SUITE.backupAll(); else toast('Backup unavailable'); });
+      mkF('Back up everything', () => { if (SUITE.backupAll) SUITE.backupAll(); else toast('Backup unavailable'); });
       mkF('Restore', () => {
         try {
           const inp = D.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json'; inp.style.display = 'none';
@@ -14555,6 +14566,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } catch (e) { toast('Restore failed'); }
       });
       container.appendChild(foot);
+      if (hadPrev && prevTop) { try { container.scrollTop = prevTop; } catch (e) {} }
       // copyable debug snapshot (audio status + flags + recent errors) for support
       const dbg = D.createElement('button'); dbg.type = 'button'; dbg.textContent = 'Copy debug log';
       dbg.style.cssText = 'display:block;margin:9px auto 0;background:none;border:0;color:#7a7a82;font:600 10.5px inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px';
@@ -14648,8 +14660,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       toast('✨ Recommended setup applied');
     } catch (e) {}
   }
-  let onbEl = null;
-  function closeOnboarding() { if (onbEl) { try { onbEl.remove(); } catch (e) {} onbEl = null; } }
+  let onbEl = null, onbEsc = null;
+  function closeOnboarding() {
+    if (onbEsc) { try { D.removeEventListener('keydown', onbEsc, true); } catch (e) {} onbEsc = null; }
+    if (onbEl) { try { onbEl.remove(); } catch (e) {} onbEl = null; }
+  }
   function showOnboarding() {
     if (onbEl) return;
     onbEl = D.createElement('div');
@@ -14672,7 +14687,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     card.append(rec, man, hint);
     onbEl.appendChild(card);
     onbEl.addEventListener('click', () => { SET('sce:onboarded', 1); closeOnboarding(); });   // dismiss = treat as handled
+    card.setAttribute('role', 'dialog'); card.setAttribute('aria-modal', 'true'); card.setAttribute('aria-label', 'Welcome to SuperSuite');
+    onbEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); SET('sce:onboarded', 1); closeOnboarding(); } };
+    D.addEventListener('keydown', onbEsc, true);
     (D.body || D.documentElement).appendChild(onbEl);
+    try { rec.focus({ preventScroll: true }); } catch (e) {}
     try { requestAnimationFrame(() => { if (onbEl) { onbEl.style.opacity = '1'; card.style.transform = 'none'; } }); } catch (e) { onbEl.style.opacity = '1'; }
   }
   try { SUITE.showOnboarding = showOnboarding; } catch (e) {}
@@ -14694,7 +14713,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // expose a tiny bus hook so the lyrics menu / bar button open the hub
       try { SUITE.openEnhancer = openSettings; } catch (e) {}
       try {
-        GM_registerMenuCommand('SoundCloud Enhancer settings', () => setPanel(true));
+        GM_registerMenuCommand('SuperSuite settings', () => setPanel(true));
       } catch (e) {}
     } catch (e) { try { console.warn('[SC Enhancer] failed to start:', e); } catch (e2) {} }
   }
