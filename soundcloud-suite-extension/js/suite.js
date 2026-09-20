@@ -346,6 +346,10 @@
         if (!Array.isArray(CFG.genreFilter)) CFG.genreFilter = [];
         CFG.genreFilter = CFG.genreFilter.filter(g => typeof g === 'string' && g).slice(0, 30);
         CFG.likedDays = Math.min(3650, Math.max(0, CFG.likedDays | 0));
+        // loader timing has no UI, but an imported backup can carry anything
+        CFG.tickMs = Math.min(1000, Math.max(20, (CFG.tickMs | 0) || 100));
+        CFG.stallKickTicks = Math.min(1000, Math.max(1, (CFG.stallKickTicks | 0) || 8));
+        CFG.stallDoneTicks = Math.min(10000, Math.max(10, (CFG.stallDoneTicks | 0) || 90));
     }
     clampCfg();
     const prevR = saved._r | 0;
@@ -428,7 +432,7 @@
         mutedByUs: [], muteWatch: null, queueHidden: false,
         itemH: 0, itemHAt: 0, total: null,
         startTime: 0, startCount: 0, lastCount: 0, stall: 0,
-        playingStarted: false, beganPlayback: false, earlyBegun: false,
+        playingStarted: false, beganPlayback: false, earlyBegun: false, seeded: false,
         auth: null, clientId: null, tpl: null,
         apiFails: 0, apiNoticeShown: false,   // R23: api-v2 degradation watchdog (see ApiHealth)
         fetchAbort: null,
@@ -458,6 +462,8 @@
 
     const $ = (sel, root) => (root || document).querySelector(sel);
     const clickIt = el => { if (el) { el.click(); return true; } return false; };
+    // take keyboard focus only when nothing else owns it — never mid-word in a field, a menu or the hub
+    const focusIdle = el => { const ae = document.activeElement; if (el && (!ae || ae === document.body || ae === S.btn)) el.focus(); };
     const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
     const fmtH = ms => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`; };
     const fmtTime = ms => { const m = Math.floor(ms / 60000); if (m < 1) return '<1m'; if (m < 60) return m + 'm'; return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
@@ -493,7 +499,11 @@
 
     /* ───────────── Blocklist + per-track play counts (local) ───────────── */
     const BLOCK_KEY = 'bh_sc_block';
-    const loadBlock = () => Object.assign({ tracks: [], urls: [], artists: [] }, LS.get(BLOCK_KEY, {}));
+    const loadBlock = () => {
+        const b = Object.assign({ tracks: [], urls: [], artists: [] }, LS.get(BLOCK_KEY, {}));
+        for (const k of ['tracks', 'urls', 'artists']) if (!Array.isArray(b[k])) b[k] = [];   // hand-edited storage or an odd backup
+        return b;
+    };
     const saveBlock = b => LS.set(BLOCK_KEY, b);
     const PLAYS_KEY = 'bh_sc_plays';
     function bumpPlay(url, kind) {
@@ -542,7 +552,7 @@
                     data: JSON.stringify({ listen_type: 'import', payload: listens }),
                     timeout: 10000,
                     anonymous: true,
-                    onload: r => (r.status >= 200 && r.status < 300) ? resolve() : reject(new Error('lb ' + r.status)),
+                    onload: r => { if (r.status >= 200 && r.status < 300) return resolve(); const err = new Error('lb ' + r.status); err.status = r.status; reject(err); },
                     onerror: () => reject(new Error('lb neterr')),
                     ontimeout: () => reject(new Error('lb timeout')),
                 });
@@ -550,8 +560,9 @@
         });
     }
     let lbFlushing = false;
+    let lbBadTok = '';   // a token ListenBrainz rejected — no more flushes until it changes
     function lbFlush() {
-        if (lbFlushing || !lbToken()) return;
+        if (lbFlushing || !lbToken() || lbToken() === lbBadTok) return;
         const q = LS.get(LB_QKEY, []);
         if (!q.length) return;
         lbFlushing = true;
@@ -566,7 +577,20 @@
             LS.set(LB_QKEY, rest);
             lbFlushing = false;
             if (rest.length) setTimeout(lbFlush, 4000);
-        }).catch(e => { lbFlushing = false; swallow(e, 'lbFlush'); });
+        }).catch(e => {
+            lbFlushing = false;
+            const st = e && e.status;
+            if (st === 401 || st === 403) {
+                // bad or expired token: say so once and keep the listens queued for a working one
+                lbBadTok = lbToken();
+                showToast('ListenBrainz token rejected — check it in Tweaks');
+            } else if (st === 400) {
+                // a listen ListenBrainz refuses would block every newer one behind it — drop the batch
+                const sent = new Set(batch.map(sentKey));
+                LS.set(LB_QKEY, LS.get(LB_QKEY, []).filter(x => !sent.has(sentKey(x))));
+            }
+            swallow(e, 'lbFlush');
+        });
     }
     function lbScrobble(url) {
         try {
@@ -628,13 +652,15 @@
     }
     function ownLibKey() { const t = userTag(); return 'Likes:you' + (t ? '@' + t : ''); }
 
-    function sniffUrl(url) {
+    function sniffUrl(url, method) {
         try {
             if (!API_RE.test(url)) return;
             const u = new URL(url, location.href);
             const cid = u.searchParams.get('client_id');
             if (cid) S.clientId = cid;
-            if (LIKES_RE.test(url) && !u.searchParams.has('bh_sid')) S.tpl = u.href;
+            // template only a GET of the likes COLLECTION: a like/unlike PUT/DELETE
+            // (…/track_likes/<id>) or /me/track_likes/ids would poison the replay
+            if ((method || 'GET').toUpperCase() === 'GET' && LIKES_RE.test(url) && /\/track_likes\/?$/.test(u.pathname) && !u.searchParams.has('bh_sid')) S.tpl = u.href;
         } catch (e) { swallow(e, 'sniffUrl'); }
     }
     function sniffHeaders(headers) {
@@ -763,10 +789,13 @@
         try {
             const isReq = !!(input && typeof input === 'object' && typeof input.url === 'string');
             rawUrl = isReq ? input.url : String(input);
-            sniffUrl(rawUrl);
+            const reqMethod = String((init && init.method) || (isReq && input.method) || 'GET').toUpperCase();
+            sniffUrl(rawUrl, reqMethod);
             if (API_RE.test(rawUrl)) sniffHeaders(isReq ? input.headers : (init && init.headers));
 
-            const page = resolveFeed(rawUrl);
+            // only the queue's GET pagination is ours to answer — a like/unlike
+            // PUT/DELETE on a track_likes path must always reach SoundCloud
+            const page = reqMethod === 'GET' ? resolveFeed(rawUrl) : null;
             if (page !== null) {
                 let body;
                 // a feed bug must fail CLOSED: a sealed empty page, never a
@@ -814,7 +843,7 @@
         try {
             this.__bhFeedPage = null;   // a re-open()ed XHR must never answer with a stale feed page
             const raw = String(url);
-            sniffUrl(raw);
+            sniffUrl(raw, method);
             this.__bhApi = API_RE.test(raw);
             if ((method || '').toUpperCase() === 'GET') {
                 const page = resolveFeed(raw);
@@ -894,10 +923,13 @@
     const pause = ms => new Promise(r => { const t = makeTicker(() => { t.stop(); r(); }, ms); });
 
     /* ───────────────────────── MUTE / QUEUE ────────────────────────── */
+    /* SoundCloud's player <audio> never enters the DOM: the enhancer captures it
+     * at createMediaElementSource and shares it as SUITE.mediaEls (oldest first). */
+    const capturedMedia = () => { try { return (SUITE.mediaEls && SUITE.mediaEls()) || []; } catch (e) { return []; } };
     function muteAll() {
         if (!CFG.silentSetup) return;
-        const grab = () => document.querySelectorAll('audio, video').forEach(m => {
-            if (!m.muted) { m.muted = true; S.mutedByUs.push(m); }
+        const grab = () => capturedMedia().concat(Array.from(document.querySelectorAll('audio, video'))).forEach(m => {
+            if (m && !m.muted) { m.muted = true; S.mutedByUs.push(m); }
         });
         grab();
         // never stack a second watcher: an orphaned one would re-mute every
@@ -910,12 +942,19 @@
         S.mutedByUs = [];
     }
     function activeMedia() {
-        let cand = null;
-        document.querySelectorAll('audio, video').forEach(m => {
-            if (!m.paused && m.readyState > 0) cand = m;
-            else if (!cand) cand = m;
+        // captured elements win: a playing one first, else the freshest; an in-DOM
+        // element counts only while it plays, so a paused promo <video> is never picked
+        let playing = null, last = null;
+        capturedMedia().forEach(m => {
+            if (!m) return;
+            last = m;
+            if (!playing && !m.paused && m.readyState > 0) playing = m;
         });
-        return cand;
+        if (playing || last) return playing || last;
+        document.querySelectorAll('audio, video').forEach(m => {
+            if (!playing && !m.paused && m.readyState > 0) playing = m;
+        });
+        return playing;
     }
     function queueOpen() { const qEl = q('queue'); return !!(qEl && qEl.classList.contains('m-visible')); }
     function toggleQueue(state) {
@@ -1053,7 +1092,7 @@
  border:1px solid var(--bhx-bd,rgba(0,0,0,.1));border-radius:14px;padding:10px 14px;color:var(--bhx-fg,#1b1b1f);
  font:12px/1.45 -apple-system,"SoundCloud Sans",Interstate,"Segoe UI",Roboto,sans-serif;
  box-shadow:0 10px 30px rgba(0,0,0,.26),0 0 0 1px rgba(255,85,0,.06);opacity:0;transform:translateY(10px) scale(.98);transition:.32s cubic-bezier(.3,.9,.4,1.1);pointer-events:none}
-.bhx-toast.show{opacity:1;transform:none}
+.bhx-toast.show{opacity:1;transform:none;pointer-events:auto}
 .bhx-toast.shifted{right:374px}
 .bhx-toast b{display:block;font-weight:600}
 .bhx-toast i{display:block;font-style:normal;font-size:11px;opacity:.6;margin-top:1px}
@@ -1186,7 +1225,6 @@
             });
             toastEl.appendChild(ab);
         }
-        toastEl.style.pointerEvents = 'auto';   // clickable even without an action: tap = dismiss
         requestAnimationFrame(() => toastEl.classList.add('show'));
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => toastEl.classList.remove('show'), action ? 9000 : 6000);
@@ -1221,7 +1259,7 @@
     /* One gesture, three entry points: settings card, stats hero, Alt+B. */
     function blockCurrentTrack(andSkip) {
         const info = currentTrackInfo();
-        if (!info) { showToast('Play a track first.'); return false; }
+        if (!info) { showToast('Play a track first'); return false; }
         const bk = loadBlock();
         if (info.id != null) { if (!bk.tracks.includes(info.id)) bk.tracks.push(info.id); }
         else if (!bk.urls.includes(info.url)) bk.urls.push(info.url);
@@ -1229,14 +1267,14 @@
         // (no pool purge here: the only matching entry is the PLAYING track —
         // the Up-next anchor. Removing it blanks Up next and the lyric pre-warm.)
         if (andSkip) clickIt(q('skipNext'));
-        showToast('Blocked “' + info.title.slice(0, 40) + '”', andSkip ? 'Skipped ahead — it won’t be shuffled again.' : 'It won’t be shuffled again.', {
+        showToast('Blocked “' + info.title.slice(0, 40) + '”', andSkip ? 'Skipped ahead — it won’t be shuffled again' : 'It won’t be shuffled again', {
             label: 'Undo',
             fn: () => {
                 const b2 = loadBlock();
                 if (info.id != null) b2.tracks = b2.tracks.filter(id => id !== info.id);
                 b2.urls = b2.urls.filter(u => u !== info.url);
                 saveBlock(b2);
-                showToast('Unblocked', 'Back in the pool from the next shuffle.');
+                showToast('Unblocked', 'Back in the pool from the next shuffle');
             },
         });
         return true;
@@ -1246,13 +1284,13 @@
     function fadeOutAndPause() {
         const m = activeMedia();
         const pc = q('playControl');
-        if (fading) { if (pc && pc.classList.contains('playing')) clickIt(pc); return; }
+        if (fading) { if (pc && pc.classList.contains('playing')) clickIt(pc); return false; }
         // Through the enhancer's audio chain when it is routed (SoundCloud's own player element never enters the
         // DOM, so that is the path that actually fades there and the volume slider stays put); otherwise the
         // element's volume in 50 ms steps. Either way 8 s, then the pause click, then a quiet restore.
         let viaChain = false;
         try { viaChain = !!(SUITE.audioFadeOut && SUITE.audioFadeOut(8)); } catch (e) {}
-        if (!viaChain && !m) { if (pc && pc.classList.contains('playing')) clickIt(pc); return; }
+        if (!viaChain && !m) { if (pc && pc.classList.contains('playing')) clickIt(pc); return false; }
         fading = true;
         const v0 = m ? m.volume : 1, t0 = Date.now();
         // wall-clock, not step-counted: the ticker's worker messages queue through a main-thread stall and then
@@ -1268,6 +1306,7 @@
                 setTimeout(() => { try { if (viaChain) SUITE.audioFadeOut(0); else m.volume = v0; } catch (e) {} }, 600);
             }
         }, 50);
+        return true;
     }
     function sleepRemainingMs() { return sleepAt ? Math.max(0, sleepAt - Date.now()) : 0; }
     function clearSleep() { sleepAt = 0; sleepArmed = false; SS.del('bh_sc_sleep'); }
@@ -1296,7 +1335,11 @@
             if (href && href !== W.href) {
                 if (W.href) {
                     const prevUrl = 'https://soundcloud.com' + W.href.split('?')[0];
-                    if (W.curMs >= CFG.playThresholdSec * 1000) { sess.played++; allTime.played++; bumpPlay(prevUrl, 'p'); lbScrobble(prevUrl); }
+                    // a like shorter than the threshold counts as played once most of it was heard
+                    const lmPrev = getLibMap();
+                    const hitPrev = lmPrev && lmPrev.get(prevUrl);
+                    const needMs = Math.min(CFG.playThresholdSec * 1000, hitPrev && hitPrev[2] > 0 ? hitPrev[2] * 0.8 : Infinity);
+                    if (W.curMs >= needMs) { sess.played++; allTime.played++; bumpPlay(prevUrl, 'p'); lbScrobble(prevUrl); }
                     else if (W.curMs >= 2000) {
                         sess.skipped++; bumpPlay(prevUrl, 's');
                         // chronic skipper? close the loop: offer to block it
@@ -1315,7 +1358,7 @@
                                         if (hit2 && !b3.tracks.includes(hit2[0])) b3.tracks.push(hit2[0]);
                                         else if (!b3.urls.includes(prevUrl)) b3.urls.push(prevUrl);
                                         saveBlock(b3);
-                                        showToast('Blocked — it won’t be shuffled again.');
+                                        showToast('Blocked — it won’t be shuffled again');
                                     } });
                                 }
                             }
@@ -1327,7 +1370,7 @@
                             now - lastSuggestAt > 5 * 60000) {
                             lastSuggestAt = now;
                             skipTimes = [];
-                            showToast('Not feeling this run?', 'Three quick skips in a row.', { label: 'Reshuffle', fn: () => {
+                            showToast('Not feeling this run?', 'Three quick skips in a row', { label: 'Reshuffle', fn: () => {
                                 // reshuffle in the SAME context (playlist stays a playlist);
                                 // only fall back to likes when we've navigated away
                                 const b = document.querySelector('.bhx-shufbtn');
@@ -1341,7 +1384,7 @@
                 if (sleepArmed) { // "finish this track" sleep: pause on the change
                     clearSleep();
                     if (playing && pc) clickIt(pc);
-                    showToast('Sleep timer', 'Paused. Good night.');
+                    showToast('Sleep timer', 'Paused — good night');
                 }
                 const url = 'https://soundcloud.com' + href.split('?')[0];
                 const h = loadHistory();
@@ -1362,7 +1405,7 @@
                     const qi = S.poolIdx && S.poolIdx.has(url) ? S.poolIdx.get(url) : -1;
                     if (qi >= S.poolList.length - 2) {
                         endNudgeAt = now;
-                        showToast('Queue almost done', 'That was the tail of this shuffle.', { label: 'Reshuffle', fn: () => barShuffleClick() });
+                        showToast('Queue almost done', 'That was the tail of this shuffle', { label: 'Reshuffle', fn: () => barShuffleClick() });
                     }
                 }
             }
@@ -1372,8 +1415,8 @@
                 if (playing) {
                     const m = activeMedia();
                     const rem = m && isFinite(m.duration) && m.duration > 0 ? (m.duration - m.currentTime) * 1000 : Infinity;
-                    if (rem <= T.sleepGraceMs) { sleepArmed = true; showToast('Sleep timer', 'Pausing after this track.'); }
-                    else { clearSleep(); fadeOutAndPause(); showToast('Sleep timer', 'Fading out… good night.'); }
+                    if (rem <= T.sleepGraceMs) { sleepArmed = true; showToast('Sleep timer', 'Pausing after this track'); }
+                    else { clearSleep(); const faded = fadeOutAndPause(); showToast('Sleep timer', faded ? 'Fading out — good night' : 'Paused — good night'); }
                 } else clearSleep();
             }
 
@@ -1401,7 +1444,7 @@
                             clickIt(q('skipNext'));
                             const p2 = q('playControl');
                             if (p2 && !p2.classList.contains('playing')) clickIt(p2);
-                            showToast('That track wouldn’t start — skipped it.');
+                            showToast('That track wouldn’t start — skipped it');
                         }
                     } else W.stuckMs = 0;
                 }
@@ -1421,12 +1464,21 @@
 
     /* ═══════════════════ LIKES ENGINE: FETCH EVERYTHING ═══════════════════ */
     async function buildFirstPageUrl(pageType, limit) {
-        if (S.tpl) {
+        // a template is only replayed when it targets THIS page's likes: the queue
+        // of another profile keeps paginating after navigation and would otherwise
+        // be fetched and cached as this account's library
+        let tplPath = '';
+        try { tplPath = S.tpl ? new URL(S.tpl).pathname : ''; } catch (e) {}
+        const fromTpl = () => {
             const u = new URL(S.tpl);
             u.searchParams.delete('offset');
             u.searchParams.set('limit', String(limit));
             u.searchParams.set('linked_partitioning', '1');
             return u.href;
+        };
+        if (pageType === 'Likes') {
+            const me = userTag();
+            if (tplPath === '/me/track_likes' || (me && tplPath === '/users/' + me + '/track_likes')) return fromTpl();
         }
         if (!S.clientId) throw new Error('no client_id seen yet');
         if (pageType === 'GenericLikes') {
@@ -1437,18 +1489,22 @@
             if (!r.ok) throw new Error('resolve failed');
             const user = await r.json();
             if (!user || !user.id) throw new Error('no user id');
+            if (tplPath === '/users/' + user.id + '/track_likes') return fromTpl();
             return `https://api-v2.soundcloud.com/users/${user.id}/track_likes?client_id=${S.clientId}&limit=${limit}&linked_partitioning=1`;
         }
         if (!S.auth && !cookieAuth()) throw new Error('no auth captured for /me');
         return `https://api-v2.soundcloud.com/me/track_likes?client_id=${S.clientId}&limit=${limit}&linked_partitioning=1`;
     }
 
-    async function backoff(attempt, retryAfter) {
+    async function backoff(attempt, retryAfter, detached) {
         let ms = Math.min(15000, 800 * Math.pow(2, attempt - 1)) + Math.random() * 400;
         const ra = parseFloat(retryAfter);
-        if (isFinite(ra) && ra > 0) ms = Math.max(ms, ra * 1000);
+        if (isFinite(ra) && ra > 0) ms = Math.max(ms, Math.min(ra * 1000, 60000));   // an hour-long Retry-After must not park the tab
         log('backoff', Math.round(ms) + 'ms');
-        await pause(ms);
+        // a foreground run wakes up as soon as it is cancelled; a detached refresh
+        // must keep its full delay (S.cancelled stays true after any earlier cancel)
+        if (detached) await pause(ms);
+        else await waitFor(() => S.cancelled, ms, 100);
     }
 
     /* Fetch the WHOLE library: 500/request, auto step-down to 200 if refused,
@@ -1468,7 +1524,7 @@
         const ac = new AbortController();
         if (!detached) S.fetchAbort = ac;
         const items = [];
-        let guard = 0, firstTry = true, retries = 0;
+        let guard = 0, firstTry = true, retries = 0, badJson = 0;
         const fail = msg => { const err = new Error(msg); err.partial = items; return err; };
         while (url && guard++ < T.fetchGuard) {
             if (!detached && S.cancelled) throw new Error('cancelled');
@@ -1478,14 +1534,14 @@
                 r = await origFetch(url, { credentials: 'include', headers, signal: ac.signal });
             } catch (e) {
                 if (!detached && (S.cancelled || (e && e.name === 'AbortError'))) throw e;
-                if (retries++ < T.fetchRetries) { await backoff(retries, null); continue; }
+                if (retries++ < T.fetchRetries) { await backoff(retries, null, detached); continue; }
                 throw fail('network: ' + (e && e.message));
             }
             if (!r.ok) {
                 if (firstTry && r.status >= 400 && limit > 200) { limit = 200; url = await buildFirstPageUrl(pageType, limit); continue; }
                 if ((r.status === 429 || r.status >= 500) && retries < T.fetchRetries) {
                     retries++;
-                    await backoff(retries, r.headers && r.headers.get('Retry-After'));
+                    await backoff(retries, r.headers && r.headers.get('Retry-After'), detached);
                     continue;
                 }
                 throw fail('api ' + r.status);
@@ -1496,9 +1552,11 @@
             catch (e) {
                 // a 200 with a truncated/non-JSON body must not throw away
                 // everything fetched so far — retry, then fail with .partial
-                if (retries++ < T.fetchRetries) { await backoff(retries, null); continue; }
+                // (its own counter: `retries` was just reset by the OK status)
+                if (badJson++ < T.fetchRetries) { await backoff(badJson, null, detached); continue; }
                 throw fail('bad json');
             }
+            badJson = 0;
             for (const it of (j.collection || [])) if (it && it.track) items.push(it);
             if (onProgress) onProgress(items.length);
             url = j.next_href || null;
@@ -1610,7 +1668,7 @@
             if (S.sessionLibKey === libKey) { S.sessionLib = merged; S.sessionLibAt = Date.now(); }
             if (pageType !== 'GenericLikes') saveCompactCache(merged);   // never poison YOUR library with someone else's
             idbSaveLib(libKey, merged, fullFetchT);   // keep t: scheduled full refetch stays due
-            showToast(fresh.length + ' new like' + (fresh.length === 1 ? '' : 's') + ' synced — in the pool from the next shuffle.');
+            showToast(fresh.length + ' new like' + (fresh.length === 1 ? '' : 's') + ' synced — in the pool from the next shuffle');
         } catch (e) { lastTopUpAt.delete(libKey); swallow(e, 'topUpCache'); }
     }
 
@@ -1628,7 +1686,7 @@
             if (pageType !== 'GenericLikes') saveCompactCache(fresh);
             idbSaveLib(libKey, fresh);
             libGen++;
-            showToast('Library refreshed', fresh.length.toLocaleString() + ' likes ready for the next shuffle.');
+            showToast('Library refreshed', fresh.length.toLocaleString() + ' likes ready for the next shuffle');
         } catch (e) { swallow(e, 'bg refresh'); }
         finally { bgRefreshing = false; }
     }
@@ -1778,7 +1836,7 @@
             });
             stats.blockFiltered = pool.length - kept.length;
             if (kept.length >= 3) pool = kept;
-            else { stats.blockFiltered = 0; showToast('Blocklist would remove almost everything — ignored this time.'); }
+            else { stats.blockFiltered = 0; showToast('Blocklist would remove almost everything — ignored this time'); }
         }
 
         const maxMin = CFG.filterMode === 'songs' ? CFG.filterMinutes : 0;
@@ -1792,7 +1850,7 @@
             });
             stats.durFiltered = pool.length - kept.length;
             if (kept.length >= Math.max(3, Math.ceil(pool.length * 0.05))) pool = kept;
-            else { stats.durFiltered = 0; showToast('Length filter would remove almost everything — ignored this time.'); }
+            else { stats.durFiltered = 0; showToast('Length filter would remove almost everything — ignored this time'); }
         }
 
         // Genre filter — the full track objects carry genre tags; zero network.
@@ -1801,7 +1859,7 @@
             const kept = pool.filter(it => want.has(String(it.track.genre || '').trim().toLowerCase()));
             stats.genreFiltered = pool.length - kept.length;
             if (kept.length >= 3) pool = kept;
-            else { stats.genreFiltered = 0; showToast('Genre filter would remove almost everything — ignored this time.'); }
+            else { stats.genreFiltered = 0; showToast('Genre filter would remove almost everything — ignored this time'); }
         }
 
         // "Liked since" — every like item carries its created_at. Unknown dates fail open.
@@ -1815,7 +1873,7 @@
             });
             stats.ageFiltered = pool.length - kept.length;
             if (kept.length >= 3) pool = kept;
-            else { stats.ageFiltered = 0; showToast('“Liked since” filter would remove almost everything — ignored this time.'); }
+            else { stats.ageFiltered = 0; showToast('“Liked since” filter would remove almost everything — ignored this time'); }
         }
 
         // Fresh picks. v8: when nearly everything has been heard we simply
@@ -1854,6 +1912,7 @@
         const pLast = q('playButton', last);
 
         muteAll();
+        S.seeded = true;   // the run owns playback from here: cancel() pauses the seed, never earlier music
         const pc0 = q('playControl');
         if (pc0 && pc0.classList.contains('playing')) clickIt(pc0);
 
@@ -1894,7 +1953,7 @@
         clickIt(q('skipNext'));
         S.playingStarted = true;
         const pc = q('playControl');
-        if (pc) { if (!pc.classList.contains('playing')) clickIt(pc); pc.focus(); }
+        if (pc) { if (!pc.classList.contains('playing')) clickIt(pc); focusIdle(pc); }
         waitFor(() => {
             const b = q('badgeTitle');
             return b && b.getAttribute('href') !== seedHref;
@@ -1926,7 +1985,7 @@
             if (!acct) {
                 // unwind every UI lock that run() set up so the button isn't stuck
                 // in busy state until the next successful shuffle
-                showToast('Still authenticating', 'Wait a beat then click Shuffle again — keeps each account’s library separate.');
+                showToast('Still authenticating', 'Wait a beat then click Shuffle again — keeps each account’s library separate');
                 setBtn('Shuffle Play');
                 setBtnProgress(null);
                 setBusy(false);
@@ -1942,10 +2001,10 @@
         }
         const libKey = legacyKey + (acct ? '@' + acct : '');
         let lib = null, salvaged = false;
-        if (S.sessionLib && S.sessionLibKey === libKey && Date.now() - S.sessionLibAt < T.libReuseMs) {
+        if (CFG.cacheHours > 0 && S.sessionLib && S.sessionLibKey === libKey && Date.now() - S.sessionLibAt < T.libReuseMs) {
             lib = S.sessionLib;
             const age = Math.max(1, Math.round((Date.now() - S.sessionLibAt) / 60000));
-            showToast('Reshuffling', `Library from ${age}m ago — Forget in settings to refetch.`);
+            showToast('Reshuffling', `Library from ${age}m ago — Forget in settings to refetch`);
             // reshuffles see fresh likes too (topUpCache self-throttles to one
             // sync / 5 min). Only when a persisted cache exists: a salvaged
             // PARTIAL library must stay session-only, never get written to
@@ -1975,7 +2034,7 @@
                     S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey;
                     const ageM = Math.max(1, Math.round(cacheAge / 60000));
                     const ageTxt = ageM < 60 ? ageM + 'm' : Math.round(ageM / 60) + 'h';
-                    showToast(`Instant start — ${lib.length.toLocaleString()} likes from cache`, `${ageTxt} old · syncing new likes in the background.`);
+                    showToast(`Instant start — ${lib.length.toLocaleString()} likes from cache`, `${ageTxt} old · syncing new likes in the background`);
                     topUpCache(pageType, libKey, lib, hit.t);   // fire-and-forget
                 } else if (cacheAge < 7 * 86400000) {
                     // expired but recent: stale-while-revalidate — instant music
@@ -1983,7 +2042,7 @@
                     lib = hit.items;
                     S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey;
                     const ageH = Math.max(1, Math.round(cacheAge / 3600000));
-                    showToast(`Instant start — ${lib.length.toLocaleString()} likes from cache`, `${ageH}h old · refreshing your full library in the background.`);
+                    showToast(`Instant start — ${lib.length.toLocaleString()} likes from cache`, `${ageH}h old · refreshing your full library in the background`);
                     refreshLibInBackground(pageType, libKey);
                 }
             }
@@ -2006,7 +2065,7 @@
                     lib = e.partial;
                     salvaged = true;
                     S.fetchAbort = null;
-                    showToast(`Couldn’t fetch everything — shuffling the ${lib.length.toLocaleString()} tracks that made it.`);
+                    showToast(`Couldn’t fetch everything — shuffling the ${lib.length.toLocaleString()} tracks that made it`);
                 } else throw e;
             }
             if (S.cancelled) return;
@@ -2067,7 +2126,7 @@
         if (stats.ageFiltered) bits.push(`${stats.ageFiltered} liked earlier`);
         if (stats.histFiltered) bits.push(`${stats.histFiltered} already heard`);
         if (stats.rotationBypassed) bits.push('nearly all heard — repeats included');
-        showToast(`${pool.length.toLocaleString()} tracks · ${fmtH(stats.totalMs)}`, bits.length ? bits.join(' · ') : 'Shuffled fresh, every single one.');
+        showToast(`${pool.length.toLocaleString()} tracks · ${fmtH(stats.totalMs)}`, bits.length ? bits.join(' · ') : 'Shuffled fresh, every single one');
 
         // Instant playback (default): the first page is already in the queue,
         // so start the music now and let the rest stream in behind it. The
@@ -2090,6 +2149,7 @@
         if (!p1 || !p2) return false;
 
         muteAll();
+        S.seeded = true;   // the run owns playback from here: cancel() pauses the seed, never earlier music
         const pc0 = q('playControl');
         if (pc0 && pc0.classList.contains('playing')) clickIt(pc0);
 
@@ -2129,7 +2189,7 @@
         if (skipDup !== false) clickIt(q('skipNext'));
         S.playingStarted = true;
         const pc = q('playControl');
-        if (pc) { if (!pc.classList.contains('playing')) clickIt(pc); pc.focus(); }
+        if (pc) { if (!pc.classList.contains('playing')) clickIt(pc); focusIdle(pc); }
     }
     async function runClassic(btn, list) {
         S.boosting = true;
@@ -2141,11 +2201,11 @@
         if (S.cancelled) return;
         hideQueuePanel(true);
 
-        startLoader(ok => {
+        if (!startLoader(ok => {
             if (S.cancelled) return;
             beginPlayback(dupAdded);
             finish(ok);
-        });
+        })) throw new Error('queue not available');
     }
 
     /* ───────────────────────── SHARED LOADER ──────────────────────────
@@ -2199,7 +2259,7 @@
             const fedAll = F.active && S.poolSize > 0 && F.served >= S.poolSize;
             const done =
                 (fedAll && S.endSeen && S.stall >= 2) ||
-                (S.expected && n >= S.expected - 2 && S.stall >= 2) ||
+                (S.expected && (!F.active || fedAll) && n >= S.expected - 2 && S.stall >= 2) ||   // feed runs: n also counts rows loaded before the seed
                 (S.endSeen && grew && S.stall >= 4) ||
                 (q('queueFallback') && S.stall >= 12 && elapsed > 4000) ||
                 S.stall >= CFG.stallDoneTicks;
@@ -2232,7 +2292,7 @@
         // load, queue seed). Let it unwind before starting another, or two
         // loaders fight over the same queue and the first one's observer and
         // ticker leak for the rest of the session.
-        if (S.runInFlight) { showToast('Still stopping the last shuffle — try again in a moment.'); return; }
+        if (S.runInFlight) { showToast('Still stopping the last shuffle — try again in a moment'); return; }
         S.runInFlight = runOnce(btn).catch(e => swallow(e, 'run')).then(() => { S.runInFlight = null; });
     }
     async function runOnce(btn) {
@@ -2241,14 +2301,14 @@
         const list = q(LIST_KEY[pageType]);
         if (!list || list.childElementCount < 3) {
             setBtn('Too few tracks');
-            if (pageType === 'Likes') showToast('Nothing to shuffle here yet — make sure you’re signed in and your Likes have loaded.');
-            setTimeout(() => setBtn('Shuffle Play'), 3000);
+            if (pageType === 'Likes') showToast('Nothing to shuffle here yet — make sure you’re signed in and your Likes have loaded');
+            const at = S.startedAt; setTimeout(() => { if (!S.active && S.startedAt === at) setBtn('Shuffle Play'); }, 3000);
             return;
         }
 
         S.active = true; S.cancelled = false; S.startedAt = Date.now();
         S.boosting = false; S.boostFails = 0; S.endSeen = false; S.expected = 0; S.poolSize = 0;
-        S.btn = btn; S.playingStarted = false; S.beganPlayback = false; S.earlyBegun = false; S.itemH = 0; S.itemHAt = 0;
+        S.btn = btn; S.playingStarted = false; S.seeded = false; S.beganPlayback = false; S.earlyBegun = false; S.itemH = 0; S.itemHAt = 0;
         S.lastRunPath = location.pathname;
         S.prevPoolList = S.poolList; S.prevPoolIdx = S.poolIdx; S.poolAssigned = false;
         S.total = findTotal(pageType);
@@ -2257,7 +2317,7 @@
         setBusy(true);
         if (!Ticker.usingWorker() && !SS.get('bh_sc_wkwarn', 0)) {
             SS.set('bh_sc_wkwarn', 1);
-            showToast('Heads-up: background timers are limited here — keep this tab visible while it loads.');
+            showToast('Heads-up: background timers are limited here — keep this tab visible while it loads');
         }
 
         try {
@@ -2277,7 +2337,7 @@
                     S.poolList = null; S.poolIdx = null;
                     S.prevPoolList = null; S.prevPoolIdx = null;
                     S.total = findTotal(pageType);   // progress must count the native queue, not the failed run's pool
-                    showToast('Compatibility mode for this one (a bit slower).');
+                    showToast('Compatibility mode for this one (a bit slower)');
                     setBtn('Loading…');
                 }
             }
@@ -2307,7 +2367,7 @@
         if (wasFeed && served) n = Math.min(served, target || served);   // report the precise pool size
         S.active = false;
         if (target && n < Math.floor(target * 0.9)) {
-            showToast(`Heads up — only ${n.toLocaleString()} of ${target.toLocaleString()} made it in.`, 'Tap Shuffle Play to retry.');
+            showToast(`Heads up — only ${n.toLocaleString()} of ${target.toLocaleString()} made it in`, 'Tap Shuffle Play to retry');
             setBtn('Shuffle Play');
         } else {
             setBtn(ok && n ? `✓ ${n.toLocaleString()} queued` : 'Shuffle Play');
@@ -2315,14 +2375,13 @@
                 S.btn.classList.add('bhx-pulse');
                 setTimeout(() => { if (S.btn) S.btn.classList.remove('bhx-pulse'); }, 700);
             }
-            if (ok && n && wasFeed && S.earlyBegun) showToast(`All ${n.toLocaleString()} tracks in`, 'Queue fully loaded & verified.');
-            setTimeout(() => setBtn('Shuffle Play'), 3500);
+            if (ok && n && wasFeed && S.earlyBegun) showToast(`All ${n.toLocaleString()} tracks in`, 'Queue fully loaded & verified');
+            const at = S.startedAt; setTimeout(() => { if (!S.active && S.startedAt === at) setBtn('Shuffle Play'); }, 3500);
         }
         setBtnProgress(null);
         setBusy(false);
         S.beganPlayback = false; S.earlyBegun = false;
-        const pc = q('playControl');
-        if (pc) pc.focus();
+        focusIdle(q('playControl'));
     }
     function cancel(label) {
         S.cancelled = true;
@@ -2332,7 +2391,7 @@
         hideQueuePanel(false);
         toggleQueue('close');
         unmuteAll();
-        if (!S.playingStarted) {
+        if (S.seeded && !S.playingStarted) {   // pause only a seed WE started, never music the run never touched
             const pc = q('playControl');
             if (pc && pc.classList.contains('playing')) clickIt(pc);
         }
@@ -2363,13 +2422,17 @@
         if (a && (path ? path.includes(a) : (a === e.target || a.contains(e.target)))) return; // anchor click toggles instead
         closeCard();
     }
-    function onDocKey(e) { if (e.key === 'Escape') closeCard(); }
-    function closeCard() {
+    function onDocKey(e) { if (e.key === 'Escape') closeCard(true); }
+    function closeCard(restoreFocus) {
         if (!card) return;
+        const a = card.__anchor;
+        const had = card.contains(document.activeElement);   // keyboard users: hand focus back to the trigger
         card.remove();
         card = null;
         document.removeEventListener('mousedown', onDocDown, true);
         document.removeEventListener('keydown', onDocKey, true);
+        // only Escape and the close button restore it (=== true: the button listener used to get the event)
+        if (restoreFocus === true && had && a && a.isConnected) { try { a.focus({ preventScroll: true }); } catch (e) {} }
     }
     function showCard(anchor, build) {
         injectStyle(); applyTheme();
@@ -2409,7 +2472,7 @@
         const x = el('button', 'bhx-x', ICONS.x(12));
         x.type = 'button';
         x.setAttribute('aria-label', 'Close');
-        x.addEventListener('click', closeCard);
+        x.addEventListener('click', () => closeCard(true));
         h.appendChild(x);
         c.appendChild(h);
     }
@@ -2457,7 +2520,7 @@
     function exportLibraryCsv() {
         const doIt = (items) => {
             try {
-                if (!items || !items.length) { showToast('No library cached — run a shuffle first.'); return; }
+                if (!items || !items.length) { showToast('No library cached — run a shuffle first'); return; }
                 const esc2 = v => {
                     v = String(v == null ? '' : v);
                     if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;   // spreadsheet formula-injection guard (OWASP set)
@@ -2481,8 +2544,8 @@
                 document.body.appendChild(a);
                 a.click();
                 setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-                showToast('Library exported', items.length.toLocaleString() + ' tracks as CSV.');
-            } catch (e) { swallow(e, 'exportLibraryCsv'); showToast('Export failed.'); }
+                showToast('Library exported', items.length.toLocaleString() + ' tracks as CSV');
+            } catch (e) { swallow(e, 'exportLibraryCsv'); showToast('Export failed'); }
         };
         // only trust the session lib when it's YOUR likes — a GenericLikes or
         // playlist run leaves someone else's library in memory
@@ -2505,8 +2568,8 @@
             document.body.appendChild(a);
             a.click();
             setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-            showToast('Full backup downloaded', 'Shuffle + lyrics + enhancer settings.');
-        } catch (e) { swallow(e, 'export'); showToast('Export failed.'); }
+            showToast('Full backup downloaded', 'Shuffle + lyrics + enhancer settings');
+        } catch (e) { swallow(e, 'export'); showToast('Export failed'); }
     }
     function importData(file) {
         const r = new FileReader();
@@ -2536,7 +2599,7 @@
                     allTime.played = Math.max(0, d.alltime.played | 0);
                     LS.set('bh_sc_alltime', allTime);
                 }
-                if (d.block && typeof d.block === 'object') saveBlock(Object.assign({ tracks: [], urls: [], artists: [] }, d.block));
+                if (d.block && typeof d.block === 'object') saveBlock({ tracks: arr(d.block.tracks), urls: arr(d.block.urls), artists: arr(d.block.artists) });
                 if (d.plays && typeof d.plays === 'object') {
                     const plays = {};
                     for (const k2 of Object.keys(d.plays)) if (Array.isArray(d.plays[k2])) plays[k2] = d.plays[k2];
@@ -2551,18 +2614,18 @@
                     Object.assign(daily, d.daily);
                     LS.set('bh_sc_daily', daily);
                 }
-                showToast('Backup imported — settings, history and stats restored.');
+                showToast('Backup imported — settings, history and stats restored');
                 closeCard();
-            } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a shuffle backup.'); }
+            } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a shuffle backup'); }
         };
-        r.onerror = () => showToast('Couldn’t read that file.');
+        r.onerror = () => showToast('Couldn’t read that file');
         r.readAsText(file);
     }
 
     /* Genre picker: a sub-card listing the library's top genres as switches.
      * Loads from the session lib or the IndexedDB cache (full objects only —
      * the compact cache doesn't carry genre). */
-    function openGenrePicker(anchor) {
+    function openGenrePicker(anchor, onChange) {
         showCard(anchor, c => {
             head(c, 'sliders', 'Genres');
             const b = el('div', 'bhx-body');
@@ -2607,6 +2670,7 @@
                         if (sel.has(k)) sel.delete(k); else sel.add(k);
                         CFG.genreFilter = [...sel];
                         saveCfg();
+                        if (onChange) { try { onChange(); } catch (e) {} }
                         sw.classList.toggle('on', sel.has(k));
                         sw.setAttribute('aria-checked', String(sel.has(k)));
                     });
@@ -2621,8 +2685,9 @@
                     sel.clear();
                     CFG.genreFilter = [];
                     saveCfg();
+                    if (onChange) { try { onChange(); } catch (e) {} }
                     b.querySelectorAll('.bhx-sw').forEach(s2 => { s2.classList.remove('on'); s2.setAttribute('aria-checked', 'false'); });
-                    showToast('Genre filter off — shuffling everything.');
+                    showToast('Genre filter off — shuffling everything');
                 });
                 foot.appendChild(allB);
                 const backB = el('button', 'bhx-btn', 'Back');
@@ -2684,8 +2749,8 @@
                 const bb = el('button', 'bhx-btn sm', t);
                 bb.type = 'button';
                 bb.addEventListener('click', () => {
-                    if (m) { sleepArmed = false; sleepAt = Date.now() + m * 60000; SS.set('bh_sc_sleep', sleepAt); showToast('Sleep timer set — pausing in ' + t + '.'); }
-                    else { clearSleep(); showToast('Sleep timer off.'); }
+                    if (m) { sleepArmed = false; sleepAt = Date.now() + m * 60000; SS.set('bh_sc_sleep', sleepAt); showToast('Sleep timer set — pausing in ' + t); }
+                    else { clearSleep(); showToast('Sleep timer off'); }
                     sLab.innerHTML = 'Sleep timer' + sleepSub();
                 });
                 sGrp.appendChild(bb);
@@ -2752,8 +2817,8 @@
             mkSm(curGrp, 'Track', () => { blockCurrentTrack(false); });
             mkSm(curGrp, 'Artist', () => {
                 const info = currentTrackInfo();
-                if (!info) { showToast('Play a track first.'); return; }
-                if (info.artistId == null) { showToast('Can’t identify this artist yet — run a shuffle first.'); return; }
+                if (!info) { showToast('Play a track first'); return; }
+                if (info.artistId == null) { showToast('Can’t identify this artist yet — run a shuffle first'); return; }
                 const bk = loadBlock();
                 if (!bk.artists.includes(info.artistId)) bk.artists.push(info.artistId);
                 saveBlock(bk);
@@ -2763,12 +2828,12 @@
                     S.poolList = S.poolList.filter(x => x.ai !== info.artistId || x.u === info.url);
                     S.poolIdx = new Map(S.poolList.map((x, i) => [x.u, i]));
                 }
-                showToast('Artist blocked' + (info.artist ? ' — ' + info.artist : ''), 'None of their tracks will be shuffled.');
+                showToast('Artist blocked' + (info.artist ? ' — ' + info.artist : ''), 'None of their tracks will be shuffled');
             });
             cur.appendChild(curGrp);
             b.appendChild(cur);
             const cGrp = el('div', 'bhx-btnrow');
-            mkSm(cGrp, 'Clear', () => { saveBlock({ tracks: [], urls: [], artists: [] }); showToast('Blocklist cleared.'); });
+            mkSm(cGrp, 'Clear', () => { saveBlock({ tracks: [], urls: [], artists: [] }); showToast('Blocklist cleared'); });
             counts.appendChild(cLab);
             counts.appendChild(cGrp);
             b.appendChild(counts);
@@ -2789,7 +2854,7 @@
                 LS.del('bh_sc_lib');
                 invalidateLibMap();
                 rRow.querySelector('.bhx-lab').innerHTML = 'Cached library<span class="bhx-sub">cleared — next shuffle fetches fresh</span>';
-                showToast('Cache cleared — the next shuffle will refetch everything.');
+                showToast('Cache cleared — the next shuffle will refetch everything');
             });
             rRow.appendChild(rGrp);
             b.appendChild(rRow);
@@ -2806,11 +2871,12 @@
             lbBtn.title = 'Set or clear your ListenBrainz user token';
             lbBtn.addEventListener('click', () => {
                 let t = null;
-                try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off.', lbToken() || ''); } catch (e) {}
+                try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off. It is kept in this browser’s site data for soundcloud.com.', lbToken() || ''); } catch (e) {}
                 if (t === null) return;
+                t = t.replace(/^\s*token\s+/i, '');
                 try { GM_setValue('bh:lbtok', t.trim()); } catch (e) {}
                 lbLab.innerHTML = lbSubTxt();
-                showToast(t.trim() ? 'ListenBrainz on — plays will scrobble.' : 'ListenBrainz off.');
+                showToast(t.trim() ? 'ListenBrainz on — plays will scrobble' : 'ListenBrainz off');
                 if (t.trim()) lbFlush();
             });
             lbGrp.appendChild(lbBtn);
@@ -2828,7 +2894,7 @@
             const heardN = loadHistory().urls.length;
             mkFoot('Reset heard' + (heardN ? ' (' + heardN + ')' : ''), () => {
                 clearHistory();
-                showToast('Heard history cleared — everything is a fresh pick again.');
+                showToast('Heard history cleared — everything is a fresh pick again');
                 closeCard();
             }, 'Clear the fresh-picks history');
             mkFoot('Export', exportData, 'Download settings, history, stats & lyrics as JSON');
@@ -2841,7 +2907,7 @@
             mkFoot('Import', () => fileInp.click(), 'Restore from a backup file');
             b.appendChild(foot);
             b.appendChild(fileInp);
-            b.appendChild(el('div', 'bhx-hint', 'v8.0 · Alt+S shuffle · Alt+B block playing · local-only'));
+            b.appendChild(el('div', 'bhx-hint', 'Alt+S shuffle · Alt+B block playing · local-only'));
         });
     }
 
@@ -2906,7 +2972,7 @@
         toggle('skipUnplayable', 'Skip unplayable', 'Region-blocked or removed tracks');
         number('sampleCap', 'Queue size cap', '0 = your whole library', 0, 100000);
         number('likedDays', 'Liked within', 'days · 0 = any time', 0, 3650);
-        btnRow('Genres', (CFG.genreFilter && CFG.genreFilter.length ? CFG.genreFilter.length + ' selected' : 'All genres'), [['Pick', (lab, b) => { try { openGenrePicker(b); } catch (e) {} }]]);
+        btnRow('Genres', (CFG.genreFilter && CFG.genreFilter.length ? CFG.genreFilter.length + ' selected' : 'All genres'), [['Pick', (lab, b) => { try { openGenrePicker(b, () => { const sm = lab.querySelector('small'); if (sm) sm.textContent = CFG.genreFilter.length ? CFG.genreFilter.length + ' selected' : 'All genres'; }); } catch (e) {} }]]);
 
         subHead('Setup');
         toggle('silentSetup', 'Silent setup', 'Mute & hide the queue while loading');
@@ -2921,25 +2987,25 @@
           ['Artist', (lab) => {
             try {
               const info = currentTrackInfo();
-              if (!info) { showToast('Play a track first.'); return; }
-              if (info.artistId == null) { showToast('Can’t identify this artist yet — run a shuffle first.'); return; }
+              if (!info) { showToast('Play a track first'); return; }
+              if (info.artistId == null) { showToast('Can’t identify this artist yet — run a shuffle first'); return; }
               const bk = loadBlock(); if (!bk.artists.includes(info.artistId)) bk.artists.push(info.artistId); saveBlock(bk);
               if (S.poolList) { S.poolList = S.poolList.filter((x) => x.ai !== info.artistId || x.u === info.url); S.poolIdx = new Map(S.poolList.map((x, i) => [x.u, i])); }
-              showToast('Artist blocked' + (info.artist ? ' — ' + info.artist : ''), 'None of their tracks will be shuffled.');
+              showToast('Artist blocked' + (info.artist ? ' — ' + info.artist : ''), 'None of their tracks will be shuffled');
             } catch (e) {}
             const sm = lab.querySelector('small'); if (sm) sm.textContent = bkText();
           }],
-          ['Clear', (lab) => { try { saveBlock({ tracks: [], urls: [], artists: [] }); showToast('Blocklist cleared.'); } catch (e) {} const sm = lab.querySelector('small'); if (sm) sm.textContent = bkText(); }],
+          ['Clear', (lab) => { try { saveBlock({ tracks: [], urls: [], artists: [] }); showToast('Blocklist cleared'); } catch (e) {} const sm = lab.querySelector('small'); if (sm) sm.textContent = bkText(); }],
         ]);
-        btnRow('Heard history', 'Reset the fresh-picks memory', [['Reset', () => { try { clearHistory(); showToast('Heard history cleared — everything is a fresh pick again.'); } catch (e) {} }]]);
+        btnRow('Heard history', 'Reset the fresh-picks memory', [['Reset', () => { try { clearHistory(); showToast('Heard history cleared — everything is a fresh pick again'); } catch (e) {} }]]);
         btnRow('Cached library', 'Forget the on-disk cache', [['Forget', () => {
-          try { S.sessionLib = null; S.sessionLibAt = 0; S.sessionLibKey = ''; idbClearLib(); LS.del('bh_sc_lib'); invalidateLibMap(); showToast('Cache cleared — the next shuffle refetches everything.'); } catch (e) {}
+          try { S.sessionLib = null; S.sessionLibAt = 0; S.sessionLibKey = ''; idbClearLib(); LS.del('bh_sc_lib'); invalidateLibMap(); showToast('Cache cleared — the next shuffle refetches everything'); } catch (e) {}
         }]]);
         btnRow('ListenBrainz', (lbToken() ? 'Scrobbling plays' : 'Off — add a token to scrobble'), [['Token', (lab) => {
-          let t = null; try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off.', lbToken() || ''); } catch (e) {}
-          if (t === null) return; try { GM_setValue('bh:lbtok', t.trim()); } catch (e) {}
+          let t = null; try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off. It is kept in this browser’s site data for soundcloud.com.', lbToken() || ''); } catch (e) {}
+          if (t === null) return; t = t.replace(/^\s*token\s+/i, ''); try { GM_setValue('bh:lbtok', t.trim()); } catch (e) {}
           const sm = lab.querySelector('small'); if (sm) sm.textContent = t.trim() ? 'Scrobbling plays' : 'Off — add a token to scrobble';
-          showToast(t.trim() ? 'ListenBrainz on — plays will scrobble.' : 'ListenBrainz off.'); if (t.trim()) { try { lbFlush(); } catch (e) {} }
+          showToast(t.trim() ? 'ListenBrainz on — plays will scrobble' : 'ListenBrainz off'); if (t.trim()) { try { lbFlush(); } catch (e) {} }
         }]]);
       } catch (e) {}
     }
@@ -3034,7 +3100,7 @@
                 const og = el('div', 'bhx-btnrow');
                 const off = el('button', 'bhx-btn sm', 'Off');
                 off.type = 'button';
-                off.addEventListener('click', () => { clearSleep(); sr.remove(); showToast('Sleep timer off.'); });
+                off.addEventListener('click', () => { clearSleep(); sr.remove(); showToast('Sleep timer off'); });
                 og.appendChild(off);
                 sr.appendChild(og);
                 b.appendChild(sr);
@@ -3089,9 +3155,9 @@
                     const txt = S.poolList.map((x, i2) => (i2 + 1) + '. ' + (x.t || x.u) + (x.a ? ' — ' + x.a : '') + '\n' + x.u).join('\n');
                     try {
                         navigator.clipboard.writeText(txt).then(
-                            () => showToast('Queue copied', S.poolList.length.toLocaleString() + ' tracks on your clipboard.'),
-                            () => showToast('Couldn’t copy — clipboard blocked.'));
-                    } catch (e) { showToast('Couldn’t copy — clipboard blocked.'); }
+                            () => showToast('Queue copied', S.poolList.length.toLocaleString() + ' tracks on your clipboard'),
+                            () => showToast('Couldn’t copy — clipboard blocked'));
+                    } catch (e) { showToast('Couldn’t copy — clipboard blocked'); }
                 });
                 cqRow.appendChild(cq);
                 b.appendChild(cqRow);
@@ -3193,14 +3259,14 @@
                         const txt = broken.map(x => (x.t || '?') + (x.a ? ' — ' + x.a : '') + ' [' + (x.p || 'unplayable') + ']\n' + x.u).join('\n');
                         try {
                             navigator.clipboard.writeText(txt).then(
-                                () => showToast('Copied', broken.length + ' broken likes on your clipboard.'),
-                                () => showToast('Couldn’t copy — clipboard blocked.'));
-                        } catch (e) { showToast('Couldn’t copy — clipboard blocked.'); }
+                                () => showToast('Copied', broken.length + ' broken likes on your clipboard'),
+                                () => showToast('Couldn’t copy — clipboard blocked'));
+                        } catch (e) { showToast('Couldn’t copy — clipboard blocked'); }
                     });
                     bg.appendChild(cp);
                     const cl = el('button', 'bhx-btn sm', 'Clear');
                     cl.type = 'button';
-                    cl.addEventListener('click', () => { LS.del(BROKEN_KEY); showToast('Broken-likes list cleared.'); closeCard(); });
+                    cl.addEventListener('click', () => { LS.del(BROKEN_KEY); showToast('Broken-likes list cleared'); closeCard(); });
                     bg.appendChild(cl);
                     b.appendChild(bg);
                 }
@@ -3220,7 +3286,7 @@
             ch.title = 'Copy your play history (with timestamps) to the clipboard';
             ch.addEventListener('click', () => {
                 const h = loadHistory();
-                if (!h.urls.length) { showToast('No history yet.'); return; }
+                if (!h.urls.length) { showToast('No history yet'); return; }
                 const lm = getLibMap();
                 const tsOff = h.urls.length - h.ts.length;
                 const lines = h.urls.map((u, i) => {
@@ -3231,9 +3297,9 @@
                 });
                 try {
                     navigator.clipboard.writeText(lines.join('\n')).then(
-                        () => showToast('History copied', lines.length.toLocaleString() + ' plays on your clipboard.'),
-                        () => showToast('Couldn’t copy — clipboard blocked.'));
-                } catch (e) { showToast('Couldn’t copy — clipboard blocked.'); }
+                        () => showToast('History copied', lines.length.toLocaleString() + ' plays on your clipboard'),
+                        () => showToast('Couldn’t copy — clipboard blocked'));
+                } catch (e) { showToast('Couldn’t copy — clipboard blocked'); }
             });
             foot.appendChild(ch);
             b.appendChild(foot);
@@ -3271,14 +3337,24 @@
     async function maybeAutoRun() {
         if (autoRunWaiting || !SS.get('bh_sc_autorun', 0)) return;
         autoRunWaiting = true;
-        const btn = await waitFor(() => {
+        // the button mounts on the page header before the Likes list has any
+        // rows — wait for both, or runOnce answers 'Too few tracks' straight away
+        let btn = await waitFor(() => {
             const bEl = document.querySelector('.bhx-shufbtn');
-            return bEl && bEl.dataset.pageType === 'Likes' ? bEl : null;
+            if (!bEl || bEl.dataset.pageType !== 'Likes') return null;
+            const l = q('likesList');
+            return l && l.childElementCount >= 3 ? bEl : null;
         }, T.autorunWait, 200);
+        if (!btn) {
+            // a list that never fills (signed out, no likes) still gets the 'Too few tracks' feedback
+            const bEl = document.querySelector('.bhx-shufbtn');
+            if (bEl && bEl.dataset.pageType === 'Likes') btn = bEl;
+        }
         autoRunWaiting = false;
         if (!SS.get('bh_sc_autorun', 0)) return;
         SS.del('bh_sc_autorun');
-        if (btn && !S.active) run(btn);
+        if (!btn) { showToast('Couldn’t find your Likes to shuffle', 'Sign in and open /you/likes, then press Shuffle Play'); return; }
+        if (!S.active) run(btn);
     }
     function ensureBarButtons() {
         const host = q('barHost');
@@ -3523,7 +3599,7 @@
         startWatcher();
         try { ApiHealth.armColdCheck(); } catch (e) {}   // R23: one-shot 30s degradation check
         if (SHOW_UPDATE_NOTE) setTimeout(() =>
-            showToast('Shuffle updated to v8 — auto-skip for dead tracks, sleep timer, blocklist, queue size cap, backups & more in the settings card.'), 1800);
+            showToast('Shuffle updated to v8 — auto-skip for dead tracks, sleep timer, blocklist, queue size cap, backups & more behind the gear next to Shuffle Play'), 1800);
         setTimeout(lbFlush, 6000);   // retry any scrobbles queued while offline
         if (CFG.debug) {
             selfTest();
@@ -13789,6 +13865,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // the newest entry, whether or not the chain is routed — a tap on the source node hears the
   // track either way. null before SoundCloud has built its graph.
   try { SUITE.audioTap = () => { const e = [...sceFx].pop(); return e ? { ctx: e.ctx, src: e.src } : null; }; } catch (e) {}
+  // the captured media elements, oldest first: the shuffle module mutes, watches and fades playback through
+  // these because SoundCloud's player element never enters the DOM and its own querySelectorAll finds nothing
+  try { SUITE.mediaEls = () => [...sceMediaEls]; } catch (e) {}
   // sleep-timer fade (WP10): module 1 asks for it. With the chain routed, a linear ramp of every routed chain's output
   // gain to 0.02 in `sec` s — after the limiter, so it never pumps, and the element's volume (SoundCloud's slider)
   // stays put; 0 restores unity after the pause. false when nothing is routed: module 1 steps the volume instead.
