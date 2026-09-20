@@ -4134,7 +4134,14 @@
       },
       playing: playingNow,
       seek(sec) {
-        // primary: drive SoundCloud's own timeline (pointer + mouse sequences)
+        // primary: the captured element itself. SoundCloud's player reads the position back from the
+        // element's own timeupdate, so the waveform, the timecode and its persisted position all follow;
+        // a synthetic click on the timeline, the old primary path, opens the sign-in modal (and pauses)
+        // for anyone not logged in
+        if (active && isFinite(active.duration) && active.duration > 0) {
+          try { active.currentTime = Math.min(Math.max(0, sec), active.duration - 0.25); seekSeq++; return true; } catch (e) {}
+        }
+        // fallback: drive SoundCloud's own timeline (pointer + mouse sequences)
         const wrap = tlWrap();
         const max = (wrap && parseFloat(wrap.getAttribute('aria-valuemax')))
           || (active && isFinite(active.duration) && active.duration) || 0;
@@ -4574,6 +4581,94 @@
     const text = await gmFetch(url, opts);
     if (text && text.charCodeAt(0) === 60) throw new Error('html');
     return JSON.parse(text);
+  };
+
+  /* ── one api-v2 resolve per track, shared by the lyric search and the chapters (a miss is retried next time) ── */
+  const trackJsonMemo = new Map();
+  function trackJson(href) {
+    if (!href) return Promise.resolve(null);
+    const cid = SUITE.clientId ? SUITE.clientId() : null;
+    if (!cid) return Promise.resolve(null);
+    if (trackJsonMemo.has(href)) return trackJsonMemo.get(href);
+    const p = gmJSON('https://api-v2.soundcloud.com/resolve?url=' + encodeURIComponent('https://soundcloud.com' + href) + '&client_id=' + encodeURIComponent(cid), { timeout: 6000 }).catch(() => null);
+    trackJsonMemo.set(href, p);
+    if (trackJsonMemo.size > 24) trackJsonMemo.delete(trackJsonMemo.keys().next().value);
+    p.then((d) => { if (!d) trackJsonMemo.delete(href); });
+    return p;
+  }
+
+  /* ── chapters: a mix's timestamped tracklist, read from its description, plus the listener's own cue points ──
+   * DJ mixes and podcasts are a huge part of SoundCloud and the player does nothing for them: a
+   * two-hour set is one flat waveform. Any description line carrying a m:ss or h:mm:ss stamp
+   * ("12:33 The London (Dela Sur Remix) - Travis Scott", "01. Artist – Title [00:00]") becomes a
+   * chapter; three or more make a list. Cue points are the listener's own markers on any track,
+   * kept per track (up to 100 tracks). */
+  const CUES_KEY = 'sl:cues';
+  const Chapters = {
+    href: '', list: [], descList: [], fromDesc: 0, onChange: null, _seq: 0,
+    ts(t) { t = Math.max(0, Math.round(t)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); },
+    parse(desc, dur) {
+      const out = [];
+      if (!desc) return out;
+      const TS = '(?:(\\d{1,2}):)?(\\d{1,3}):(\\d{2})';
+      const first = new RegExp('^(?:\\d{1,3}[.)]\\s*)?[\\[(]?' + TS + '[\\])]?\\s*[-–—:|.]*\\s*(.+?)\\s*$');
+      const last = new RegExp('^(?:\\d{1,3}[.)]\\s*)?(.+?)\\s*[-–—|@(\\[]*\\s*[\\[(]?' + TS + '[\\])]?\\s*$');
+      const toSec = (h, m, x) => (h ? +h * 3600 : 0) + (+m) * 60 + (+x);
+      for (let ln of String(desc).split(/\r?\n/)) {
+        ln = ln.replace(/^[\s\-–—•*·>#]+/, '').trim();
+        if (!ln || /https?:\/\/|www\./i.test(ln)) continue;
+        let m = first.exec(ln), t, name;
+        if (m) { t = toSec(m[1], m[2], m[3]); name = m[4]; }
+        else { m = last.exec(ln); if (!m) continue; name = m[1]; t = toSec(m[2], m[3], m[4]); }
+        name = name.replace(/^[\s\-–—:|.]+|[\s\-–—:|(\[]+$/g, '').replace(/\s+/g, ' ');
+        if (!name || name.length < 2 || !isFinite(t)) continue;
+        if (dur > 0 && t > dur + 30) continue;
+        out.push({ t, name: name.slice(0, 100), src: 'desc' });
+      }
+      if (out.length < 3) return [];
+      out.sort((a, b) => a.t - b.t);
+      const seen = new Set();
+      return out.filter((c) => { if (seen.has(c.t)) return false; seen.add(c.t); return true; });
+    },
+    cues(href) { try { const all = GM_getValue(CUES_KEY, {}) || {}; const l = all[href]; return Array.isArray(l) ? l.filter((c) => c && isFinite(c.t)).map((c) => ({ t: +c.t, name: String(c.n || ''), src: 'cue' })) : []; } catch (e) { return []; } },
+    saveCues(href, list) {
+      try {
+        const all = GM_getValue(CUES_KEY, {}) || {};
+        if (list.length) all[href] = list.map((c) => ({ t: Math.round(c.t * 10) / 10, n: c.name })); else delete all[href];
+        const keys = Object.keys(all); while (keys.length > 100) delete all[keys.shift()];
+        GM_setValue(CUES_KEY, all);
+      } catch (e) {}
+    },
+    rebuild() {
+      const cues = this.href ? this.cues(this.href) : [];
+      this.fromDesc = this.descList.length;
+      this.list = this.descList.concat(cues).sort((a, b) => a.t - b.t);
+      try { if (this.onChange) this.onChange(); } catch (e) {}
+    },
+    load(meta) {
+      const href = (meta && meta.href) || '';
+      const seq = ++this._seq;
+      this.href = href; this.descList = []; this.rebuild();
+      if (!href) return;
+      trackJson(href).then((d) => {
+        if (seq !== this._seq) return;
+        const dur = (d && d.duration > 0) ? d.duration / 1000 : ((meta && meta.dur) || 0);
+        this.descList = this.parse(d && d.description, dur);
+        if (this.descList.length) this.rebuild();
+      });
+    },
+    indexAt(t) { let i = -1; for (let k = 0; k < this.list.length; k++) { if (this.list[k].t <= t + 0.5) i = k; else break; } return i; },
+    addCue(t, name) {
+      if (!this.href) return null;
+      const cues = this.cues(this.href).filter((c) => Math.abs(c.t - t) > 1);
+      const nm = name || ('Cue ' + (cues.length + 1));
+      cues.push({ t, name: nm, src: 'cue' }); cues.sort((a, b) => a.t - b.t);
+      this.saveCues(this.href, cues); this.rebuild();
+      return nm;
+    },
+    removeCue(t) { if (!this.href) return; this.saveCues(this.href, this.cues(this.href).filter((c) => Math.abs(c.t - t) > 0.05)); this.rebuild(); },
+    renameCue(t, name) { if (!this.href) return; const cues = this.cues(this.href); for (const c of cues) if (Math.abs(c.t - t) <= 0.05) c.name = name; this.saveCues(this.href, cues); this.rebuild(); },
+    tracklistText() { return this.list.map((c) => this.ts(c.t) + '  ' + c.name).join('\n'); },
   };
 
   /* ----- LRCLIB ----- */
@@ -6296,13 +6391,7 @@
           // 2) exact track JSON via the api-v2 client_id the shuffle module
           //    sniffed — far lighter than pulling the whole HTML page
           let d = null;
-          const cid = SUITE.clientId ? SUITE.clientId() : null;
-          if (cid) {
-            try {
-              d = await gmJSON('https://api-v2.soundcloud.com/resolve?url=' + encodeURIComponent(full)
-                + '&client_id=' + encodeURIComponent(cid), { timeout: 6000 });
-            } catch (e) { d = null; }
-          }
+          try { d = await trackJson(meta.href); } catch (e) { d = null; }   // memoised: the chapters share the same fetch
           // 3) fall back to the old HTML scrape only when both fast paths miss
           if (!d && !lib) d = await scTrackData(meta.href);
           if (!d || done) return { songs: [] };
@@ -6851,6 +6940,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .qrow .qt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
 .qrow .qa { flex: none; max-width: 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; color: #84848a; }
 .qrow.now { background: rgba(255,255,255,0.07); color: #fff; box-shadow: inset 2px 0 0 var(--acc); }
+.qrow.ch { cursor: pointer; }
+.qrow.ch:hover { background: rgba(255,255,255,0.05); }
+.qrow.ch:focus-visible { outline: 2px solid var(--acc); outline-offset: -2px; }
+.qrow.ch .n { width: 50px; font-size: 10.5px; }
+.qrow.ch.cue .qt::before { content: '◆ '; color: var(--acc); font-size: 9px; }
+.qrow.ch .chx { flex: none; font-size: 10px; color: #7c7c84; padding: 2px 6px; border-radius: 6px; opacity: 0; }
+.qrow.ch:hover .chx, .qrow.ch:focus-within .chx { opacity: 1; }
+.qrow.ch .chx:hover { color: #fff; background: rgba(255,255,255,0.1); }
 .sgrid { display: flex; padding: 4px 12px; gap: 7px; }
 .scell { flex: 1; text-align: center; padding: 11px 0 9px; }
 .scell .v { font-size: 21px; font-weight: 650; letter-spacing: -.02em; color: #edeef1; font-variant-numeric: tabular-nums; }
@@ -7118,6 +7215,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let ready = false;
     let rafOn = false;           // the loop only runs while the panel is open
     let tab = 'lyrics';          // hub tabs: lyrics | queue | stats
+    let chapToldFor = '';        // the track whose chapter count was announced
     let maxOn = false;           // immersive fullscreen
     let menuOn = false, keysOn = false, keysBuilt = false;
     let chipShown = false, lastTm = -1;
@@ -7230,7 +7328,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       root = host.attachShadow({ mode: 'open' });
       // SoundCloud sees every key typed in here as landing on the host <div> and runs its shortcuts
       // (S focuses search, Space toggles play, digits seek); keep field input inside the panel
-      root.addEventListener('keydown', (e) => {
+      // typing inside the hub never reaches SoundCloud's own shortcuts: its Space toggle listens on keyup
+      // as well, so every key event of a field is shielded, not just keydown
+      for (const ev of ['keydown', 'keypress', 'keyup']) root.addEventListener(ev, (e) => {
         const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
       });
@@ -7294,6 +7394,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (tapOn) { e.preventDefault(); e.stopPropagation(); tapAdvance(); }
       }, true);
       qbody = panel.querySelector('#qbody');
+      Chapters.onChange = () => { try { if (tab === 'queue') renderQueue(); if (Chapters.fromDesc >= 3 && Chapters.href && chapToldFor !== Chapters.href && panel.classList.contains('open') && tab !== 'queue') { chapToldFor = Chapters.href; toast(Chapters.fromDesc + ' chapters in this one · Queue tab'); } } catch (e) {} };
+      setInterval(paintChapterNow, 1000);
       sbody = panel.querySelector('#sbody');
       ebody = panel.querySelector('#ebody');
       abody = panel.querySelector('#abody');
@@ -7881,6 +7983,69 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // Tweaks is not rebuilt here: a track change would throw away focus, scroll, open groups and any unsaved edit
     }
 
+    function renderChapters() {   // the chapters block at the top of the Queue tab; true when anything was drawn
+      const L = Chapters.list;
+      if (!L.length) return false;
+      const cues = L.length - Chapters.fromDesc;
+      const head2 = document.createElement('div');
+      head2.className = 'qhead';
+      head2.textContent = (Chapters.fromDesc ? Chapters.fromDesc + (Chapters.fromDesc === 1 ? ' chapter' : ' chapters') + ' from the description' : '') + (cues ? (Chapters.fromDesc ? ' · ' : '') + cues + (cues === 1 ? ' cue point' : ' cue points') : '');
+      qbody.appendChild(head2);
+      const bar = document.createElement('div');
+      bar.className = 'sbtns';
+      bar.style.paddingTop = '2px';
+      const cueB = document.createElement('button'); cueB.className = 'sbtn'; cueB.textContent = '+ Cue here'; cueB.title = 'Drop a cue point at the current time';
+      cueB.addEventListener('click', () => addCueNow());
+      const cpB = document.createElement('button'); cpB.className = 'sbtn'; cpB.textContent = 'Copy'; cpB.title = 'Copy the tracklist with timestamps';
+      cpB.addEventListener('click', () => { try { GM_setClipboard(Chapters.tracklistText()); toast('Tracklist copied'); } catch (e) { toast('Copy failed'); } });
+      bar.append(cueB, cpB);
+      qbody.appendChild(bar);
+      const wrap = document.createElement('div');
+      const now = Chapters.indexAt(Media.time() || 0);
+      L.forEach((c, i) => {
+        const r = document.createElement('div');
+        r.className = 'qrow ch' + (i === now ? ' now' : '') + (c.src === 'cue' ? ' cue' : '');
+        r.tabIndex = 0; r.setAttribute('role', 'button');
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = Chapters.ts(c.t);
+        const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = c.name;
+        r.append(n, qt);
+        if (c.src === 'cue') {
+          r.title = 'Click to jump here · double-click to rename';
+          const x = document.createElement('button'); x.className = 'chx'; x.textContent = '✕'; x.title = 'Remove this cue'; x.setAttribute('aria-label', 'Remove cue ' + c.name);
+          x.addEventListener('click', (ev) => { ev.stopPropagation(); Chapters.removeCue(c.t); toast('Cue removed'); });
+          r.appendChild(x);
+          r.addEventListener('dblclick', () => { let v = null; try { v = prompt('Cue name', c.name); } catch (e) {} if (v != null && v.trim()) Chapters.renameCue(c.t, v.trim().slice(0, 80)); });
+        } else r.title = 'Click to jump here';
+        r.addEventListener('click', () => Media.seek(c.t));
+        r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); Media.seek(c.t); } });
+        wrap.appendChild(r);
+      });
+      qbody.appendChild(wrap);
+      return true;
+    }
+    function paintChapterNow() {   // 1 Hz while the Queue tab shows: the playing chapter follows the head
+      try {
+        if (tab !== 'queue' || !panel.classList.contains('open')) return;
+        const rows = qbody.querySelectorAll('.qrow.ch');
+        if (!rows.length) return;
+        const now = Chapters.indexAt(Media.time() || 0);
+        rows.forEach((r, i) => { const on = i === now; if (r.classList.contains('now') !== on) { r.classList.toggle('now', on); if (on) { try { r.scrollIntoView({ block: 'nearest' }); } catch (e) {} } } });
+      } catch (e) {}
+    }
+    function curDur() { try { const el = Media.el(); return (el && isFinite(el.duration)) ? el.duration : 0; } catch (e) { return 0; } }
+    function addCueNow() {
+      const t = Media.time();
+      if (!Chapters.href || !(t >= 0)) { toast('Play a track first'); return; }
+      const nm = Chapters.addCue(t);
+      if (nm) toast(nm + ' at ' + Chapters.ts(t) + ' · double-click it to rename');
+    }
+    function jumpChapter(d) {
+      const L = Chapters.list; if (!L.length) { toast('No chapters on this track'); return; }
+      const t = Media.time() || 0, i = Chapters.indexAt(t);
+      let k = d > 0 ? i + 1 : (i >= 0 && t - L[i].t > 3 ? i : i - 1);
+      k = Math.max(0, Math.min(L.length - 1, k));
+      Media.seek(L[k].t); toast(Chapters.ts(L[k].t) + ' · ' + L[k].name);
+    }
     function renderQueue() {
       // a track change re-renders this tab — keep whatever the user was typing AND
       // their focus/caret, so a track flipping mid-type doesn't kick them out of the box
@@ -7889,9 +8054,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let prevCaret = null;
       try { if (prevInp && prevInp.getRootNode().activeElement === prevInp) prevCaret = prevInp.selectionStart; } catch (e) {}
       qbody.replaceChildren();
+      const hadCh = renderChapters();
       const list = SUITE.queueList && SUITE.queueList();
       if (!list) {
-        qbody.appendChild(stateEl(ICONS.note, 'No shuffle queue', 'Run Shuffle Play and the full shuffled order shows up here.', [
+        if (!hadCh) qbody.appendChild(stateEl(ICONS.note, 'No shuffle queue', 'Run Shuffle Play and the full shuffled order shows up here.', [
           { label: 'Shuffle now', acc: true, fn: () => { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; toast(m || 'Shuffling…'); } },
         ]));
         return;
@@ -8221,6 +8387,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Focus mode: ' + (focusOn ? 'on' : 'off'), () => toggleFocus(), 'K');
       mi('Copy lyrics', () => App.copyLyrics());
       mi('Export .lrc file', () => App.exportLrc());
+      if (Chapters.list.length || curDur() >= 600) {
+        sep();
+        if (Chapters.list.length) mi('Chapters (' + Chapters.list.length + ')', () => setTab('queue'));
+        mi('Add cue point at ' + Chapters.ts(Media.time() || 0), () => addCueNow());
+        if (Chapters.list.length) mi('Copy tracklist', () => { try { GM_setClipboard(Chapters.tracklistText()); toast('Tracklist copied'); } catch (e) { toast('Copy failed'); } });
+      }
       // contribute back — only for lyrics you vetted (pasted / imported /
       // hand-picked / calibrated), so we never publish a junk guess
       if (curLyr && !curLyr.instr && (curLyr.picked || curLyr.src === 'file' || curLyr.src === 'paste' || App.anchorCount() > 0)) {
@@ -8610,6 +8782,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         { label: 'Retry', fn: () => App.retry() },
         { label: 'Report', fn: () => App.quickReport() },
         { label: 'Instrumental', fn: () => App.markInstrumental() },
+        ...(Chapters.list.length ? [{ label: 'Chapters (' + Chapters.list.length + ')', fn: () => setTab('queue') }] : []),
       ]));
       setSrcLine('No match — tap to search', true);
     }
@@ -9370,6 +9543,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('✕', 'Close hub', 'View', () => setOpen(false));
       // lyrics
       add('⟳', 'Re-search this track', 'Lyrics', () => { setOpen(true); setTab('lyrics'); App.retry(); });
+      // chapters / cue points
+      if (Chapters.list.length) {
+        add('☰', 'Chapters (' + Chapters.list.length + ')', 'Chapters', () => { setOpen(true); setTab('queue'); });
+        add('⏭', 'Next chapter', 'Chapters', () => jumpChapter(1));
+        add('⏮', 'Previous chapter', 'Chapters', () => jumpChapter(-1));
+        add('⎘', 'Copy tracklist', 'Chapters', () => { try { GM_setClipboard(Chapters.tracklistText()); toast('Tracklist copied'); } catch (e) { toast('Copy failed'); } });
+      }
+      add('◆', 'Add cue point here', 'Chapters', () => addCueNow());
       add('⌕', 'Pick a different match', 'Lyrics', () => { setOpen(true); setTab('lyrics'); enterSearch(); });
       add('/', 'Find in lyrics', 'Lyrics', () => { setOpen(true); setTab('lyrics'); openFind(); });
       add('⤓', 'Jump to chorus', 'Lyrics', () => { setOpen(true); if (searchMode) exitSearch(); jumpChorus(); });
@@ -9922,6 +10103,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       preconnect();   // first music = first third-party contact, not page load
       meta = m;
       meta.key = trackKey(m);
+      try { Chapters.load(meta); } catch (e) {}
       token++;
       lyr = null;
       off = 0;
@@ -14454,10 +14636,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     host.style.cssText = 'position:fixed;inset:0 0 auto auto;width:0;height:0;z-index:2147483300';
     (D.body || D.documentElement).appendChild(host);
     root = host.attachShadow({ mode: 'open' });
-    root.addEventListener('keydown', (e) => {   // typing in the panel's fields must not trigger SoundCloud's shortcuts
+    // typing in the panel's fields must not trigger SoundCloud's shortcuts (its Space toggle listens on keyup too)
+    for (const ev of ['keydown', 'keypress', 'keyup']) root.addEventListener(ev, (e) => {
       const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
-      if (e.key === 'Escape') { e.stopPropagation(); setPanel(false); try { const g = D.querySelector('.sce-gear'); if (g) g.focus(); } catch (e2) {} }
+      if (ev === 'keydown' && e.key === 'Escape') { e.stopPropagation(); setPanel(false); try { const g = D.querySelector('.sce-gear'); if (g) g.focus(); } catch (e2) {} }
     });
     const st = D.createElement('style'); st.textContent = PANEL_CSS; root.appendChild(st);
     const wrap = D.createElement('div'); wrap.className = 'wrap';
