@@ -12,7 +12,7 @@ Paste these into the developer dashboard. Files referenced are in this folder.
 | Category | Entertainment |
 | Language | English (United States) |
 | Store icon (128×128) | `store-icon-128.png` |
-| Screenshots (1280×800, in this order) | `screenshot-1-lyrics.png`, `screenshot-2-audio.png`, `screenshot-3-themes.png`, `screenshot-4-tools.png`, `screenshot-5-tweaks.png` |
+| Screenshots (1280×800, in this order) | `screenshot-1-lyrics.png`, `screenshot-2-audio.png`, `screenshot-3-themes.png`, `screenshot-4-tools.png`, `screenshot-5-chapters.png` |
 | Small promo tile (440×280) | `promo-small-440x280.png` |
 | Marquee promo tile (1400×560) | `promo-marquee-1400x560.png` |
 | Global promo video | none |
