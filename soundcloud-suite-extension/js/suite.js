@@ -940,6 +940,7 @@
         let u = url;
         try {
             this.__bhFeedPage = null;   // a re-open()ed XHR must never answer with a stale feed page
+            if (this.__bhListHooked) { try { delete this.responseText; delete this.response; } catch (e) {} this.__bhListHooked = false; }   // nor serve a previous list's filtered body
             const raw = String(url);
             sniffUrl(raw, method);
             this.__bhApi = API_RE.test(raw);
@@ -4711,11 +4712,11 @@
       if (!desc) return out;
       const TS = '(?:(\\d{1,2}):)?(\\d{1,3}):(\\d{2})';
       const first = new RegExp('^(?:\\d{1,3}[.)]\\s*)?[\\[(]?' + TS + '[\\])]?\\s*[-–—:|.]*\\s*(.+?)\\s*$');
-      const last = new RegExp('^(?:\\d{1,3}[.)]\\s*)?(.+?)\\s*[-–—|@(\\[]*\\s*[\\[(]?' + TS + '[\\])]?\\s*$');
+      const last = new RegExp('^(?:\\d{1,3}[.)]\\s*)?(.+?)[\\s\\-–—|@(\\[]*[\\[(]?' + TS + '[\\])]?\\s*$');
       const toSec = (h, m, x) => (h ? +h * 3600 : 0) + (+m) * 60 + (+x);
       for (let ln of String(desc).split(/\r?\n/)) {
-        ln = ln.replace(/^[\s\-–—•*·>#]+/, '').trim();
-        if (!ln || /https?:\/\/|www\./i.test(ln)) continue;
+        ln = ln.replace(/^[\s\-–—•*·>#]+/, '').trim().replace(/\s+/g, ' ');
+        if (!ln || ln.length > 300 || /https?:\/\/|www\./i.test(ln)) continue;
         let m = first.exec(ln), t, name;
         if (m) { t = toSec(m[1], m[2], m[3]); name = m[4]; }
         else { m = last.exec(ln); if (!m) continue; name = m[1]; t = toSec(m[2], m[3], m[4]); }
@@ -6924,7 +6925,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .nxt:hover b { color: #fff; }
 .nxt b { color: #c9c9cf; font-weight: 650; }
 .nxt .zap { color: var(--acc2); }
-.toast { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%) translateY(6px); background: rgba(30,30,34,0.97); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09), 0 8px 24px rgba(0,0,0,0.45); color: #ececf0; font-size: 11px; font-weight: 600; letter-spacing: .1px; padding: 6px 13px; border-radius: 99px; opacity: 0; pointer-events: none; transition: opacity 0.18s ease, transform 0.18s ease; white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%); }
+.toast { position: absolute; z-index: 9; left: 50%; bottom: 12px; transform: translateX(-50%) translateY(6px); background: rgba(30,30,34,0.97); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09), 0 8px 24px rgba(0,0,0,0.45); color: #ececf0; font-size: 11px; font-weight: 600; letter-spacing: .1px; padding: 6px 13px; border-radius: 99px; opacity: 0; pointer-events: none; transition: opacity 0.18s ease, transform 0.18s ease; white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%); }
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 .dghead { padding: 12px 14px 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #6e6e75; }
@@ -7046,6 +7047,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .sharebar .st { flex: 1; min-width: 0; line-height: 1.35; }
 .sharebar .st b { display: block; color: #fff; font-size: 12px; }
 .sharebar .btn { padding: 7px 11px; }
+.panel.lite .sharebar .btn:not(.acc) { color: #eaeaee; background: rgba(255,255,255,0.1); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1); }
+.panel.lite .sharebar .btn:not(.acc):hover { background: rgba(255,255,255,0.16); }
+.panel.sharing .toast { bottom: 82px; }
+.panel.sharing .chip { bottom: 112px; }
 .qrow.ch:hover { background: rgba(255,255,255,0.05); }
 .qrow.ch:focus-visible { outline: 2px solid var(--acc); outline-offset: -2px; }
 .qrow.ch .n { width: 50px; font-size: 10.5px; }
@@ -7439,6 +7444,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       for (const ev of ['keydown', 'keypress', 'keyup']) root.addEventListener(ev, (e) => {
         const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
+        else if (ev !== 'keydown' && (e.key === ' ' || e.key === 'Spacebar') && t && (t.tagName === 'BUTTON' || (typeof t.getAttribute === 'function' && t.getAttribute('role') === 'button'))) e.stopPropagation();   // the release of a Space that pressed a hub button is not a play / pause
       });
 
       const style = document.createElement('style');
@@ -7954,6 +7960,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function shareLinesText() { return shareSel.slice().sort((a, b) => a - b).map((i) => (lineEls[i] && lineEls[i].textContent) || '').filter(Boolean); }
     function shareClose() {
       if (shareBar) { try { shareBar.remove(); } catch (e) {} shareBar = null; }
+      try { panel.classList.remove('sharing'); } catch (e) {}
       if (shareSelClick) { try { body.removeEventListener('click', shareSelClick, true); } catch (e) {} shareSelClick = null; }
       for (const el of lineEls) if (el) el.classList.remove('sel');
       shareSel = [];
@@ -8002,7 +8009,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const saveB = document.createElement('button'); saveB.className = 'btn'; saveB.textContent = 'Save'; saveB.addEventListener('click', () => shareExport(false));
       const x = document.createElement('button'); x.className = 'btn'; x.textContent = '✕'; x.title = 'Close'; x.setAttribute('aria-label', 'Close the lyric card'); x.addEventListener('click', shareClose);
       shareBar.append(pv, st, copyB, saveB, x);
-      panel.appendChild(shareBar);
+      panel.appendChild(shareBar); panel.classList.add('sharing');
       shareSelClick = (ev) => {   // while the bar shows, a click on a line picks it instead of seeking
         const el = ev.target && ev.target.closest ? ev.target.closest('.line') : null;
         if (!el) return;
@@ -8871,6 +8878,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (keysOn) { showKeys(false); return true; }
       if (menuOn) { setMenu(false); return true; }
       if (findWrap) { closeFind(); return true; }
+      if (shareBar) { shareClose(); return true; }   // the lyric-card picker sits under the menu and the sheets
       if (maxOn) { toggleMax(false); return true; }
       return false;
     }
@@ -10890,7 +10898,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       // the palette floats above everything and can be open with the panel closed: Esc belongs to it first
       if (e.key === 'Escape' && UI.paletteOpen()) { e.preventDefault(); e.stopPropagation(); UI.closePalette(); return; }
-      if (e.key === 'Escape' && UI.shareOpen && UI.shareOpen()) { e.preventDefault(); e.stopPropagation(); UI.shareClose(); return; }
       if (!UI.isOpen()) return;
       // a held key auto-repeats ~30×/s: only the seek / nudge / text-size keys may repeat
       if (e.repeat && !/^(?:Arrow(?:Left|Right|Up|Down)|[-=+[\]{}<>,.])$/.test(e.key)) { e.preventDefault(); e.stopPropagation(); return; }
@@ -10935,6 +10942,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // would double-toggle play or double-seek)
       // a focused panel button (switch, tab, chip) keeps Space for itself — and SoundCloud must not see it either
       if ((e.key === ' ' || e.key === 'Spacebar') && rt && rt.tagName === 'BUTTON' && !UI.tapActive()) { e.stopPropagation(); return; }
+      if ((e.key === ' ' || e.key === 'Spacebar') && rt && typeof rt.getAttribute === 'function' && rt.getAttribute('role') === 'button' && !UI.tapActive()) { own(); try { rt.click(); } catch (e2) {} return; }   // ARIA buttons (chapter rows) activate like real ones
       if (e.key === ' ' || e.key === 'Spacebar') { own(); if (UI.tapActive()) UI.tapAdvance(); else App.playPause(); return; }
       if (e.key === 'a' || e.key === 'A') { own(); UI.startTapAlign(); return; }
       if (e.key === 'j' || e.key === 'J') { own(); App.seekBy(-10); return; }
@@ -13287,6 +13295,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function tsSecs(txt) { const p = String(txt).split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : (p[0] || 0) * 60 + (p[1] || 0); }
   function linkTimestamps() {
     if (!CFG.tsLinks || (tsTick++ % 2)) return;   // every other tick is plenty
+    if (/^\/[\w.-]+\/sets\//.test(location.pathname)) return;   // a playlist description has no single track to jump within
     const roots = D.querySelectorAll('.truncatedAudioInfo__content, .commentItem__body');
     for (const root of roots) {
       if (root.__sceTs) continue;
@@ -13313,6 +13322,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   function jumpToPageTime(sec) {
     const pageHref = location.pathname.replace(/\/$/, '');
+    if (/\/sets\//.test(pageHref)) { toast('Timestamps jump within a track page'); return; }
     const m = activeMedia();
     if (m && curTrackHref() === pageHref && isFinite(m.duration) && m.duration > 0) {
       __sceUserSeek = Date.now(); try { m.currentTime = Math.min(sec, m.duration - 1); } catch (e) {}
@@ -13357,7 +13367,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       el.title = 'Total length of this playlist, and when it would end if played from now';
       h2.appendChild(el);
     };
-    if (setMemo.has(path)) { paint(setMemo.get(path)); return; }
+    const prev = setMemo.get(path);
+    if (prev && prev.fail) { if (Date.now() - prev.fail < 60000) return; setMemo.delete(path); }   // a failed lookup waits a minute
+    else if (setMemo.has(path)) { paint(prev); return; }
     setMemo.set(path, null);   // one lookup per page
     try {   // the page's own hydration carries the playlist on a cold load; SPA navigation needs the API
       const hy = (W.__sc_hydration || []).find((x) => x && x.hydratable === 'playlist' && x.data && x.data.permalink_url && new URL(x.data.permalink_url).pathname === path);
@@ -13365,8 +13377,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
     const c = SUITE.clientId ? SUITE.clientId() : null; if (!c) { setMemo.delete(path); return; }
     gmGetJSON('https://api-v2.soundcloud.com/resolve?url=' + encodeURIComponent('https://soundcloud.com' + path) + '&client_id=' + encodeURIComponent(c)).then((j) => {
-      if (j && j.kind === 'playlist') { setMemo.set(path, { track_count: j.track_count, duration: j.duration }); paint(setMemo.get(path)); } else setMemo.delete(path);
-    }).catch(() => { setMemo.delete(path); });
+      if (j && j.kind === 'playlist') { setMemo.set(path, { track_count: j.track_count, duration: j.duration }); paint(setMemo.get(path)); } else setMemo.set(path, { fail: Date.now() });
+    }).catch(() => { setMemo.set(path, { fail: Date.now() }); });
   }
 
   function enforce() {
@@ -13637,7 +13649,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // per-track speed memory (opt-in): each track remembers the last speed you set
   // for it and restores it on play; untracked tracks keep whatever's current.
   let lastSpeedUrl = null;
-  function curTrackHref() { try { const a = D.querySelector('.playbackSoundBadge__titleLink'); return (a && a.getAttribute('href')) || null; } catch (e) { return null; } }
+  function curTrackHref() { try { const a = D.querySelector('.playbackSoundBadge__titleLink'); const h = (a && a.getAttribute('href')) || ''; return h ? h.split('?')[0].split('#')[0] || null : null; } catch (e) { return null; } }   // canonical: the badge link carries ?in=… when played from a set
   function rememberSpeed() {
     if (!CFG.speedPerTrack) return;
     try {
@@ -15023,6 +15035,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     for (const ev of ['keydown', 'keypress', 'keyup']) root.addEventListener(ev, (e) => {
       const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
+      else if ((e.key === ' ' || e.key === 'Spacebar') && t && (t.tagName === 'BUTTON' || (typeof t.getAttribute === 'function' && t.getAttribute('role') === 'button'))) e.stopPropagation();   // a Space on a panel switch is not a play / pause
       if (ev === 'keydown' && e.key === 'Escape') { e.stopPropagation(); setPanel(false); try { const g = D.querySelector('.sce-gear'); if (g) g.focus(); } catch (e2) {} }
     });
     const st = D.createElement('style'); st.textContent = PANEL_CSS; root.appendChild(st);
