@@ -30,14 +30,13 @@ Paste these into the developer dashboard. Files referenced are in this folder.
 
 | Field | Value |
 |---|---|
-| Single purpose | Enhance the SoundCloud web player: synced lyrics, audio processing, full-library shuffle and page themes on soundcloud.com. |
-| Privacy policy URL | https://github.com/zxcvbniyuujy/soundcloud-suite/blob/main/soundcloud-suite-extension/PRIVACY.md (valid once this branch is merged to main; until then use the branch URL) |
-| Host permission justification: soundcloud.com | The extension's entire purpose is to enhance soundcloud.com pages and its player. |
-| Host permission justification: lyric providers (lrclib.net, genius.com, itunes.apple.com, apic-desktop.musixmatch.com, api.lyrics.ovh, krcs.kugou.com, lyrics.kugou.com, music.163.com, html.duckduckgo.com, www.bing.com, www.mojeek.com, web.archive.org, api.allorigins.win, api.codetabs.com) | Fetches lyrics and lyric-search results for the track that is playing. Requests carry no cookies and are made only from the extension's own content script for these allowlisted hosts. |
-| Host permission justification: api.listenbrainz.org | Optional scrobbling of listened tracks to the user's own ListenBrainz account, only when the user enters their token. |
-| Host permission justification: translate.googleapis.com | Optional line-by-line lyric translation, only while the user has Translate switched on. |
-| Remote code | No. All logic ships in the package; the shuffle and proof-of-work workers are built from inline strings. Lyric sites return data, never code. |
-| Data usage | Collects no user data. Everything is stored locally in the browser. |
+| Single purpose description | Enhance the SoundCloud web player: synced lyrics, audio processing, full-library shuffle and page themes on soundcloud.com. |
+| Host permission justification (994 chars) | soundcloud.com and *.soundcloud.com: the extension runs only on the SoundCloud web player and enhances it. Every other host is a read-only data source for the synced-lyrics feature, fetched without cookies by the background worker for the extension's own content script only; any other host is refused. lrclib.net, genius.com, apic-desktop.musixmatch.com, api.lyrics.ovh, krcs.kugou.com, lyrics.kugou.com, music.163.com: lyric providers queried for the playing track. itunes.apple.com: canonical title and artist lookup. html.duckduckgo.com, www.bing.com, www.mojeek.com: find a lyrics page when no provider has the track. web.archive.org, api.allorigins.win, api.codetabs.com: fallback readers for lyric pages that block direct fetches. api.listenbrainz.org: optional scrobbling to the user's own ListenBrainz account, only with a token the user enters. translate.googleapis.com: optional lyric translation, only while the user switches it on. Responses are treated as data and never executed. |
+| Remote code | No, I am not using Remote code |
+| Data usage: what is collected | Website content only (the playing track's title and artist are sent to the lyric providers; lyric lines go to Google Translate only while Translate is on). Nothing else is checked. |
+| Certifications | All three checked |
+| Privacy policy URL (now) | https://github.com/zxcvbniyuujy/soundcloud-suite/blob/claude/focused-tesla-p6n356/soundcloud-suite-extension/PRIVACY.md |
+| Privacy policy URL (after merging to main) | https://github.com/zxcvbniyuujy/soundcloud-suite/blob/main/soundcloud-suite-extension/PRIVACY.md |
 
 ## Distribution
 
