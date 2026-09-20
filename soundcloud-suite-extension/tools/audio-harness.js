@@ -1699,9 +1699,9 @@ const FIXTURE_SRC = `
     eq((await get('peq')).length, 0, 'peq empty'); eq(await get('peqOn'), false, 'peqOn off'); eq(await get('peqName'), '', 'name cleared');
     eq(await toggleDesc('Headphone correction'), 'Paste an AutoEQ profile for your headphones', 'hint again'); eq(await btnDisplay('Clear'), 'none', 'Clear hidden');
     s = await snap(); for (let i = 0; i < 10; i++) eq(s.params.peq[i].gain, 0, 'peq[' + i + '] inert after Clear'); eq(s.params.preamp.gain, 1, 'preamp unity');
-    // the switch with nothing loaded opens the paste box (it can do nothing on its own)
-    eq(await switchClick('Headphone correction'), 'true', 'switch on'); eq((await boxState(0)).display, 'block', 'the box opens for an empty bank');
-    await boxBtn(0, 'Cancel'); eq(await switchClick('Headphone correction'), 'false', 'switch off'); await sleep(120);
+    // the switch with nothing loaded stays off and opens the paste box instead (routing an empty bank would do nothing)
+    eq(await switchClick('Headphone correction'), 'false', 'the switch stays off with nothing loaded'); eq((await boxState(0)).display, 'block', 'the box opens for an empty bank');
+    eq(await get('peqOn'), false, 'peqOn untouched'); await boxBtn(0, 'Cancel'); eq((await boxState(0)).display, 'none', 'Cancel closes it'); await sleep(120);
     await closeHub(); await sleep(150); s = await snap(); eq(s.routed, false, 'nothing on, tab closed → detached');
     await stopPlay();
   });
@@ -1783,7 +1783,7 @@ const FIXTURE_SRC = `
   scenario('speed-tab', async () => {
     // 2.19 + 2.20: Speed 50..200 step 5 right under the Listening on chips, six tempo chips (the lit one = the current
     // speed), the element's playbackRate follows within 200 ms, the bar pill mirrors it; Pitch follows speed flips
-    // preservesPitch on the element and shows the semitone shift (12·log2(rate)) in its description
+    // preservesPitch on the element and, while it is on, shows the semitone shift (12·log2(rate)) in its description
     await play('A', { loop: true });
     await audioTab();
     const order = await sectionOrder();
@@ -1804,7 +1804,9 @@ const FIXTURE_SRC = `
     eq(await barPill(), '1.5×', 'the player-bar pill reads 1.5×');
     r = await sliderByLabel('Speed'); eq(r.value, '150', 'the slider follows the chip'); eq(r.val, '1.5×', 'value 1.5×');
     chips = await tempoInfo(); eq(chips[4].bg, TINT.bg, '1.5× chip lit'); assert(chips.filter((c) => c.bg === TINT.bg).length === 1, 'only that one');
-    eq(await toggleDesc('Pitch follows speed'), 'Vinyl / tape feel · slowed sounds deeper, sped-up sounds higher · +7.0 semitones', 'semitones at 1.5× (12·log2 1.5 = 7.02)');
+    eq(await toggleDesc('Pitch follows speed'), 'Vinyl / tape feel · slowed sounds deeper, sped-up sounds higher', 'no semitone figure while pitch is preserved');
+    await set('vinylMode', true);
+    eq(await toggleDesc('Pitch follows speed'), 'Vinyl / tape feel · slowed sounds deeper, sped-up sounds higher · +7.0 semitones', 'semitones at 1.5× once pitch follows (12·log2 1.5 = 7.02)');
     // the 0.5× chip
     await btnClick('0.5×'); await sleep(200);
     eq(await get('speed'), 50, 'CFG.speed 50'); eq(await elProp('playbackRate'), 0.5, 'element 0.5'); eq(await barPill(), '0.5×', 'pill 0.5×');
@@ -1814,12 +1816,14 @@ const FIXTURE_SRC = `
     eq(await get('speed'), 85, 'slider writes CFG.speed'); eq(await elProp('playbackRate'), 0.85, 'element 0.85'); eq((await sliderByLabel('Speed')).val, '0.85×', 'value 0.85×');
     chips = await tempoInfo(); assert(chips.every((c) => c.bg === PLAIN.bg), 'no chip lit off a stop');
     assert(/−2\.8 semitones$/.test(await toggleDesc('Pitch follows speed')), 'the vinyl row reads −2.8 semitones at 0.85× (got ' + JSON.stringify(await toggleDesc('Pitch follows speed')) + ')');
-    // pitch follows speed: preservesPitch on the element, immediately, both ways
-    eq(await elProp('preservesPitch'), true, 'preservesPitch true by default');
+    // pitch follows speed: preservesPitch on the element, immediately, both ways; the figure leaves with the mode
+    await set('vinylMode', false); eq(await toggleDesc('Pitch follows speed'), 'Vinyl / tape feel · slowed sounds deeper, sped-up sounds higher', 'the figure leaves with the mode');
+    eq(await elProp('preservesPitch'), true, 'preservesPitch true with the mode off');
     await set('vinylMode', true); eq(await elProp('preservesPitch'), false, 'vinylMode → preservesPitch false');
     eq(await switchState('Pitch follows speed'), 'true', 'the switch follows a debug write');
     await set('vinylMode', false); eq(await elProp('preservesPitch'), true, 'off → true again');
     eq(await switchClick('Pitch follows speed'), 'true', 'switch on'); await sleep(60); eq(await elProp('preservesPitch'), false, 'the switch flips the element at once');
+    assert(/−2\.8 semitones$/.test(await toggleDesc('Pitch follows speed')), 'the switch click paints the figure at once');
     eq(await switchClick('Pitch follows speed'), 'false', 'switch off'); await sleep(60); eq(await elProp('preservesPitch'), true, 'restored');
     // a new element inherits the mode
     await set('vinylMode', true); await play('A', { loop: true }); eq(await elProp('preservesPitch'), false, 'a freshly captured element gets preservesPitch false'); eq(await elProp('playbackRate'), 0.85, 'and the speed');
@@ -2234,7 +2238,7 @@ const FIXTURE_SRC = `
     await dbg(`d.bypass(false);`); await sleep(150); b = await hubBtn(); eq(b.color, 'rgb(255, 106, 31)', 'released → lit');
     await set('boostAmt', 100); await sleep(150); b = await hubBtn(); eq(b.color, '', 'all off → plain'); eq(b.title, 'Open / close the lyrics hub', 'title restored');
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseenter'))); await sleep(100);
-    eq((await hubBtn()).tipText, 'Suite hub', 'the plain label is back');
+    eq((await hubBtn()).tipText, 'Lyrics hub', 'the plain label is back');
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseleave')));
     await closeHub(); await stopPlay();
   });
