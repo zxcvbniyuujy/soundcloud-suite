@@ -7704,7 +7704,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function setTab(t) {
       if (t !== 'lyrics' && t !== 'queue' && t !== 'stats' && t !== 'tweaks' && t !== 'audio') return;
       tab = t;
-      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(true); }   // find bar / manual search must not float over other tabs
+      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(); }   // find bar / manual search must not float over other tabs; a result found meanwhile gets painted
       try { GM_setValue('sl:tab', t); } catch (e) {}
       tabsEl.querySelectorAll('.tab').forEach((b) => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
       body.style.display = t === 'lyrics' ? '' : 'none';
