@@ -10026,6 +10026,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         for (const [id, nm] of themes) add('◧', 'Theme: ' + nm, 'Theme', () => { if (SUITE.setTheme) SUITE.setTheme(id); });
       }
       // backup
+      // audio, with the live state in the label so the row reads as a switch
+      try {
+        const st = SUITE.audioState ? SUITE.audioState() : null;
+        if (st && SUITE.audioCmd) {
+          const sw = (icon, label, key) => add(icon, label + ' · ' + (st[key] ? 'on' : 'off'), 'Audio', () => SUITE.audioCmd(key));
+          sw('☾', 'Night mode', 'night'); sw('✨', 'Enhance', 'enhance'); sw('≡', 'Loudness normalize', 'loudness'); sw('⫶', 'Equalizer', 'eq'); sw('◎', 'Crossfeed', 'crossfeed'); sw('●', 'Mono', 'mono');
+          [75, 100, 125, 150, 200].forEach((v) => add('⏩', 'Speed ' + (v / 100) + '×' + (st.speed === v ? ' · now' : ''), 'Audio', () => SUITE.audioCmd('speed', v)));
+          if (st.tempoLock) add('♩', 'Tempo lock off (' + st.tempoLock + ' BPM)', 'Audio', () => SUITE.audioCmd('tempoLock', 0));
+        }
+      } catch (e) {}
       add('⭳', 'Back up everything', 'Backup', () => { if (SUITE.backupAll) SUITE.backupAll(); });
       // navigate SoundCloud
       const nav = [['Home feed', '/feed'], ['Discover', '/discover'], ['Likes', '/you/likes'], ['Playlists', '/you/sets'], ['Albums', '/you/albums'], ['Following', '/you/following'], ['History', '/you/history'], ['Upload', '/upload'], ['Notifications', '/notifications'], ['Messages', '/messages'], ['Settings', '/settings']];
@@ -10060,7 +10070,24 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function cmdkRun() {
       const c = cmdkView[cmdkSel];
       closePalette();
-      if (c) { try { c.run(); } catch (e) {} }
+      if (c) { if (!c.arg) cmdkRemember(cmdKey(c)); try { c.run(); } catch (e) {} }
+    }
+    const RECENT_KEY = 'sl:cmdk:recent';
+    function cmdKey(c) { return String((c && c.label) || '').replace(/ · (on|off|now)$/, ''); }   // a switch's state is not part of its identity
+    function cmdkRecent() { try { const r = GM_getValue(RECENT_KEY, []); return Array.isArray(r) ? r.filter((x) => typeof x === 'string').slice(0, 5) : []; } catch (e) { return []; } }
+    function cmdkRemember(label) { try { const r = [label].concat(cmdkRecent().filter((x) => x !== label)).slice(0, 5); GM_setValue(RECENT_KEY, r); } catch (e) {} }
+    // a typed argument becomes one row: "12:34" / "1:02:03" jump there, "+30" / "-1:00" skip, "40%" of the track, "1.5x" speed, "170 bpm" tempo lock
+    function cmdkArg(q) {
+      const fmt = (sec) => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); };
+      const dur = () => { let el = null; try { el = Media.el(); } catch (e) { el = null; } return el && isFinite(el.duration) && el.duration > 0 ? el.duration : 0; };
+      const clampT = (t) => { const d = dur(); return Math.max(0, d ? Math.min(t, d - 1) : t); };
+      let m;
+      if ((m = q.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/))) { const t = m[3] != null ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : (+m[1]) * 60 + (+m[2]); return { arg: true, icon: '⇥', label: 'Jump to ' + fmt(t), hint: 'Player', run: () => Media.seek(clampT(t)) }; }
+      if ((m = q.match(/^([+-])(\d{1,3})(?::(\d{2}))?$/))) { const n = m[3] != null ? (+m[2]) * 60 + (+m[3]) : +m[2], back = m[1] === '-'; return { arg: true, icon: back ? '⇤' : '⇥', label: (back ? 'Back ' : 'Skip ahead ') + (n >= 60 ? fmt(n) : n + ' s'), hint: 'Player', run: () => Media.seek(clampT((Media.time() || 0) + (back ? -n : n))) }; }
+      if ((m = q.match(/^(\d{1,3})\s*%$/))) { const p = Math.min(100, +m[1]); return { arg: true, icon: '⇥', label: 'Jump to ' + p + '%' + (dur() ? ' (' + fmt(dur() * p / 100) + ')' : ''), hint: 'Player', run: () => { const d = dur(); if (d) Media.seek(clampT(d * p / 100)); else toast('Track length unknown yet'); } }; }
+      if ((m = q.match(/^(\d(?:[.,]\d{1,2})?)\s*[x×]$/))) { const v = Math.round(parseFloat(m[1].replace(',', '.')) * 100); if (v >= 50 && v <= 200 && SUITE.audioCmd) return { arg: true, icon: '⏩', label: 'Speed ' + (v / 100) + '×', hint: 'Audio', run: () => SUITE.audioCmd('speed', v) }; }
+      if ((m = q.match(/^(?:bpm\s*(\d{2,3})|(\d{2,3})\s*bpm)$/))) { const n = +(m[1] || m[2]); if (n >= 40 && n <= 300 && SUITE.audioCmd) { const st = SUITE.audioState ? SUITE.audioState() : null; const rate = st && st.bpm ? Math.min(2, Math.max(0.5, n / st.bpm)) : 0; return { arg: true, icon: '♩', label: 'Lock tempo at ' + n + ' BPM', hint: rate ? 'Audio · ' + rate.toFixed(2) + '×, every track' : 'Audio · every track, once its tempo is known', run: () => SUITE.audioCmd('tempoLock', n) }; } }
+      return null;
     }
     // Enter is play / pause on SoundCloud, on the key's release: when a sheet or the palette acts on the keydown
     // and closes, the keyup lands on the page, so the next release of that key is swallowed at the window
@@ -10103,14 +10130,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (q) {
         list = all.map((c) => ({ c, s: Math.max(cmdkFuzzy(q, c.label), cmdkFuzzy(q, c.hint) - 5) }))
           .filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.c);
+        // typed arguments: a time to jump to, a speed, a tempo to lock to
+        const arg = cmdkArg(q); if (arg) list = [arg].concat(list);
         // your likes, by title or artist, after the commands: pick one and it opens and plays
         let hits = null; try { hits = SUITE.libSearch ? SUITE.libSearch(q, 6) : null; } catch (e) { hits = null; }
         if (hits && hits.length) list = list.concat(hits.map((h) => ({ icon: '♥', label: h.title + (h.artist ? ' — ' + h.artist : ''), hint: 'Likes' + (h.durMs ? ' · ' + fmtDur(h.durMs) : ''), run: () => playHref(h.url) })));
+      } else {
+        // nothing typed: the commands run most recently come first
+        const rec = cmdkRecent().map((key) => all.find((c) => cmdKey(c) === key)).filter(Boolean);
+        if (rec.length) list = rec.map((c) => Object.assign({}, c, { hint: 'Recent' })).concat(all.filter((c) => rec.indexOf(c) === -1));
       }
       cmdkView = list; cmdkSel = 0;
       cmdkListEl.replaceChildren();
       if (!list.length) {
-        const e = document.createElement('div'); e.className = 'cmdkempty'; e.textContent = (SUITE.libSearch && SUITE.libSearch('__', 1) !== null) ? 'No matching commands or liked tracks' : 'No matching commands';
+        const e = document.createElement('div'); e.className = 'cmdkempty'; e.textContent = ((SUITE.libSearch && SUITE.libSearch('__', 1) !== null) ? 'No matching commands or liked tracks' : 'No matching commands') + ' · try 12:34, +30, 40%, 1.5x or 170 bpm';
         cmdkListEl.appendChild(e); return;
       }
       list.forEach((c, i) => {
@@ -11383,6 +11416,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     resumePos: 'ask',       // long tracks remember their position: 'ask' | 'auto' | 'off'
     mediaKeys: true,        // title, artist, artwork and play / pause / seek in the OS now-playing panel
     pauseUnplug: true,      // an audio output that vanishes (headphones unplugged, Bluetooth dropped) pauses playback
+    tempoLock: 0,           // BPM to play every track at (the speed follows the measured tempo); 0 = off
     tsLinks: true,          // m:ss in descriptions and comments jumps there
     setRuntime: true,       // track count and total length under a playlist title
     bpmDetect: true,        // measure the tempo while the chain is routed
@@ -13613,6 +13647,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return { bpm: 60 * fs / (bestL + off), conf: Math.max(0, Math.min(1, (best - med) / (best + 1e-9))) };
   }
   function bpmMem() { const o = GET(BPM_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  // tempo lock: once a track's tempo is known, the speed is set so it plays at the chosen BPM (0.5×–2×);
+  // the estimator reports the track's own tempo (rate-corrected), so the loop is stable
+  function applyTempoLock() {
+    const lock = Math.min(300, Math.max(0, +CFG.tempoLock || 0)); if (!lock || !bpm.pub || !(bpm.pub.bpm > 0)) return false;
+    const want = Math.min(200, Math.max(50, Math.round(lock / bpm.pub.bpm * 100)));
+    if (want !== (CFG.speed | 0)) { CFG.speed = want; save(); applySpeed(); try { refreshBar(); } catch (e) {} repaintAudioSoon(); }
+    return true;
+  }
   function bpmTick(m) {   // 1 Hz: track changes reset (and recall), an estimate every 4 s of routed playback
     if (!CFG.bpmDetect) { if (bpm.pub) bpm.pub = null; return; }
     if (m && m !== bpm.el) { bpm.el = m; bpm.n = 0; }   // a new element, a fresh envelope
@@ -13620,9 +13662,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (href !== bpm.href) {
       bpmReset(href);
       const e = href && bpmMem()[href];
-      if (e && e.b > 0 && Date.now() - (e.t || 0) < 365 * 864e5) bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' };
+      if (e && e.b > 0 && Date.now() - (e.t || 0) < 365 * 864e5) { bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' }; applyTempoLock(); }
     }
     if (!m || m.paused || (++bpm.tick % 4)) return;
+    if (bpm.pub && Math.abs((m.playbackRate || 1) - 1) > 0.01) return;   // time-stretching smears the onsets: a known tempo is never replaced while the speed is off 1×
     const est = bpmEstimate(); if (!est || est.conf < 0.3) return;
     const rate = (m.playbackRate > 0 ? m.playbackRate : 1), b = est.bpm / rate;
     if (bpm.last && Math.abs(b - bpm.last) < 1.5) bpm.stable++; else bpm.stable = 0;
@@ -13631,6 +13674,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const rounded = Math.round(b * 10) / 10;
     if (!bpm.pub || bpm.pub.src !== 'measured' || Math.abs(bpm.pub.bpm - rounded) >= 0.5) {
       bpm.pub = { bpm: rounded, conf: Math.round(est.conf * 100) / 100, src: 'measured' };
+      applyTempoLock();
       if (href) { const map = bpmMem(); map[href] = { b: rounded, c: bpm.pub.conf, t: Date.now() }; const keys = Object.keys(map); if (keys.length > BPM_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete map[k]; }); } SET(BPM_KEY, map); }
       repaintAudioSoon();
     }
@@ -14758,7 +14802,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       });
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
       const bpmLine = D.createElement('div'); bpmLine.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:8px;font-variant-numeric:tabular-nums'; bodyEl.appendChild(bpmLine);
-      const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on'); if (bpmLine.textContent !== t) bpmLine.textContent = t; };
+      const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); if (bpmLine.textContent !== t) bpmLine.textContent = t; };
       paintBpm(); liveSync.push(paintBpm);
       paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
@@ -15229,7 +15273,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (n) => { devCount = () => Promise.resolve(n); onDeviceChange(); }, devOut: () => devOutN, bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (n) => { devCount = () => Promise.resolve(n); onDeviceChange(); }, devOut: () => devOutN, audioCmd: (n, a) => SUITE.audioCmd(n, a), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15960,6 +16004,30 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const minMs = (parseInt(CFG.feedMinMin, 10) || 0) * 60000, maxMs = (parseInt(CFG.feedMaxMin, 10) || 0) * 60000;
       const hideReposts = !!CFG.hideReposts, hideLiked = !!CFG.feedHideLiked, hidePlayed = !!CFG.feedHidePlayed;
       return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked || hidePlayed), mute, minMs, maxMs, hideReposts, hideLiked, hidePlayed };
+    };
+  } catch (e) {}
+  /* ── audio commands for the palette: toggles, speeds and the tempo lock, with the live state for labels ── */
+  try {
+    SUITE.audioState = () => ({ night: !!CFG.nightOn, enhance: !!CFG.enhanceOn, loudness: !!CFG.loudnessOn, eq: !!CFG.eqOn, mono: !!CFG.monoOn, crossfeed: !!CFG.crossfeedOn, speed: CFG.speed | 0, tempoLock: CFG.tempoLock | 0, bpm: bpm.pub && bpm.pub.bpm > 0 ? bpm.pub.bpm : 0 });
+    SUITE.audioCmd = (name, arg) => {
+      const flip = (key, label) => { CFG[key] = !CFG[key]; save(); applyFx(); repaintAudioSoon(); toast(label + (CFG[key] ? ' on' : ' off')); return true; };
+      switch (name) {
+        case 'night': toggleNight(); return true;
+        case 'enhance': return flip('enhanceOn', 'Enhance');
+        case 'loudness': return flip('loudnessOn', 'Loudness normalize');
+        case 'eq': return flip('eqOn', 'Equalizer');
+        case 'mono': return flip('monoOn', 'Mono');
+        case 'crossfeed': return flip('crossfeedOn', 'Crossfeed');
+        case 'speed': { const v = Math.min(200, Math.max(50, Math.round(+arg) || 100)); CFG.speed = v; save(); rememberSpeed(); applySpeed(); try { refreshBar(); } catch (e) {} repaintAudioSoon(); toast('Speed ' + (v / 100) + '×'); return true; }
+        case 'tempoLock': {
+          const v = +arg > 0 ? Math.min(300, Math.max(40, Math.round(+arg))) : 0;
+          CFG.tempoLock = v; save(); repaintAudioSoon();
+          if (!v) { toast('Tempo lock off · speed stays at ' + ((CFG.speed | 0) / 100) + '×'); return true; }
+          toast(applyTempoLock() ? 'Locked to ' + v + ' BPM · ' + ((CFG.speed | 0) / 100) + '×' : 'Locked to ' + v + ' BPM · applies once the tempo is known');
+          return true;
+        }
+      }
+      return false;
     };
   } catch (e) {}
 

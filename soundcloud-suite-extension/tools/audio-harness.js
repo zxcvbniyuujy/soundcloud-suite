@@ -1868,6 +1868,29 @@ const FIXTURE_SRC = `
     await closeHub(); await stopPlay();
   });
 
+  scenario('tempo-lock', async () => {
+    // the palette's "170 bpm": once the tempo is known the speed follows (lock ÷ tempo, 0.5×–2×), the estimator keeps
+    // reporting the track's own tempo under the new rate, a remembered tempo applies the lock at once on the next
+    // play, and turning the lock off leaves the speed where it is
+    await play('K', { loop: true, href: '/test/lock' });
+    await audioTab(); await sleep(30000);
+    let b = await dbg(`return d.bpm();`);
+    assert(b && Math.abs(b.bpm - 128) < 2, 'tempo known first (got ' + JSON.stringify(b) + ')');
+    await dbg(`d.audioCmd('tempoLock', 160);`); await sleep(600);
+    eq(await get('speed'), 125, 'speed = 160 / 128'); approx(await elProp('playbackRate'), 1.25, 0.01, 'element rate follows');
+    const line = await abody(`const el = [...a.querySelectorAll('div')].find((d) => /^Tempo ≈/.test(d.textContent)); return el ? el.textContent : null;`);
+    assert(line && /locked to 160 BPM/.test(line), 'the Audio tab says so (got ' + JSON.stringify(line) + ')');
+    await sleep(30000);
+    b = await dbg(`return d.bpm();`);
+    assert(b && Math.abs(b.bpm - 128) < 3, 'still the track\'s own tempo under the lock (got ' + JSON.stringify(b) + ')');
+    eq(await get('speed'), 125, 'speed unchanged by the re-estimate');
+    await dbg(`d.audioCmd('tempoLock', 96);`); await sleep(600);
+    eq(await get('speed'), 75, 'a new lock re-sets the speed (96 / 128)');
+    await dbg(`d.audioCmd('tempoLock', 0);`); await sleep(600);
+    eq(await get('speed'), 75, 'lock off keeps the speed'); eq(await get('tempoLock'), 0, 'lock cleared');
+    await stopPlay(); await closeHub();
+  });
+
   scenario('fades', async () => {
     // 2.21: fixture C (10 s) with fadeOn, fadeIn 0.6, fadeOut 2.5 — the output gain fades in on `playing`, ≈ 1 by 2 s,
     // fades out into the last 2.5 s, a seek restores unity within 100 ms, a pause + play resumes with a short fade;
