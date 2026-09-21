@@ -9,6 +9,7 @@
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg && msg.scss === 'sl-toggle') {
         try { window.postMessage({ scss: 'sl-toggle' }, location.origin); } catch (e) {}
+        try { sendResponse(true); } catch (e) {}   // an unanswered message reads as "no receiver" to the background, which reloads the tab
         return;
       }
       // a keyboard command: hand it to the page and answer with whether the page handled it
@@ -18,7 +19,7 @@
         const finish = (handled, info) => { if (done) return; done = true; window.removeEventListener('message', onAck); try { sendResponse(info && typeof info === 'object' ? { handled: handled === true, info } : handled === true); } catch (e) {} };
         const onAck = (e) => { const d = e.data; if (e.source === window && d && d.scss === 'cmd-ack' && d.id === id) finish(d.handled, d.info); };
         window.addEventListener('message', onAck);
-        setTimeout(() => finish(false), 400);
+        setTimeout(() => finish(false), 1500);   // a busy player tab (a shuffle load rendering, a lyric sheet painting) needs more than a frame
         try { window.postMessage({ scss: 'cmd', id, name: msg.name, broadcast: !!msg.broadcast }, location.origin); } catch (e) { finish(false); }
         return true;   // sendResponse comes later
       }

@@ -318,7 +318,7 @@
     };
     const LS = {
         get(k, fb) { try { const v = localStorage.getItem(k); return v == null ? fb : JSON.parse(v); } catch (e) { return fb; } },
-        set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+        set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
         del(k) { try { localStorage.removeItem(k); } catch (e) {} },
     };
     const SS = {
@@ -360,7 +360,26 @@
     const saveCfg = () => LS.set('bh_sc_cfg', CFG);
     const log = (...a) => CFG.debug && console.log('[SC-Shuffle]', ...a);
     // Most failures here are non-fatal by design — but never invisible in debug mode.
-    const swallow = (e, ctx) => { if (CFG.debug) console.warn('[SC-Shuffle]', ctx || '', e); };
+    const swallowSeen = new Map();   // ctx → when it was last logged: a failing tick must not fill the ring with copies
+    const swallow = (e, ctx) => {
+        try { const k = String(ctx || '?'), now = Date.now(); if (!(swallowSeen.get(k) > now - 10000)) { swallowSeen.set(k, now); Log.err('shuffle/' + k, e); } } catch (x) {}
+        if (CFG.debug) console.warn('[SC-Shuffle]', ctx || '', e);
+    };
+    // the plain-words reason behind a failed run, for the toast (the raw message goes to the log)
+    const shuffleReason = (e) => {
+        const m = String((e && e.message) || e || '');
+        if (/no auth captured|no client_id/.test(m)) return 'SoundCloud hasn’t made a request yet — play something, then try again';
+        if (/queue not available/.test(m)) return 'SoundCloud’s queue panel didn’t open';
+        if (/seed failed/.test(m)) return 'playback didn’t start';
+        if (/feed not consumed/.test(m)) return 'SoundCloud’s queue didn’t take the list';
+        if (/library too small|pool too small/.test(m)) return 'not enough tracks after your filters';
+        if (/api 401|api 403/.test(m)) return 'you seem to be signed out';
+        if (/api 429/.test(m)) return 'SoundCloud rate-limited the fetch — try again in a minute';
+        if (/api 5\d\d/.test(m)) return 'SoundCloud’s API is having trouble';
+        if (/resolve failed|no user id/.test(m)) return 'this page’s owner couldn’t be resolved';
+        if (/bad json/.test(m)) return 'SoundCloud answered with something that isn’t a list';
+        return '';
+    };
 
     /* Timings that used to live inline — tune in one place. */
     const T = {
@@ -378,8 +397,8 @@
      * debug mode, or window.__scShuffle.selfTest()) to see what broke.
      * Note: list/page selectors are only present on their own pages. */
     const SEL = {
-        playControl:      ['.playControl'],
-        skipNext:         ['.skipControl__next'],
+        playControl:      ['.playControl', '.playControls__play'],
+        skipNext:         ['.skipControl__next', '.playControls__next'],
         shuffleControl:   ['.shuffleControl'],
         queue:            ['.queue'],
         queueToggle:      ['.playbackSoundBadge__queueCircle'],
@@ -387,7 +406,7 @@
         queueHeights:     ['.queue__itemsHeight'],
         queueItem:        ['.queue__itemWrapper', '.queueItemView'],
         queueFallback:    ['.queue__fallback'],
-        badgeTitle:       ['.playbackSoundBadge__titleLink'],
+        badgeTitle:       ['.playbackSoundBadge__titleLink', '.playbackSoundBadge__titleContextContainer a[href^="/"]', '.playbackSoundBadge a[title][href^="/"]'],
         playButton:       ['.playButton'],
         rowTitle:         ['a.soundTitle__title', '.soundTitle__title a'],
         moreButton:       ['.sc-button-more'],
@@ -593,7 +612,7 @@
             swallow(e, 'lbFlush');
         });
     }
-    function lbScrobble(url) {
+    function lbScrobble(url, startedAt) {
         try {
             if (!lbToken()) return;
             const lm = getLibMap();
@@ -611,7 +630,7 @@
             }
             const q = LS.get(LB_QKEY, []);
             q.push({
-                listened_at: Math.round(Date.now() / 1000),
+                listened_at: Math.round((startedAt > 0 ? startedAt : Date.now()) / 1000),   // ListenBrainz wants the start of the listen
                 track_metadata: {
                     artist_name: artist, track_name: title,
                     additional_info: { origin_url: url, music_service: 'soundcloud.com', submission_client: 'SoundCloud Suite', duration_ms: hit[2] || undefined },
@@ -721,6 +740,19 @@
         };
     })();
 
+    // the player bar is on the page but the names this module relies on are not: SoundCloud changed its markup.
+    // Say so once, with the log, instead of letting stats, Alt+B, sleep and scrobbling go quiet
+    function selectorHealth() {
+        try {
+            if (S.selNoticeShown || !q('barHost')) return;
+            const gone = ['playControl', 'skipNext', 'badgeTitle'].filter((k) => !q(k));
+            if (!gone.length) return;
+            S.selNoticeShown = true;
+            Log.note('player selectors missing: ' + gone.join(', '));
+            showToast('SoundCloud’s player layout changed', 'Some Suite features are off until an update — the log names what went missing', { label: 'Copy log', fn: () => { try { GM_setClipboard(Log.dump()); } catch (e) {} } });
+        } catch (e) {}
+    }
+    setTimeout(selectorHealth, 45000); setTimeout(selectorHealth, 180000);   // the bar renders late on a cold load; a second look for a slow one
     function mkNextHref(page) {
         const base = new URL(S.tpl || `https://api-v2.soundcloud.com/me/track_likes?client_id=${S.clientId || ''}&limit=${CFG.boostedLimit}&linked_partitioning=1`);
         base.searchParams.set('limit', String(CFG.boostedLimit));
@@ -975,6 +1007,7 @@
         let u = url;
         try {
             this.__bhFeedPage = null;   // a re-open()ed XHR must never answer with a stale feed page
+            if (this.__bhFeedServed) { this.__bhFeedServed = false; for (const k of ['readyState', 'status', 'statusText', 'response', 'responseText', 'getAllResponseHeaders', 'getResponseHeader']) { try { delete this[k]; } catch (e) {} } }
             if (this.__bhListHooked) { try { delete this.responseText; delete this.response; } catch (e) {} this.__bhListHooked = false; }   // nor serve a previous list's filtered body
             const raw = String(url);
             sniffUrl(raw, method);
@@ -1018,7 +1051,8 @@
     XP.send = function (...args) {
         if (this.__bhFeedPage != null) {
             const xhr = this, page = this.__bhFeedPage;
-            setTimeout(() => {
+            xhr.__bhFeedServed = true;
+            Ticker.after(() => {   // the worker ticker: a page setTimeout is clamped to a second, or a minute, in a hidden tab
                 let body;
                 try { body = feedBody(page); }
                 catch (e) { body = '{"collection":[],"next_href":null,"query_urn":null}'; }
@@ -1361,9 +1395,13 @@
             });
             toastEl.appendChild(ab);
         }
-        requestAnimationFrame(() => toastEl.classList.add('show'));
+        // a hidden tab runs no animation frames: there the class goes on at once (after a reflow, so the transition
+        // still plays when the tab comes back) and the hide timer is armed only once the toast is showing —
+        // armed earlier it ran out while the frame was still waiting, and the toast stayed until tapped
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => toastEl.classList.remove('show'), action ? 9000 : 6000);
+        const arm = () => { clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), action ? 9000 : 6000); };
+        if (document.hidden) { void toastEl.offsetHeight; toastEl.classList.add('show'); arm(); }
+        else requestAnimationFrame(() => { toastEl.classList.add('show'); arm(); });
     }
 
     /* ───────────── STATS + HISTORY + WATCHDOGS (local only) ─────────────
@@ -1455,6 +1493,9 @@
             const now = Date.now();
             const dt = Math.min(now - W.last, 5000);
             W.last = now;
+            // the full like objects (a few KB each: tens of MB for a big library) are only reused for a reshuffle
+            // inside libReuseMs; past that the persistent cache is the source, so let the heap have the memory back
+            if (S.sessionLib && !S.active && !S.runInFlight && now - S.sessionLibAt > T.libReuseMs) S.sessionLib = null;
             const pc = q('playControl');
             const playing = pc && pc.classList.contains('playing');
             if (playing) {
@@ -1475,7 +1516,7 @@
                     const lmPrev = getLibMap();
                     const hitPrev = lmPrev && lmPrev.get(prevUrl);
                     const needMs = Math.min(CFG.playThresholdSec * 1000, hitPrev && hitPrev[2] > 0 ? hitPrev[2] * 0.8 : Infinity);
-                    if (W.curMs >= needMs) { sess.played++; allTime.played++; bumpPlay(prevUrl, 'p'); lbScrobble(prevUrl); }
+                    if (W.curMs >= needMs) { sess.played++; allTime.played++; bumpPlay(prevUrl, 'p'); lbScrobble(prevUrl, Date.now() - W.curMs); }
                     else if (W.curMs >= 2000) {
                         sess.skipped++; bumpPlay(prevUrl, 's');
                         // chronic skipper? close the loop: offer to block it
@@ -1564,14 +1605,17 @@
                 const ct = m ? m.currentTime : null;
                 if (ct != null) {
                     if (ct < T.stuckMinCT) {
+                        // a stream still being fetched (loading, nothing decoded yet) is buffering, not stuck: a slow
+                        // connection gets three times as long, and never a "won't start" mark
+                        const buffering = !m.error && m.networkState === 2 && m.readyState < 2;
                         W.stuckMs += dt;
-                        if (W.stuckMs >= T.stuckAfterMs && W.stuckKicks < 2) {
+                        if (W.stuckMs >= (buffering ? T.stuckAfterMs * 3 : T.stuckAfterMs) && W.stuckKicks < 2) {
                             W.stuckKicks++; W.stuckMs = 0;
                             // a track that refused to start TWICE is a broken like —
                             // but only when it's actually in YOUR library (the compact
                             // cache holds nothing else), and never on the first kick,
                             // which a 10s buffering stall can trip on its own
-                            if (W.stuckKicks >= 2 && W.href) {
+                            if (W.stuckKicks >= 2 && W.href && !buffering) {
                                 const su = 'https://soundcloud.com' + W.href.split('?')[0];
                                 const lm3 = getLibMap();
                                 const hit3 = lm3 && lm3.get(su);
@@ -1639,8 +1683,13 @@
         log('backoff', Math.round(ms) + 'ms');
         // a foreground run wakes up as soon as it is cancelled; a detached refresh
         // must keep its full delay (S.cancelled stays true after any earlier cancel)
-        if (detached) await pause(ms);
-        else await waitFor(() => S.cancelled, ms, 100);
+        if (detached) { await pause(ms); return; }
+        // the button says what the wait is for: a listener who sees "Fetching…" freeze clicks again, which cancels
+        // and restarts from page 0 — the worst move under a rate limit
+        const prev = S.btn ? S.btn.__bhTxt : null;
+        if (S.active && !S.cancelled) setBtn((isFinite(ra) && ra > 0 ? 'SoundCloud rate-limited the fetch' : 'SoundCloud is busy') + ' · retry ' + attempt + ' in ' + Math.ceil(ms / 1000) + ' s');
+        await waitFor(() => S.cancelled, ms, 100);
+        if (prev && S.active && !S.cancelled) setBtn(prev);
     }
 
     /* Fetch the WHOLE library: 500/request, auto step-down to 200 if refused,
@@ -1711,7 +1760,22 @@
                 ((it.track.user && it.track.user.username) || '').slice(0, 40),
                 (it.track.title || '').slice(0, 80),
             ]);
-            LS.set('bh_sc_lib', { t: Date.now(), items });
+            let ok = LS.set('bh_sc_lib', { t: Date.now(), items });
+            if (!ok) {
+                // localStorage is full: a big library shares 5 MB with SoundCloud itself and the lyric hub's cached page
+                // bodies. Those bodies are re-fetchable — shed them; then the titles (every reader tolerates a blank one)
+                try {
+                    const dead = [];
+                    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf('scssgm:pb:') === 0) dead.push(k); }
+                    dead.forEach((k) => localStorage.removeItem(k));
+                } catch (e) {}
+                ok = LS.set('bh_sc_lib', { t: Date.now(), items });
+                if (!ok) ok = LS.set('bh_sc_lib', { t: Date.now(), items: items.map((r) => [r[0], r[1], r[2], r[3], r[4], '']) });
+                if (!ok) {
+                    try { Log.err('shuffle/compactCache', 'localStorage full: ' + items.length + ' likes'); } catch (e) {}
+                    if (!S.quotaNoticeShown) { S.quotaNoticeShown = true; showToast('Your library is too big for the browser’s storage', 'Stats, the blocklist and lyric matching may miss some of your likes'); }
+                }
+            }
             invalidateLibMap();
         } catch (e) { swallow(e, 'saveCompactCache'); }
     }
@@ -1735,6 +1799,7 @@
                 rq.onupgradeneeded = () => { try { rq.result.createObjectStore(STORE); } catch (e) {} };
                 rq.onsuccess = () => res(rq.result);
                 rq.onerror = () => rej(rq.error || new Error('idb open failed'));
+                rq.onblocked = () => rej(new Error('idb blocked'));
             } catch (e) { rej(e); }
         });
         const op = (mode, fn) => open().then(db => new Promise((res, rej) => {
@@ -1756,7 +1821,8 @@
     })();
     async function idbLoadLib(libKey) {
         try {
-            const v = await LibCache.get(libKey);
+            // the cache is best-effort: a wedged IndexedDB (storage pressure, a stuck profile) must not hold the run
+            const v = await Promise.race([LibCache.get(libKey), pause(6000).then(() => { throw new Error('idb timeout'); })]);
             return v && Array.isArray(v.items) ? v : null;
         } catch (e) { swallow(e, 'idbLoadLib'); return null; }
     }
@@ -2428,7 +2494,12 @@
         // load, queue seed). Let it unwind before starting another, or two
         // loaders fight over the same queue and the first one's observer and
         // ticker leak for the rest of the session.
-        if (S.runInFlight) { showToast('Still stopping the last shuffle — try again in a moment'); return; }
+        if (S.runInFlight) {
+            // a run parked in an await that never settles would block every later click until a reload
+            if (!S.active && Date.now() - (S.runInFlightAt || 0) > 20000) S.runInFlight = null;
+            else { showToast('Still stopping the last shuffle — try again in a moment'); return; }
+        }
+        S.runInFlightAt = Date.now();
         S.runInFlight = runOnce(btn).catch(e => swallow(e, 'run')).then(() => { S.runInFlight = null; });
     }
     async function runOnce(btn) {
@@ -2480,7 +2551,14 @@
             await runClassic(btn, list);
         } catch (e) {
             console.error('[SC-Shuffle]', e);
+            try { Log.err('shuffle', e); } catch (x) {}
             cancel('Error – try again');
+            if (!/cancelled/.test(String((e && e.message) || ''))) {
+                const why = shuffleReason(e);
+                showToast('Shuffle failed' + (why ? ' — ' + why : ''), why ? '' : String((e && e.message) || e).slice(0, 90), { label: 'Copy log', fn: () => { try { GM_setClipboard(Log.dump()); } catch (x) {} } });
+            }
+            const at = Date.now(); S.errorAt = at;
+            setTimeout(() => { if (!S.active && S.errorAt === at && S.btn && S.btn.__bhTxt === 'Error – try again') setBtn('Shuffle Play'); }, 5000);
         }
     }
 
@@ -4730,8 +4808,10 @@
       while (active < MAX && queue.length) { active++; queue.shift()(); }
     };
     return {
-      run: (fn, deadlineMs) => new Promise((resolve, reject) => {
-        queue.push(() => {
+      // prio: the request a listener is waiting on (the exact LRCLIB lookup, the winning candidate's body) goes to the
+      // front — behind a FIFO it sat behind a superseded track's speculative waves and their 9–14 s timeouts
+      run: (fn, deadlineMs, prio) => new Promise((resolve, reject) => {
+        queue[prio ? 'unshift' : 'push'](() => {
           let freed = false;
           const free = () => { if (!freed) { freed = true; active--; pump(); } };
           // a GM request that never fires ANY callback (unanswered @connect
@@ -4766,7 +4846,7 @@
     } catch (e) { finish(reject, e); }
   });
 
-  const gmFetch = (url, opts) => NetGate.run(() => gmFetchRaw(url, opts), (opts && opts.timeout) || 5000);
+  const gmFetch = (url, opts) => NetGate.run(() => gmFetchRaw(url, opts), (opts && opts.timeout) || 5000, !!(opts && opts.prio));
 
   const gmJSON = async (url, opts) => {
     const text = await gmFetch(url, opts);
@@ -4841,12 +4921,14 @@
       const seq = ++this._seq;
       this.href = href; this.descList = []; this.rebuild();
       if (!href) return;
-      trackJson(href).then((d) => {
+      const attempt = (n) => trackJson(href).then((d) => {
         if (seq !== this._seq) return;
+        if (!d) { if (n < 2) setTimeout(() => { if (seq === this._seq) attempt(n + 1); }, n === 0 ? 3000 : 8000); return; }   // no client_id sniffed yet on a cold load
         const dur = (d && d.duration > 0) ? d.duration / 1000 : ((meta && meta.dur) || 0);
         this.descList = this.parse(d && d.description, dur);
         if (this.descList.length) this.rebuild();
       });
+      attempt(0);
     },
     indexAt(t) { let i = -1; for (let k = 0; k < this.list.length; k++) { if (this.list[k].t <= t + 0.5) i = k; else break; } return i; },
     addCue(t, name) {
@@ -4919,7 +5001,7 @@
       u.searchParams.set('artist_name', artist || '');
       if (album) u.searchParams.set('album_name', album);
       if (dur > 0) u.searchParams.set('duration', String(Math.round(dur)));
-      const it = await gmJSON(u.toString(), { headers: LRC_HEADERS, timeout: 7000 });
+      const it = await gmJSON(u.toString(), { headers: LRC_HEADERS, timeout: 7000, prio: true });
       return { songs: it && it.id ? [lrcItem(it, 0)] : [] };
     } catch (e) {
       lrcHandleErr(e);
@@ -5363,6 +5445,7 @@
     try { stored = GM_getValue('pb:' + key, null); } catch (e) {}
     if (stored != null) {
       const p0 = Promise.resolve(stored);
+      if (BodyCache.size >= 40) { const k = BodyCache.keys().next().value; BodyCache.delete(k); }
       BodyCache.set(key, p0);
       return p0;
     }
@@ -5388,7 +5471,7 @@
       const viaHtml = (html) => { const t = parseGeniusHtml(html); return t ? tidyLyricLines(t) : null; };
       const direct = async () => {
         try {
-          const html = await gmFetch(pageUrl, { timeout: 10000 });
+          const html = await gmFetch(pageUrl, { timeout: 10000, prio: true });
           const r = viaHtml(html);
           if (r) { GH.ok++; if (Gmode.get() === 'proxy') Gmode.set('direct'); return r; }
           GH.bad++; if (GH.ok === 0 && GH.bad >= 2) Gmode.set('proxy');
@@ -5426,11 +5509,33 @@
 
   /* ----- KUGOU (synced LRC, huge catalog, keyless) ----- */
 
+  // a blackholed lyric host must not cost every track 8–24 s of a request slot: four consecutive timeouts or network
+  // errors park it for 45 min (an HTTP error or an empty answer is an answer, not an outage); the next answer clears it
+  const HostPark = (() => {
+    const st = {};
+    const load = (n) => { if (!st[n]) { let u = 0; try { u = +GM_getValue('sl:park:' + n, 0) || 0; } catch (e) {} st[n] = { fails: 0, until: u }; } return st[n]; };
+    const outage = (e) => /^(timeout|neterr)$/.test(String((e && e.message) || e || ''));
+    ['netease', 'kugou'].forEach(load);
+    return {
+      parked: (n) => Date.now() < load(n).until,
+      ok: (n) => { const x = load(n); x.fails = 0; if (x.until) { x.until = 0; try { GM_setValue('sl:park:' + n, 0); } catch (e) {} } },
+      fail: (n, e) => {
+        if (!outage(e)) return false;
+        const x = load(n);
+        if (++x.fails >= 4) { x.fails = 0; x.until = Date.now() + 45 * 60000; try { GM_setValue('sl:park:' + n, x.until); } catch (err) {} try { Log.note(n + ' parked for 45 min: it keeps timing out from this network'); } catch (err) {} }
+        return true;
+      },
+      list: () => Object.keys(st).filter((n) => Date.now() < st[n].until),
+    };
+  })();
+
   async function kugouSearch(q, durSec) {
+    if (HostPark.parked('kugou')) return { songs: [] };
     const path = 'krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=' + encodeURIComponent(q)
       + '&duration=' + (durSec > 0 ? Math.round(durSec * 1000) : '') + '&hash=';
     // https only — a cleartext fallback would put song titles on the wire
-    const j = await gmJSON('https://' + path, { timeout: 8000 });
+    let j;
+    try { j = await gmJSON('https://' + path, { timeout: 8000 }); HostPark.ok('kugou'); } catch (e) { HostPark.fail('kugou', e); throw e; }
     const cands = (j && j.candidates) || [];
     return {
       songs: cands.slice(0, 6).map((c, i) => ({
@@ -5443,9 +5548,11 @@
 
   function kugouLyric(kid, kkey) {
     return cachedBody('k:' + kid, async () => {
+      if (HostPark.parked('kugou')) return null;
       const path = 'lyrics.kugou.com/download?ver=1&client=pc&id=' + kid
         + '&accesskey=' + encodeURIComponent(kkey || '') + '&fmt=lrc&charset=utf8';
-      const j = await gmJSON('https://' + path, { timeout: 8000 });
+      let j;
+      try { j = await gmJSON('https://' + path, { timeout: 8000, prio: true }); HostPark.ok('kugou'); } catch (e) { HostPark.fail('kugou', e); throw e; }
       if (!j || !j.content) return null;
       let raw = '';
       try { raw = atob(j.content); } catch (e) { return null; }
@@ -5460,8 +5567,12 @@
   // clients send (the well-known workaround of every third-party NetEase client)
   const NE_HEADERS = { 'X-Real-IP': '211.161.244.70', 'X-Forwarded-For': '211.161.244.70' };
   async function neteaseSearch(q, durSec) {
-    const j = await gmJSON('https://music.163.com/api/search/get?s=' + encodeURIComponent(q)
-      + '&type=1&limit=6&offset=0', { headers: NE_HEADERS, timeout: 8000 });
+    if (HostPark.parked('netease')) return { songs: [] };
+    let j;
+    try {
+      j = await gmJSON('https://music.163.com/api/search/get?s=' + encodeURIComponent(q) + '&type=1&limit=6&offset=0', { headers: NE_HEADERS, timeout: 8000 });
+      HostPark.ok('netease');
+    } catch (e) { HostPark.fail('netease', e); throw e; }
     const songs = (j && j.result && j.result.songs) || [];
     return {
       songs: songs.map((s, i) => {
@@ -5497,24 +5608,29 @@
   const NE_WORDS = new Map();   // nid → word map of the last body fetched this session (the lyric cache keeps the line text only)
   function neteaseLyric(nid) {
     return cachedBody('n:' + nid, async () => {
+      if (HostPark.parked('netease')) return null;
+      const NEO = { headers: NE_HEADERS, timeout: 8000, prio: true };
       // the v1 endpoint carries the word-level sheet next to the line sheet; without it, the karaoke wipe is a straight line
       try {
-        const j = await gmJSON('https://music.163.com/api/song/lyric/v1?os=pc&id=' + nid + '&cp=false&tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0', { headers: NE_HEADERS, timeout: 8000 });
+        const j = await gmJSON('https://music.163.com/api/song/lyric/v1?os=pc&id=' + nid + '&cp=false&tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0', NEO);
+        HostPark.ok('netease');
         const y = j && j.yrc && j.yrc.lyric ? parseYrc(j.yrc.lyric) : null;
-        if (y) { if (y.wt) NE_WORDS.set(nid, y.wt); return y.lrc; }
+        if (y) { if (y.wt) { NE_WORDS.set(nid, y.wt); if (NE_WORDS.size > 40) NE_WORDS.delete(NE_WORDS.keys().next().value); } return y.lrc; }
         const raw0 = j && j.lrc && j.lrc.lyric;
         if (raw0 && raw0.trim()) return raw0;
-      } catch (e) {}
+      } catch (e) {
+        if (HostPark.fail('netease', e)) return null;   // a host that did not answer will not answer its other doors either
+      }
       // os=pc matters: without it this endpoint refuses many clients —
       // the diagnostics trail showed search working but every body failing
       try {
-        const j = await gmJSON('https://music.163.com/api/song/lyric?os=pc&id=' + nid + '&lv=-1&kv=-1&tv=-1', { headers: NE_HEADERS, timeout: 8000 });
+        const j = await gmJSON('https://music.163.com/api/song/lyric?os=pc&id=' + nid + '&lv=-1&kv=-1&tv=-1', NEO);
         const raw = j && j.lrc && j.lrc.lyric;
         if (raw && raw.trim()) return raw;
       } catch (e) {}
       // second door: the legacy media endpoint serves the same LRC and
       // answers from networks the lyric API refuses outright
-      const j2 = await gmJSON('https://music.163.com/api/song/media?id=' + nid, { headers: NE_HEADERS, timeout: 8000 });
+      const j2 = await gmJSON('https://music.163.com/api/song/media?id=' + nid, NEO);
       const raw2 = j2 && j2.lyric;
       return raw2 && raw2.trim() ? raw2 : null;
     });
@@ -6904,6 +7020,18 @@
    * ------------------------------------------------------------------ */
 
   const SRC_NAME = { genius: 'Genius', lrclib: 'LRCLIB', kugou: 'Kugou', netease: 'NetEase', mxm: 'Musixmatch', ovh: 'Lyrics.ovh', file: 'Your file', paste: 'Pasted', scdesc: 'SC description' };
+  // what was unavailable during a search, in plain words, for the "no lyrics" card
+  function degradedReasons() {
+    const r = [];
+    try {
+      if (navigator.onLine === false) r.push('you are offline');
+      if (lrcCooldownActive()) r.push('LRCLIB is rate-limiting this browser');
+      if (MXM.dead()) r.push('Musixmatch is not answering');
+      if (Gmode.get() !== 'direct') r.push('Genius answers only through mirrors');
+      HostPark.list().forEach((n) => r.push((SRC_NAME[n] || n) + ' is not answering from this network'));
+    } catch (e) {}
+    return r;
+  }
 
   const CSS = `
 /*!__SUITE_CSS_BEGIN__*/
@@ -7556,6 +7684,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const UI = (() => {
     let root, panel, body, art, tt, src, toastEl, fab, barBtn, barDot, progEl, glowEl;
     let qbody, sbody, ebody, abody, tabsEl, tmEl, chipEl, menuEl, keysEl, gripEl, hdrEl, nxtEl, bMenuEl;
+    let histExpanded = false;          // Stats → history "Show all", kept across the re-render a track change causes
+    let qScrollAt = 0, qAutoAt = 0;    // the Queue tab's last listener scroll / last scroll of our own
     let open = false;
     let searchMode = false;
     let ready = false;
@@ -7745,6 +7875,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (tapOn) { e.preventDefault(); e.stopPropagation(); tapAdvance(); }
       }, true);
       qbody = panel.querySelector('#qbody');
+      qbody.addEventListener('scroll', () => { if (Date.now() - qAutoAt > 400) qScrollAt = Date.now(); }, { passive: true });
       Chapters.onChange = () => { try { if (tab === 'queue') renderQueue(); if (Chapters.fromDesc >= 3 && Chapters.href && chapToldFor !== Chapters.href && panel.classList.contains('open') && tab !== 'queue') { chapToldFor = Chapters.href; toast(Chapters.fromDesc + ' chapters in this one · Queue tab'); } } catch (e) {} };
       setInterval(paintChapterNow, 1000);
       sbody = panel.querySelector('#sbody');
@@ -8901,7 +9032,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           more.textContent = '… ' + (list.length - to).toLocaleString() + ' more ahead';
           rowsWrap.appendChild(more);
         }
-        if (nowRow) requestAnimationFrame(() => { try { qbody.scrollTop = Math.max(0, nowRow.offsetTop - qbody.clientHeight * 0.3); } catch (e) {} });
+        // follow the playing row, unless the listener scrolled the list within the last 10 s (they are reading ahead)
+        if (nowRow && Date.now() - qScrollAt > 10000) requestAnimationFrame(() => { try { qAutoAt = Date.now(); qbody.scrollTop = Math.max(0, nowRow.offsetTop - qbody.clientHeight * 0.3); } catch (e) {} });
       };
       qin.addEventListener('input', () => {
         clearTimeout(qin.__d);
@@ -9051,11 +9183,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           sbody.appendChild(qh('History · ' + hist.length + (hist.length >= 200 ? '+' : '')));
           const dayOf = (ts) => { if (!ts) return 'Earlier'; const d = new Date(ts), n = new Date(); const k = (v) => v.getFullYear() * 1000 + Math.floor((v - new Date(v.getFullYear(), 0, 1)) / 864e5); const dd = k(n) - k(d); return dd === 0 ? 'Today' : dd === 1 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
           const clock = (ts) => ts ? new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
-          const box = document.createElement('div'); let shown = 0, lastDay = null, expanded = false;
+          const box = document.createElement('div'); let shown = 0, lastDay = null;
           const paintHist = () => {
             box.replaceChildren(); shown = 0; lastDay = null;
             for (const e of hist) {
-              if (!expanded && shown >= 8) break;
+              if (!histExpanded && shown >= 8) break;
               const day = dayOf(e.ts);
               if (day !== lastDay) { lastDay = day; const dh = document.createElement('div'); dh.className = 'qhead'; dh.style.cssText = 'font-size:10px;opacity:.75;margin-top:4px'; dh.textContent = day; box.appendChild(dh); }
               const r = document.createElement('div'); r.className = 'qrow ch hist'; r.tabIndex = 0; r.setAttribute('role', 'button'); r.title = 'Open and play';
@@ -9068,7 +9200,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); swallowNextKeyup(ev.key); go(); } });
               box.appendChild(r); shown++;
             }
-            if (hist.length > 8) { const more = document.createElement('button'); more.className = 'sbtn'; more.style.margin = '6px 14px'; more.textContent = expanded ? 'Show less' : 'Show all ' + hist.length; more.addEventListener('click', () => { expanded = !expanded; paintHist(); }); box.appendChild(more); }
+            if (hist.length > 8) { const more = document.createElement('button'); more.className = 'sbtn'; more.style.margin = '6px 14px'; more.textContent = histExpanded ? 'Show less' : 'Show all ' + hist.length; more.addEventListener('click', () => { histExpanded = !histExpanded; paintHist(); }); box.appendChild(more); }
           };
           paintHist(); sbody.appendChild(box);
         }
@@ -9537,10 +9669,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     function showNone() {
       clearLyrics();
-      body.replaceChildren(stateEl(ICONS.sad, 'No lyrics found', 'Searched Genius, Musixmatch, LRCLIB, Kugou, NetEase and the web. Underground tracks often aren’t transcribed anywhere — paste your own, or report it.', [
-        { label: 'Search', acc: true, fn: () => enterSearch() },
+      // a search with sources missing is not a verdict on the track: say what was missing, lead with Retry
+      const why = degradedReasons();
+      const desc = why.length
+        ? 'Some sources were unavailable this time (' + why.join('; ') + '). The track is searched again the next time it plays.'
+        : 'Searched Genius, Musixmatch, LRCLIB, Kugou, NetEase and the web. Underground tracks often aren’t transcribed anywhere — paste your own, or report it.';
+      const retry = { label: 'Retry', acc: !!why.length, fn: () => App.retry() }, search = { label: 'Search', acc: !why.length, fn: () => enterSearch() };
+      body.replaceChildren(stateEl(ICONS.sad, why.length ? 'No lyrics found yet' : 'No lyrics found', desc, [
+        why.length ? retry : search,
         { label: 'Paste lyrics', fn: () => pasteSheet() },
-        { label: 'Retry', fn: () => App.retry() },
+        why.length ? search : retry,
         { label: 'Report', fn: () => App.quickReport() },
         { label: 'Instrumental', fn: () => App.markInstrumental() },
         ...(Chapters.list.length ? [{ label: 'Chapters (' + Chapters.list.length + ')', fn: () => setTab('queue') }] : []),
@@ -10026,7 +10164,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       searchMode = true;
       const meta = App.meta();
       const c = meta ? cleanTitle(meta.title) : { title: '', artist: '' };
-      const pre = ((c.artist ? c.artist + ' ' : '') + c.title).trim();
+      let artist = c.artist || '';
+      // "@handle title", "untitled" rips, crew uploads: the title carries no artist, but the likes library or an alias may
+      try { if (meta && !artist) artist = meta.libArtist || (Aliases.for(meta.uploader) || [])[0] || ''; } catch (e) {}
+      const pre = ((artist ? artist + ' ' : '') + c.title).trim();
 
       srchWrap = document.createElement('div');
       srchWrap.className = 'srch';
@@ -10117,12 +10258,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ...all.filter((x) => x.src === 'lrclib' && !x.synced && (x.plain || x.instrumental)),
         ].slice(0, 14);
       };
+      let painted = false, paintT = null;
       const handle = (res) => {
         if (!searchMode || seq !== searchSeq || !res) return;
         (res.songs || []).forEach((it) => { if (!got.has(it.id)) got.set(it.id, it); });
         (res.lyricHits || []).forEach((it) => { if (!got.has(it.id)) { it.fromLyric = true; got.set(it.id, it); } });
         const items = order();
-        if (items.length) paintResults(items);
+        if (!items.length) return;
+        if (!painted) { painted = true; paintResults(items); return; }
+        if (paintT) paintT.stop();
+        paintT = Ticker.after(() => { if (searchMode && seq === searchSeq) paintResults(order()); }, 250);
       };
 
       const geniusChain = Gmode.get() === 'direct'
@@ -10673,7 +10818,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       alignT = null;
       try {
         if (!aligner) return;
-        const again = () => { if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]); };
+        const again = () => { if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]); else alignStop(); };   // out of looks: the tap goes too
         if (!lyr || !lyr.synced || lyr.instr) { again(); return; }   // the sheet may still be on its way: look again later instead of giving up for this play
         const starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
         // an unscaled sheet timed to a longer or shorter master: the extra (or missing) part is usually at the start, so
@@ -10698,8 +10843,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             const lag = (alignHist[n - 1] + alignHist[n - 2]) / 2; r.lagAdj = Math.round(lag * 1000) / 1000;
             Trail.add('align agreed: ' + r.lagAdj + ' s' + (Math.abs(lag) < 0.25 ? ' (sheet is right)' : (!SyncAuto.ms && !off && !anch.length) ? ' → applied' : ' → offered (an offset is already set)'));
             // a finding applies itself, once, while nothing manual is in place; the toast says how to undo it
-            if (Math.abs(lag) >= 0.25 && !SyncAuto.ms && !off && !anch.length && SyncAuto.apply) { SyncAuto.apply(true); return; }
-            if (Math.abs(lag) < 0.25) return;   // the sheet is right: done looking
+            if (Math.abs(lag) >= 0.25 && !SyncAuto.ms && !off && !anch.length && SyncAuto.apply) { SyncAuto.apply(true); alignStop(); return; }
+            if (Math.abs(lag) < 0.25) { alignStop(); return; }   // the sheet is right: done looking, and done listening
           }
         }
         again();   // more audio, another look
@@ -10809,7 +10954,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     function apply(result, myToken) {
       if (myToken !== token) return;
-      if (UI.inSearch && UI.inSearch()) { try { UI.setBusy(false); } catch (e) {} lyr = result; return; }   // the search view stays; Back paints it
       try { UI.setBusy(false); } catch (e) {}
       // a confirmed provisional: don't re-render identical content (flash),
       // just drop the "verifying…" tag from the source line
@@ -10828,8 +10972,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         (result.src === lyr.src && !!result.synced === !!lyr.synced && sameLines(result.lines, lyr.lines)));
       const swapped = !!lyr && !same;   // a different sheet replacing one already shown (a pick, an import, an upgrade), not the first to arrive
       lyr = result;
-      if (!aligner && result && result.synced) alignStart();   // the source arrived after the track change
-      else if (aligner && swapped && result && result.synced) { alignHist = []; alignTries = 0; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
+      const synced = !!(result && result.synced && !result.instr);
+      if (swapped && synced) {
+        // the lag measured on the old sheet is not this one's: the auto offset goes (a manual nudge stays — it is
+        // small, and the listener would notice), and the next looks measure this sheet
+        if (SyncAuto.ms || SyncAuto.auto) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.auto = false; }
+        SyncAuto.last = null;
+        try { persistSync(); } catch (e) {}
+      }
+      if (!aligner && synced) alignStart();   // the source arrived after the track change
+      else if (aligner && swapped && synced) { alignHist = []; alignTries = 0; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
+      else if (aligner && !synced && !(meta && Inflight.has(meta.key))) alignStop();   // nothing to align and nothing still coming: the tap's 20 ms tick has no reader
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
       // (e.g. left by an older version) so they can't linger in storage / diagnostics
       if (result && result.synced && anch.length) { anch = []; try { persistSync(); } catch (e) {} }
@@ -10840,7 +10993,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       warmT = Ticker.after(warmNext, 6000);
       refreshNext();
       try { UI.syncTabs(); } catch (e) {}   // live Queue/Stats tabs follow track changes
-      try { UI.setMini(result && result.synced && !result.instr ? result.lines : null); } catch (e) {}
+      try { UI.setMini(synced ? result.lines : null); } catch (e) {}
+      if (UI.inSearch && UI.inSearch()) return;   // the search view stays; Back paints the sheet
       // auto-open: real lyrics just landed and the user opted in → reveal them
       try {
         if (result && !result.instr && !UI.isOpen() && UI.autoOpenWanted && UI.autoOpenWanted()) {
@@ -10957,13 +11111,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (it && it.synced) break; it = null;
           if (myToken !== token) return;
         }
-        entry.rechk = now; Cache.set(key, entry);   // stamped after the look, so a network failure does not lock a week out
+        const fresh = Cache.get(key) || entry;      // re-read: a nudge or an anchor may have been saved during the wait
+        fresh.rechk = now; Cache.set(key, fresh);   // stamped after the look, so a network failure does not lock a week out
         if (!it || myToken !== token) return;
         it.score = 0.9;
         const res = fromInline(it, dur || (it.dur || 0), c.flags);
         if (!res || !res.synced || !res.lines || !res.lines.length) return;
         const e2 = toCache(res); e2.off = 0; e2.rechk = now; Cache.set(key, e2);
-        off = 0; anch = []; apply(res, myToken);
+        off = 0; anch = []; apply(res, myToken); try { persistSync(); } catch (e) {}
         UI.toast('Synced lyrics found for this track');
       } catch (e) {}
     }
@@ -11374,7 +11529,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
         if (!result) {
           Trail.add('pick ' + item.src + ' "' + (item.t || '') + '" failed: ' + (why || 'no body'));
-          if (myToken === token && UI.isOpen()) { UI.showNone(); UI.toast(why || "Couldn't load that one"); }
+          if (myToken === token && UI.isOpen()) { try { rerender(); } catch (e) { UI.showNone(); } UI.toast(why || "Couldn't load that one"); }   // back to what was showing, not a "no lyrics" card nothing searched for
           return;
         }
         if (myToken !== token) return;   // track changed during the await — don't zero/cache the NEW track's state

@@ -92,6 +92,30 @@ never plays.
   which is what its lyric service wants from outside China; when a sheet still
   will not load, the toast says what happened (no answer, a placeholder, no
   timed lines) and the Copy diagnostics trail records it.
+- **Sturdier under real conditions** — the toolbar icon toggles the hub
+  without reloading the tab (it used to reload on every click, because the
+  relay never answered); toasts raised in a hidden tab go away on their own;
+  a failed shuffle says why on a toast with Copy log (queue panel, sign-in,
+  rate limit, filters) and the button resets; a rate-limited fetch counts
+  down on the button instead of looking frozen; a wedged IndexedDB cannot
+  park the button; a buffering stream gets three times as long before the
+  stuck-track watchdog skips it, and is never marked broken; a library too big
+  for localStorage sheds cached page bodies, then titles, then says so once;
+  the full like objects leave memory half an hour after the last shuffle; if
+  SoundCloud renames the player bar the suite says so once instead of going
+  quiet; ListenBrainz gets the start time of a listen.
+- **Lyric requests you wait for go first** — the exact LRCLIB lookup and the
+  winning candidate's body take a priority lane past a skipped track's
+  speculative waves; NetEase or Kugou that keep timing out are parked for
+  45 min; the "no lyrics" card names the sources that were unavailable and
+  leads with Retry; a result that arrives while the search box is open still
+  feeds the mini bar and the next-track pre-warm; a sheet swapped in late
+  drops the previous sheet's auto offset; a quiet upgrade never overwrites a
+  calibration saved while it waited; the vocal aligner's tap stops when there
+  is nothing left to align; chapters retry when the client_id was not seen
+  yet; a pick that cannot load leaves the sheet that was showing; the manual
+  search opens with the artist the library knows; the results list paints
+  once and then settles instead of rebuilding on every source.
 - **Loudness normalize measures the source at unity** — SoundCloud’s own
   volume slider sits before the capture point; it is compensated now, so a
   track played at 50 % is no longer read as quiet and pushed back up.
@@ -258,7 +282,20 @@ The debug accessor it reads (`window.__sceAudioDebug`) exists only while
   `[SoundCloud Suite] GM shim ready (extension build)` at page load.
 - Set `localStorage['scss:debug'] = '1'` on soundcloud.com to see the suite's
   caught errors in the console; **⋯ → Copy error log** in the hub copies the
-  same ring (tokens redacted).
+  same ring (tokens redacted). Shuffle failures land in the same ring, and the
+  "Shuffle failed" toast carries a Copy log button.
+- "SoundCloud's player layout changed" means the player bar is on the page but
+  the class names the suite relies on are not; the log names which. Stats,
+  Alt+B, sleep-after-this-track and scrobbling wait for an update.
+- "Your library is too big for the browser's storage" means the compact likes
+  index did not fit next to SoundCloud's own localStorage even after shedding
+  cached lyric page bodies and titles; the shuffle itself still works from
+  IndexedDB, but stats, the blocklist and lyric matching may miss some likes.
+- "No lyrics found yet … some sources were unavailable" is not a verdict on the
+  track: the card names what was missing (a rate-limited LRCLIB, a dead
+  Musixmatch token, Genius reachable only through mirrors, NetEase or Kugou
+  parked after four timeouts, or no network) and the track is searched again
+  next time it plays.
 
 ## License
 

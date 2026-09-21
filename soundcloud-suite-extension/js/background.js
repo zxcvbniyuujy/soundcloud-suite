@@ -43,7 +43,13 @@ chrome.action.onClicked.addListener((tab) => {
   const onSoundCloud = !!(tab && typeof tab.url === 'string' && SC_FRAME.test(tab.url));
   if (onSoundCloud && tab.id != null) {
     // no receiver = the tab was open before the install or update: reload it so the content scripts land
-    try { chrome.tabs.sendMessage(tab.id, { scss: 'sl-toggle' }, () => { if (chrome.runtime.lastError) { try { chrome.tabs.reload(tab.id); } catch (e) {} } }); } catch (e) {}
+    try {
+      chrome.tabs.sendMessage(tab.id, { scss: 'sl-toggle' }, () => {
+        const err = chrome.runtime.lastError;
+        // only the "no receiver" error means the scripts are missing; a closed port or any other answer means they ran
+        if (err && /receiving end does not exist|could not establish connection/i.test(String(err.message || ''))) { try { chrome.tabs.reload(tab.id); } catch (e) {} }
+      });
+    } catch (e) {}
     return;
   }
   try { chrome.tabs.create({ url: 'https://soundcloud.com/' }); } catch (e) {}
