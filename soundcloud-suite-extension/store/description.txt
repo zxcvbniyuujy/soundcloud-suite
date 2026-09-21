@@ -12,6 +12,7 @@ Open the hub and the words are right there, line by line, moving with the vocals
 • Translate in place, copy a quote with its timestamp, export .lrc
 • A small floating line while the hub is closed
 • Share a lyric card: pick up to six lines, get an image for your story
+• Remember three words? Find the song across every lyric sheet you have seen
 
 
 Audio
@@ -22,6 +23,7 @@ Drag an equalizer curve on a live spectrum, or just switch on Enhance and hear t
 • A true-peak clip guard, so nothing distorts
 • Speed from 0.5× to 2×, pitch that follows or holds
 • Stereo width, crossfeed, headphone correction
+• The tempo, measured from the audio itself, in BPM
 • Every control is an exact passthrough when off. Hold Compare to hear the original.
 
 
@@ -32,6 +34,7 @@ A two-hour set is no longer one flat waveform.
 • Chapters from the tracklist in the description, following the playhead
 • Your own cue points on any track
 • Long tracks remember where you stopped and offer to resume
+• A Continue listening shelf for the sets you left halfway
 • Every 12:34 in a description or comment jumps there
 • Playlists show their track count, total length and when they would end
 
@@ -43,7 +46,8 @@ True random across every track you have ever liked, not the first page the site 
 • Filter by genre or artist
 • Block what you are tired of
 • Skip what you just heard
-• Listening stats, a likes export, a one-file backup
+• Listening stats, a one-file backup, a likes export
+• A listening card: your hours, your peak hour, your week, as one image
 
 
 Look
@@ -51,7 +55,8 @@ Look
 Eleven dark themes. A light one. Zen mode for when you want nothing but the music.
 
 • Hide the upsells, the sidebar, the footer, the noise
-• Mute words, hide over-long mixes or tracks you already liked, straight from the feed
+• Mute words, hide over-long mixes or tracks you already liked or played, straight from the feed
+• Open on the page you choose
 • Title, artwork and seek on your media keys and the system now-playing panel
 • Speed, an A–B loop and a sleep timer in the player bar
 • Track info, timecodes, a waveform timeline

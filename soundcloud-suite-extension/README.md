@@ -20,13 +20,16 @@ No Tampermonkey needed. Version: see `manifest.json`.
   popover copies such a link at the current time.
 - **Playlist runtime** — track count, total length and the clock time a full
   play-through would end, under every playlist and album title.
+- **Continue listening** — the long tracks you left halfway, newest first, at
+  the top of the hub's Queue tab; one click picks up where you stopped.
 
 ## Feed rules
 
 Tweaks → Declutter: **Mute words** (title, artist, tags or genre), **Hide tracks
-shorter / longer than**, **Hide tracks you already liked** and **Hide reposts**
-run on SoundCloud's own feed, search and related-tracks responses before the
-page renders them, so a hidden track never shows and never plays.
+shorter / longer than**, **Hide tracks you already liked**, **Hide tracks you
+already played** (30 seconds in counts, remembered for a month) and **Hide
+reposts** run on SoundCloud's own feed, search and related-tracks responses
+before the page renders them, so a hidden track never shows and never plays.
 
 ## Player and system
 
@@ -35,6 +38,21 @@ page renders them, so a hidden track never shows and never plays.
   only next / previous).
 - **Lyric share card** — ⋯ menu → *Share a lyric card*: pick up to six lines,
   get a 1080×1080 image on the clipboard or as a file.
+- **Listening card** — Stats → *Share card*: total time, a 24-hour listening
+  clock, top artists and the last seven days as one 1080×1080 image.
+- **Find a song by a lyric** — ⋯ menu → *Find a song by a lyric*: the words you
+  remember, searched across every lyric sheet this browser has cached.
+- **Tempo** — the BPM measured from the audio itself (an onset detector in the
+  audio worklet), shown in the Audio tab and the track-info popover, corrected
+  for the playback speed and remembered per track (Tweaks → Player).
+- **Minute seeks** — `{` and `}` seek a whole minute; `[` and `]` still seek
+  ten seconds and the digits jump to a tenth of the track.
+- **Artwork ↗** — the track-info popover opens the full-size cover.
+- **Start page** — open SoundCloud on the page you choose (Tweaks → Player),
+  applied only on a cold load, never to a link you followed.
+- **Backups carry everything** — the one-file backup now includes cue points,
+  resume positions, measured tempos and the played-tracks memory, each
+  re-validated on import.
 
 ## Install / reload
 
