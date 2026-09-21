@@ -8449,6 +8449,29 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       qbody.appendChild(wrap);
       return true;
     }
+    function renderLater() {   // the Listen later shelf: saved tracks, newest first; a click opens and plays one
+      let list = [];
+      try { list = (SUITE.laterList && SUITE.laterList()) || []; } catch (e) { list = []; }
+      if (!list.length) return false;
+      const head2 = document.createElement('div'); head2.className = 'qhead'; head2.textContent = 'Listen later'; qbody.appendChild(head2);
+      const wrap = document.createElement('div');
+      for (const e of list) {
+        const r = document.createElement('div'); r.className = 'qrow ch later'; r.tabIndex = 0; r.setAttribute('role', 'button');
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = e.d ? Chapters.ts(e.d) : '☆';
+        const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = e.n;
+        const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = e.a || '';
+        const x = document.createElement('button'); x.className = 'chx'; x.textContent = '✕'; x.title = 'Remove from Listen later'; x.setAttribute('aria-label', 'Remove ' + e.n + ' from Listen later');
+        x.addEventListener('click', (ev) => { ev.stopPropagation(); try { SUITE.laterForget(e.href); } catch (er) {} renderQueue(); });
+        r.append(n, qt, qa, x);
+        r.title = 'Open and play';
+        const go = () => playHref(e.href);
+        r.addEventListener('click', go);
+        r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); swallowNextKeyup(ev.key); go(); } });
+        wrap.appendChild(r);
+      }
+      qbody.appendChild(wrap);
+      return true;
+    }
     function renderChapters() {   // the chapters block at the top of the Queue tab; true when anything was drawn
       const L = Chapters.list;
       if (!L.length) return false;
@@ -8520,7 +8543,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let prevCaret = null;
       try { if (prevInp && prevInp.getRootNode().activeElement === prevInp) prevCaret = prevInp.selectionStart; } catch (e) {}
       qbody.replaceChildren();
-      const hadCont = renderContinue();
+      const hadCont = renderContinue() | renderLater();
       const hadCh = renderChapters() || hadCont;
       const list = SUITE.queueList && SUITE.queueList();
       if (!list) {
@@ -8855,6 +8878,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Find in lyrics', () => openFind(), '/');
       if (SUITE.abState && SUITE.abState().on) mi('Loop off', () => loopOff()); else mi(shareSel.length >= 2 ? 'Loop the picked lines' : 'Loop this line', () => loopLines());
       mi('Find a song by a lyric…', () => lyricSearchSheet());
+      try { const lt = SUITE.laterTarget && SUITE.laterTarget(); if (lt) mi(SUITE.laterHas(lt.href) ? '☆ Remove from Listen later' : '☆ Listen later', () => { SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
       mi('Jump to chorus', () => jumpChorus(), 'C');
       mi('Focus mode: ' + (focusOn ? 'on' : 'off'), () => toggleFocus(), 'K');
       mi('Copy lyrics', () => App.copyLyrics());
@@ -10024,6 +10048,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('▣', 'Share a lyric card', 'Lyrics', () => { setOpen(true); shareSheet(); });
       add('▣', 'Share my listening card', 'Stats', () => { setOpen(true); setTab('stats'); recapSheet(); });
       add('⌕', 'Find a song by a lyric', 'Lyrics', () => { setOpen(true); setTab('lyrics'); lyricSearchSheet(); });
+      try { const lt = SUITE.laterTarget && SUITE.laterTarget(); add('☆', lt && SUITE.laterHas(lt.href) ? 'Remove from Listen later' : 'Listen later', 'Queue', () => { if (SUITE.laterToggle) SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
       // chapters / cue points
       if (Chapters.list.length) {
         add('☰', 'Chapters (' + Chapters.list.length + ')', 'Chapters', () => { setOpen(true); setTab('queue'); });
@@ -11445,6 +11470,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     pauseUnplug: true,      // an audio output that vanishes (headphones unplugged, Bluetooth dropped) pauses playback
     tempoLock: 0,           // BPM to play every track at (the speed follows the measured tempo); 0 = off
     smartRewind: true,      // a long pause on a long track resumes a few seconds back
+    laterAutoClear: true,   // Listen later: 30 s of playing a saved track takes it off the shelf
     feedMaxPlays: '0',      // hide tracks with more plays than this (fresh finds); '0' = off
     feedMaxAgeDays: '0',    // hide tracks older than this many days; '0' = off
     tsLinks: true,          // m:ss in descriptions and comments jumps there
@@ -13585,6 +13611,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     playedLast = href;
     const map = (() => { const o = GET(PLAYED_KEY, null); return (o && typeof o === 'object') ? o : {}; })();
     map[href] = Date.now();
+    try { if (CFG.laterAutoClear && laterForget(href)) toast('Off the Listen later shelf'); } catch (e) {}
     const keys = Object.keys(map);
     if (keys.length > PLAYED_MAX) { keys.sort((p, q) => (map[p] || 0) - (map[q] || 0)); keys.slice(0, keys.length - PLAYED_MAX).forEach((k) => { delete map[k]; }); }
     SET(PLAYED_KEY, map); playedCache = map; playedCacheAt = Date.now();
@@ -13594,6 +13621,43 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const t = playedCache[path]; return !!(t && Date.now() - t < PLAYED_TTL);
   }
   try { SUITE.resumeList = resumeList; SUITE.resumeForget = resumeForget; SUITE.playedPath = playedPath; } catch (e) {}
+  /* ── Listen later: a private, local shortlist of tracks to come back to — no account, no like, nothing sent ── */
+  const LATER_KEY = 'enh:later', LATER_MAX = 100;
+  function laterMap() { const o = GET(LATER_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  function laterAdd(href, n, a, dur) {
+    if (!href || href.charAt(0) !== '/') return false;
+    const map = laterMap(); map[href] = { t: Date.now(), n: String(n || '').slice(0, 120), a: String(a || '').slice(0, 80), d: Math.max(0, Math.round(+dur || 0)) };
+    const keys = Object.keys(map); if (keys.length > LATER_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - LATER_MAX).forEach((k) => { delete map[k]; }); }
+    SET(LATER_KEY, map); return true;
+  }
+  function laterForget(href) { const map = laterMap(); if (href in map) { delete map[href]; SET(LATER_KEY, map); return true; } return false; }
+  function laterHas(href) { return !!(href && laterMap()[href]); }
+  function laterList() { const map = laterMap(); return Object.keys(map).map((href) => Object.assign({ href }, map[href])).sort((p, q) => (q.t || 0) - (p.t || 0)).slice(0, 12); }
+  // the track at hand: the one playing, else the track page open
+  function laterTarget() {
+    const href = curTrackHref();
+    if (href) {
+      let n = '', a = '', d = 0; const m = activeMedia();
+      try { const tl = D.querySelector('.playbackSoundBadge__titleLink'); n = ((tl && (tl.getAttribute('title') || tl.textContent)) || '').trim(); const ul = D.querySelector('.playbackSoundBadge__lightLink'); a = ((ul && (ul.getAttribute('title') || ul.textContent)) || '').trim(); } catch (e) {}
+      if (m && isFinite(m.duration)) d = m.duration;
+      if (n) return { href, n, a, d };
+    }
+    const path = location.pathname.replace(/\/$/, '');
+    if (/^\/[^/]+\/[^/]+$/.test(path) && !/^\/(you|search|discover|stream|feed|charts|settings|upload|pages)\//.test(path) && D.querySelector('.fullHero')) {
+      const t = D.querySelector('.fullHero__title .soundTitle__title, .fullHero__title'), u = D.querySelector('.fullHero__title .soundTitle__username, .fullHero .soundTitle__username, .fullHero__title a[href^="/"]:not([href="' + path + '"])');
+      const n = t ? (t.textContent || '').replace(/\s+/g, ' ').replace(/Verified$/, '').trim() : '';
+      let a = u ? (u.textContent || '').replace(/\s+/g, ' ').replace(/Verified$/, '').trim() : '';
+      if (n && a && n.indexOf(a) === 0) { const rest = n.slice(a.length).trim(); return { href: path, n: rest || n, a, d: 0 }; }
+      if (n) return { href: path, n, a, d: 0 };
+    }
+    return null;
+  }
+  function laterToggle() {
+    const t = laterTarget(); if (!t) { toast('Open or play a track first'); return null; }
+    if (laterHas(t.href)) { laterForget(t.href); toast('Removed from Listen later'); return false; }
+    laterAdd(t.href, t.n, t.a, t.d); toast('Saved for later · Queue tab'); return true;
+  }
+  try { SUITE.laterList = laterList; SUITE.laterAdd = laterAdd; SUITE.laterForget = laterForget; SUITE.laterHas = laterHas; SUITE.laterToggle = laterToggle; SUITE.laterTarget = laterTarget; } catch (e) {}
   function hideResumeChip() { clearTimeout(resumeChipT); if (resumeChip) { try { resumeChip.remove(); } catch (e) {} resumeChip = null; } }
   function showResumeChip(pos) {
     hideResumeChip();
@@ -14419,6 +14483,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (dl) mkA('⤓  Download', () => downloadTrack(d), true, true);   // only when the artist allows downloads
     mkA('Open artist', () => { if (uhref) { try { W.open(uhref, '_blank'); } catch (e) {} } });
     if (d.artwork_url) mkA('Artwork ↗', () => { try { W.open(String(d.artwork_url).replace('-large', '-original'), '_blank'); } catch (e) {} });
+    try {
+      let lp = ''; try { lp = new URL(d.permalink_url || d.__url, location.origin).pathname; } catch (e) { lp = ''; }
+      if (lp) mkA(laterHas(lp) ? '☆ Remove from Listen later' : '☆ Listen later', () => { if (laterHas(lp)) { laterForget(lp); toast('Removed from Listen later'); } else { laterAdd(lp, d.title, d.user && d.user.username, (d.full_duration || d.duration || 0) / 1000); toast('Saved for later · Queue tab'); } });
+    } catch (e) {}
     mkA('Copy artist', () => uhref && clip(uhref, 'Artist link copied'));
     mkA('Copy link', () => clip(d.__url || d.permalink_url || '', 'Track link copied'));
     mkA('Copy as “Artist – Title”', () => clip(((d.user && d.user.username) || '') + ' – ' + (d.title || ''), 'Copied as text'));
@@ -15570,6 +15638,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
     ['pauseUnplug', 'toggle', 'Pause when headphones disconnect', 'An audio output that vanishes — unplugged, or Bluetooth dropped — pauses playback instead of switching to the speakers'],
     ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'Podcasts and mixes: a pause of three minutes resumes 5 s back, of fifteen minutes 15 s back'],
+    ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
@@ -16010,7 +16079,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   } catch (e) {}
   try { SUITE.enhancerDump = () => { try { return Object.assign({}, CFG); } catch (e) { return null; } }; } catch (e) {}
   try {
-    SUITE.memoryDump = () => { try { const o = { resume: GET(RESUME_KEY, null), bpm: GET(BPM_KEY, null), played: GET(PLAYED_KEY, null) }; return (o.resume || o.bpm || o.played) ? o : null; } catch (e) { return null; } };
+    SUITE.memoryDump = () => { try { const o = { resume: GET(RESUME_KEY, null), bpm: GET(BPM_KEY, null), played: GET(PLAYED_KEY, null), later: GET(LATER_KEY, null) }; return (o.resume || o.bpm || o.played || o.later) ? o : null; } catch (e) { return null; } };
     SUITE.memoryRestore = (obj) => {   // untrusted JSON: each map re-shaped field by field and capped like the live stores
       try {
         if (!obj || typeof obj !== 'object') return;
@@ -16026,6 +16095,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           for (const k of Object.keys(obj.bpm)) { const e = obj.bpm[k]; if (!path(k) || !e || !(+e.b >= 40 && +e.b <= 240)) continue; cur[k] = { b: Math.round(+e.b * 10) / 10, c: Math.min(1, Math.max(0, +e.c || 0)), t: +e.t > 0 ? +e.t : Date.now() }; }
           const keys = Object.keys(cur); if (keys.length > BPM_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete cur[k]; }); }
           SET(BPM_KEY, cur);
+        }
+        if (obj.later && typeof obj.later === 'object') {
+          const cur = laterMap();
+          for (const k of Object.keys(obj.later)) { const e = obj.later[k]; if (!path(k) || !e || !e.n) continue; cur[k] = { t: +e.t > 0 ? +e.t : Date.now(), n: String(e.n).slice(0, 120), a: String(e.a || '').slice(0, 80), d: Math.max(0, Math.round(+e.d || 0)) }; }
+          const keys = Object.keys(cur); if (keys.length > LATER_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - LATER_MAX).forEach((k) => { delete cur[k]; }); }
+          SET(LATER_KEY, cur);
         }
         if (obj.played && typeof obj.played === 'object') {
           const o = GET(PLAYED_KEY, null), cur = (o && typeof o === 'object') ? o : {};
