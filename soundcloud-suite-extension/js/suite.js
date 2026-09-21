@@ -7929,7 +7929,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     /* ---------- paste-lyrics sheet ---------- */
     /* ---------- lyric share card: a few lines on the artwork, as an image ---------- */
-    let shareBar = null, shareSel = [], shareSelClick = null, loopFromHub = false;
+    let shareBar = null, shareSel = [], shareSelClick = null;
     let offsetSrc = null;   // the app hands the hub its total sync offset (per-track + latency + auto) once it exists
     function syncOffS() { try { return offsetSrc ? (offsetSrc() || 0) : 0; } catch (e) { return 0; } }
     function shareFont(px, w) { return (w || 700) + ' ' + px + 'px Inter, "SF Pro Display", "Segoe UI", system-ui, sans-serif'; }
@@ -8164,15 +8164,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const offS = syncOffS();
       let i0 = activeI < 0 ? 0 : activeI, i1 = i0;
       if (shareSel.length >= 2) { const sorted = shareSel.slice().sort((a, b) => a - b); i0 = sorted[0]; i1 = sorted[sorted.length - 1]; }
-      const a = Math.max(0, times[i0] - offS), b = (i1 + 1 < times.length ? times[i1 + 1] : times[i1] + 6) - offS;
+      let j = i1 + 1; while (j < times.length && !(times[j] > times[i1])) j++;   // sheets repeat a timestamp for a split line: the loop ends at the next later one
+      const a = Math.max(0, times[i0] - offS), b = (j < times.length ? times[j] : times[i1] + 6) - offS;
       if (!SUITE.abLoop(a, b - 0.05)) { toast('Could not set the loop'); return false; }
-      loopFromHub = true;
       if (shareSel.length >= 2) shareClose();
       Media.seek(a);
       toast(i1 > i0 ? 'Looping ' + (i1 - i0 + 1) + ' lines · ⋯ menu or Esc to stop' : 'Looping this line · ⋯ menu or Esc to stop');
       return true;
     }
-    function loopOff() { if (SUITE.abOff) SUITE.abOff(); toast('Loop off'); }
+    function loopOff() { if (SUITE.abOff) SUITE.abOff(); }   // abClear toasts
     /* ---------- find a song by a lyric: search every cached sheet ---------- */
     function lyricSearchSheet() {
       const wrap = document.createElement('div');
@@ -8279,7 +8279,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ['⌨', 'Play SoundCloud from any tab', 'Alt+Shift+P plays or pauses, N and B skip, L likes — from any Chrome tab. Change the keys at chrome://extensions/shortcuts. Headphones unplugged? Playback pauses instead of switching to the speakers.'],
           ['⌘', 'A palette that takes arguments', 'Ctrl+K: type 12:34, +30, -1:00 or 40% to jump, 1.5x for the speed, 170 bpm to lock the tempo of every track, or a title or artist from your likes to play it. Night mode, Enhance and the rest are switches in the list, and your recent commands come first.'],
           ['☆', 'Listen later', 'A private shortlist, no account needed: save the playing track from the ⋯ menu, the palette or the track-info popover, find it on the Queue tab, and it clears itself once you have listened.'],
-          ['↻', 'Loop a lyric line, and more', 'Loop this line (or the lines you picked for a card) from the ⋯ menu. Fresh-finds feed rules hide the hits and the old uploads. A long pause on a mix resumes a few seconds back. Auto dark can follow the system colour scheme. The now-playing panel names the chapter of a mix. Shift+C copies the link at this moment.'],
+          ['↻', 'Loop a lyric line, and more', 'Loop this line (or the lines you picked for a card) from the ⋯ menu. Fresh-finds feed rules hide the hits and the old uploads. A long pause on a mix resumes a few seconds back. Auto dark can follow the system colour scheme. The now-playing panel names the chapter of a mix. Shift+C (with Global hotkeys on) copies the link at this moment.'],
           ['🕐', 'Your listening card', 'Stats → Share card: total time, a 24-hour listening clock, top artists and the last seven days as one 1080 × 1080 image, on the clipboard or as a file.'],
           ['⌕', 'Find a song by a lyric', 'Lyrics ⋯ menu → Find a song by a lyric: type the words you remember and every lyric sheet this browser has cached is searched, newest first. One click opens the track.'],
           ['♩', 'Tempo, measured', 'The BPM is measured from the audio itself, shown in the Audio tab and the track-info popover, corrected for the speed you play at and remembered per track.'],
@@ -8457,7 +8457,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let list = [];
       try { list = (SUITE.laterList && SUITE.laterList()) || []; } catch (e) { list = []; }
       if (!list.length) return false;
-      const head2 = document.createElement('div'); head2.className = 'qhead'; head2.textContent = 'Listen later'; qbody.appendChild(head2);
+      const head2 = document.createElement('div'); head2.className = 'qhead'; head2.textContent = 'Listen later' + (list.length > 1 ? ' · ' + list.length : ''); qbody.appendChild(head2);
       const wrap = document.createElement('div');
       for (const e of list) {
         const r = document.createElement('div'); r.className = 'qrow ch later'; r.tabIndex = 0; r.setAttribute('role', 'button');
@@ -8882,7 +8882,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Find in lyrics', () => openFind(), '/');
       if (SUITE.abState && SUITE.abState().on) mi('Loop off', () => loopOff()); else mi(shareSel.length >= 2 ? 'Loop the picked lines' : 'Loop this line', () => loopLines());
       mi('Find a song by a lyric…', () => lyricSearchSheet());
-      try { const lt = SUITE.laterTarget && SUITE.laterTarget(); if (lt) mi(SUITE.laterHas(lt.href) ? '☆ Remove from Listen later' : '☆ Listen later', () => { SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
+      try { const lt = SUITE.laterTarget && SUITE.laterTarget(); if (lt) mi((SUITE.laterHas(lt.href) ? '☆ Remove from Listen later' : '☆ Listen later') + (lt.n ? ' · ' + lt.n.slice(0, 32) : ''), () => { SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
       mi('Jump to chorus', () => jumpChorus(), 'C');
       mi('Focus mode: ' + (focusOn ? 'on' : 'off'), () => toggleFocus(), 'K');
       mi('Copy lyrics', () => App.copyLyrics());
@@ -9149,7 +9149,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (menuOn) { setMenu(false); return true; }
       if (findWrap) { closeFind(); return true; }
       if (shareBar) { shareClose(); return true; }
-      if (SUITE.abState && SUITE.abState().on && loopFromHub) { loopFromHub = false; loopOff(); return true; }   // the lyric-card picker sits under the menu and the sheets
+      if (SUITE.abState && SUITE.abState().on && SUITE.abState().hub) { loopOff(); return true; }   // the lyric-card picker sits under the menu and the sheets
       if (maxOn) { toggleMax(false); return true; }
       return false;
     }
@@ -10052,7 +10052,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('▣', 'Share a lyric card', 'Lyrics', () => { setOpen(true); shareSheet(); });
       add('▣', 'Share my listening card', 'Stats', () => { setOpen(true); setTab('stats'); recapSheet(); });
       add('⌕', 'Find a song by a lyric', 'Lyrics', () => { setOpen(true); setTab('lyrics'); lyricSearchSheet(); });
-      try { const lt = SUITE.laterTarget && SUITE.laterTarget(); add('☆', lt && SUITE.laterHas(lt.href) ? 'Remove from Listen later' : 'Listen later', 'Queue', () => { if (SUITE.laterToggle) SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
+      try { const lt = SUITE.laterTarget && SUITE.laterTarget(); add('☆', lt && SUITE.laterHas(lt.href) ? 'Remove from Listen later' : 'Listen later', lt && lt.n ? 'Queue · ' + lt.n.slice(0, 40) : 'Queue', () => { if (SUITE.laterToggle) SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
       // chapters / cue points
       if (Chapters.list.length) {
         add('☰', 'Chapters (' + Chapters.list.length + ')', 'Chapters', () => { setOpen(true); setTab('queue'); });
@@ -10163,15 +10163,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const press = (h) => { const b = btn(h); if (b && !/sc-button-pause/.test(b.className) && !b.classList.contains('playing')) b.click(); };
       const old = here() ? null : hero();   // the router swaps the hero for the new page; until it does, the old page's button is the one on screen
       if (!here()) { try { const a = document.createElement('a'); a.href = path; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (e) { try { location.assign(path); } catch (e2) {} } }
-      let ticks = 0, settled = 0, pressed = 0, pressedAt = 0, sawHero = false;
+      let ticks = 0, settled = 0, pressed = 0, pressedAt = 0, sawHero = false, nagBefore = false, nagAt = 0;
       const t = setInterval(() => {
         ticks++;
         const h = hero(), ok = here() && h && h !== old;
         if (ok && ready(h)) settled++; else settled = 0;
         if (ok) sawHero = true;
         if (pressed && playing()) { clearInterval(t); return; }
-        if (pressed && ticks - pressedAt >= 10 && pressed < 3 && ok) { const x = nag(); if (x) { try { x.click(); } catch (e) {} pressedAt = ticks - 6; return; } press(h); pressed++; pressedAt = ticks; return; }   // no start in 2.5 s: close the nag if it showed, press again
-        if (!pressed && settled >= 6) { press(h); pressed = 1; pressedAt = ticks; return; }   // enabled for 1.5 s: press
+        if (pressed && !nagAt && !nagBefore && nag()) nagAt = ticks;   // when the nag first showed after our press
+        if (pressed && ticks - pressedAt >= 10 && pressed < 3 && ok) { const x = nag(); if (x && !nagBefore && nagAt && nagAt - pressedAt <= 4) { try { x.click(); } catch (e) {} nagAt = 0; pressedAt = ticks - 6; return; } press(h); pressed++; pressedAt = ticks; return; }   // no start in 2.5 s: close a nag that our press raised (within a second of it), press again
+        if (!pressed && settled >= 6) { nagBefore = !!nag(); press(h); pressed = 1; pressedAt = ticks; return; }   // enabled for 1.5 s: press
         if (ticks > 80) { clearInterval(t); if (!pressed) toast(sawHero ? 'This track can’t be played here' : 'Could not open that track'); }
       }, 250);
     }
@@ -10186,7 +10187,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const arg = cmdkArg(q); if (arg) list = [arg].concat(list);
         // your likes, by title or artist, after the commands: pick one and it opens and plays
         let hits = null; try { hits = SUITE.libSearch ? SUITE.libSearch(q, 6) : null; } catch (e) { hits = null; }
-        if (hits && hits.length) list = list.concat(hits.map((h) => ({ icon: '♥', label: h.title + (h.artist ? ' — ' + h.artist : ''), hint: 'Likes' + (h.durMs ? ' · ' + fmtDur(h.durMs) : ''), run: () => playHref(h.url) })));
+        if (hits && hits.length) list = list.concat(hits.map((h) => ({ arg: true, icon: '♥', label: h.title + (h.artist ? ' — ' + h.artist : ''), hint: 'Likes' + (h.durMs ? ' · ' + fmtDur(h.durMs) : ''), run: () => playHref(h.url) })));
       } else {
         // nothing typed: the commands run most recently come first
         const rec = cmdkRecent().map((key) => all.find((c) => cmdKey(c) === key)).filter(Boolean);
@@ -13608,14 +13609,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return Object.keys(map).map((href) => Object.assign({ href }, map[href])).filter((e) => e.pos >= 60 && e.dur - e.pos >= 30 && now - (e.t || 0) < RESUME_TTL).sort((p, q) => (q.t || 0) - (p.t || 0)).slice(0, 8);
   }
   const PLAYED_KEY = 'enh:played', PLAYED_MAX = 500, PLAYED_TTL = 30 * 864e5;
+  let devOutN = -1, devTimer = 0, devCount = null, devWatching = false;   // the audio-output watcher (pause when headphones disconnect), started by the tick while the setting is on
+  let laterSkipHref = '';   // Listen later: the track saved while it was playing — this play does not count as the listen that clears it
   let playedLast = '', playedCache = null, playedCacheAt = 0;
   function recordPlayed(m) {   // 30 s into a track counts as played; the feed rule and the badges read this
     if (!m || m.paused || !(m.currentTime >= 30)) return;
     const href = curTrackHref(); if (!href || href === playedLast) return;
+    if (laterSkipHref && laterSkipHref !== href) laterSkipHref = '';   // a different track: the saved one's next play counts
     playedLast = href;
     const map = (() => { const o = GET(PLAYED_KEY, null); return (o && typeof o === 'object') ? o : {}; })();
     map[href] = Date.now();
-    try { if (CFG.laterAutoClear && laterForget(href)) toast('Off the Listen later shelf'); } catch (e) {}
+    try { if (CFG.laterAutoClear && href !== laterSkipHref && laterForget(href)) toast('Off the Listen later shelf'); } catch (e) {}
     const keys = Object.keys(map);
     if (keys.length > PLAYED_MAX) { keys.sort((p, q) => (map[p] || 0) - (map[q] || 0)); keys.slice(0, keys.length - PLAYED_MAX).forEach((k) => { delete map[k]; }); }
     SET(PLAYED_KEY, map); playedCache = map; playedCacheAt = Date.now();
@@ -13636,7 +13640,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   function laterForget(href) { const map = laterMap(); if (href in map) { delete map[href]; SET(LATER_KEY, map); return true; } return false; }
   function laterHas(href) { return !!(href && laterMap()[href]); }
-  function laterList() { const map = laterMap(); return Object.keys(map).map((href) => Object.assign({ href }, map[href])).sort((p, q) => (q.t || 0) - (p.t || 0)).slice(0, 12); }
+  function laterList() { const map = laterMap(); return Object.keys(map).map((href) => Object.assign({ href }, map[href])).sort((p, q) => (q.t || 0) - (p.t || 0)); }
   // the track at hand: the one playing, else the track page open
   function laterTarget() {
     const href = curTrackHref();
@@ -13659,7 +13663,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function laterToggle() {
     const t = laterTarget(); if (!t) { toast('Open or play a track first'); return null; }
     if (laterHas(t.href)) { laterForget(t.href); toast('Removed from Listen later'); return false; }
-    laterAdd(t.href, t.n, t.a, t.d); toast('Saved for later · Queue tab'); return true;
+    laterAdd(t.href, t.n, t.a, t.d); if (t.href === curTrackHref()) laterSkipHref = t.href; toast('Saved for later · Queue tab'); return true;
   }
   try { SUITE.laterList = laterList; SUITE.laterAdd = laterAdd; SUITE.laterForget = laterForget; SUITE.laterHas = laterHas; SUITE.laterToggle = laterToggle; SUITE.laterTarget = laterTarget; } catch (e) {}
   function hideResumeChip() { clearTimeout(resumeChipT); if (resumeChip) { try { resumeChip.remove(); } catch (e) {} resumeChip = null; } }
@@ -13767,7 +13771,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (e && e.b > 0 && Date.now() - (e.t || 0) < 365 * 864e5) { bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' }; applyTempoLock(); }
     }
     if (!m || m.paused || (++bpm.tick % 4)) return;
-    if (bpm.pub && Math.abs((m.playbackRate || 1) - 1) > 0.01) return;   // time-stretching smears the onsets: a known tempo is never replaced while the speed is off 1×
+    if (bpm.pub && !CFG.vinylMode && Math.abs((m.playbackRate || 1) - 1) > 0.01) return;   // time-stretching smears the onsets: a known tempo is never replaced while the speed is off 1× (pitch-follows-speed has no stretch)
     const est = bpmEstimate(); if (!est || est.conf < 0.3) return;
     const rate = (m.playbackRate > 0 ? m.playbackRate : 1), b = est.bpm / rate;
     if (bpm.last && Math.abs(b - bpm.last) < 1.5) bpm.stable++; else bpm.stable = 0;
@@ -13961,6 +13965,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!m) { try { mediaSessionSync(null); } catch (e) {} return; }
       try { offerResume(m); recordResume(m); applyResume(m); applyPendingJump(m); mediaSessionSync(m); } catch (e) {}
       try { bpmTick(m); recordPlayed(m); } catch (e) {}
+      try { if (CFG.pauseUnplug && !devWatching) watchDevices(); } catch (e) {}   // switched on later: start watching then
       // end-of-track silence trim (WP10): source peak < −60 dBFS for 2 s with under 30 s left → seek to the end.
       // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
       try {
@@ -13999,11 +14004,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   /* A–B loop endpoints (live, not persisted) */
   let abOn = false, abA = null, abB = null, abM = null, abHref = null, abT = 0, abI = 0;   // abM / abHref: the element and the track the loop was set on · abT/abI: the wrap timers (armed by armAb)
+  let abSrc = '';   // who set the loop: 'bar' (the player-bar button) or 'hub' (a lyric line); the hub's Escape only stops its own
   function abMark() {
     const m = activeMedia();
     if (!m || !isFinite(m.currentTime)) { toast('Play a track first'); return; }
     if (abA == null || abB != null) { abA = m.currentTime; abB = null; abOn = false; armAb(); toast('A set — mark B next'); }
-    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; abM = m; abHref = curTrackHref(); armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
+    else if (m.currentTime > abA) { abB = m.currentTime; abOn = true; abM = m; abHref = curTrackHref(); abSrc = 'bar'; armAb(); toast('A–B loop on · ' + (abB - abA).toFixed(1) + ' s'); }
     else { abA = m.currentTime; toast('A moved'); }
     refreshBar();
   }
@@ -14027,7 +14033,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   // quiet: the loop switched itself off (the user seeked out of it) — a softer toast than an explicit clear
-  function abClear(quiet) { abA = abB = null; abM = null; abHref = null; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
+  function abClear(quiet) { abA = abB = null; abM = null; abHref = null; abSrc = ''; abOn = false; try { clearTimeout(abT); clearInterval(abI); } catch (e) {} abT = 0; abI = 0; refreshBar(); toast(quiet ? 'A–B loop off' : 'A–B loop cleared'); }
   // 2.28: the wrap is a timer aimed 30 ms of media time before B (rate-aware) plus a 100 ms backstop that survives
   // seeks and rate changes; the 1 Hz enforce tick no longer takes part, so the loop lands within ~50 ms of B
   const abAimMs = (m) => ((abB - 0.03 - m.currentTime) / Math.max(0.25, +m.playbackRate || 1)) * 1000;   // wall ms until 30 ms (media) before B
@@ -14199,11 +14205,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (name === 'like-track') { const b = D.querySelector('.playbackSoundBadge__actions .sc-button-like, .playbackSoundBadge__like, .playControls .sc-button-like'); if (!b) return false; likeCurrent(); return true; }
     return false;
   }
-  function tellState(state) { try { W.postMessage(Object.assign({ scss: 'state' }, state), location.origin); } catch (e) {} }
+  let cmdLastAt = 0;   // when this tab last started or stopped playing: the router's tie-breaker
+  function tellState(state) { if (state && typeof state.playing === 'boolean') cmdLastAt = Date.now(); try { W.postMessage(Object.assign({ scss: 'state' }, state), location.origin); } catch (e) {} }
   try {
     W.addEventListener('message', (e) => {
       const d = e.data; if (e.source !== W || !d || d.scss !== 'cmd' || typeof d.name !== 'string') return;
       const m = activeMedia(), playing = !!(m && !m.paused);
+      if (d.name === 'whoami') { try { W.postMessage({ scss: 'cmd-ack', id: d.id, handled: true, info: { playing, lastAt: cmdLastAt, visible: !D.hidden, player: !!D.querySelector('.playControls__play') } }, location.origin); } catch (e2) {} return; }
       const handled = (d.broadcast && D.hidden && !playing) ? false : runCommand(d.name);
       try { W.postMessage({ scss: 'cmd-ack', id: d.id, handled }, location.origin); } catch (e2) {}
     });
@@ -14216,7 +14224,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       if (!CFG.smartRewind || m !== rewindEl || !rewindAt) return;
       const gap = Date.now() - rewindAt; rewindAt = 0;
-      if (!(m.duration >= 300) || gap < 180000 || Math.abs((m.currentTime || 0) - rewindPos) > 2 || rewindPos < 20) return;
+      if (abOn || !(m.duration >= 300) || gap < 180000 || Math.abs((m.currentTime || 0) - rewindPos) > 2 || rewindPos < 20) return;   // a loop owns the position
       const back = gap >= 900000 ? 15 : 5;
       __sceUserSeek = Date.now(); m.currentTime = Math.max(0, rewindPos - back);
       toast('Back ' + back + ' s after the pause');
@@ -14224,7 +14232,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   /* ── pause when an audio output goes away: unplug the headphones or lose the Bluetooth link and the site
    * carries on through the speakers. Device counts need no permission (labels do; we never ask). ── */
-  let devOutN = -1, devTimer = 0, devCount = null;
   function countOutputs() {
     if (devCount) return devCount();
     try { return navigator.mediaDevices.enumerateDevices().then((list) => list.filter((d) => d.kind === 'audiooutput').length).catch(() => -1); } catch (e) { return Promise.resolve(-1); }
@@ -14239,7 +14246,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   function watchDevices() {
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      if (devWatching || !CFG.pauseUnplug || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      devWatching = true;
       countOutputs().then((n) => { if (devOutN < 0) devOutN = n; });
       navigator.mediaDevices.addEventListener('devicechange', () => { clearTimeout(devTimer); devTimer = setTimeout(onDeviceChange, 250); });   // a change lands as a burst of events
     } catch (e) {}
@@ -14482,6 +14490,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       b.addEventListener('mouseleave', () => { if (accent) b.style.background = '#f50'; else b.style.background = 'rgba(255,255,255,.07)'; });
       b.addEventListener('click', fn);
       acts.appendChild(b);
+      return b;
     };
     mkA('⏱  Copy link at ' + fmtClock((activeMedia() && activeMedia().currentTime) || 0), () => copyTimeLink());
     if (dl) mkA('⤓  Download', () => downloadTrack(d), true, true);   // only when the artist allows downloads
@@ -14489,7 +14498,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (d.artwork_url) mkA('Artwork ↗', () => { try { W.open(String(d.artwork_url).replace('-large', '-original'), '_blank'); } catch (e) {} });
     try {
       let lp = ''; try { lp = new URL(d.permalink_url || d.__url, location.origin).pathname; } catch (e) { lp = ''; }
-      if (lp) mkA(laterHas(lp) ? '☆ Remove from Listen later' : '☆ Listen later', () => { if (laterHas(lp)) { laterForget(lp); toast('Removed from Listen later'); } else { laterAdd(lp, d.title, d.user && d.user.username, (d.full_duration || d.duration || 0) / 1000); toast('Saved for later · Queue tab'); } });
+      if (lp) { const lb = mkA(laterHas(lp) ? '☆ Remove from Listen later' : '☆ Listen later', () => { if (laterHas(lp)) { laterForget(lp); toast('Removed from Listen later'); } else { laterAdd(lp, d.title, d.user && d.user.username, (d.full_duration || d.duration || 0) / 1000); if (lp === curTrackHref()) laterSkipHref = lp; toast('Saved for later · Queue tab'); } try { if (lb && lb.nodeType) lb.textContent = laterHas(lp) ? '☆ Remove from Listen later' : '☆ Listen later'; } catch (e) {} }); }
     } catch (e) {}
     mkA('Copy artist', () => uhref && clip(uhref, 'Artist link copied'));
     mkA('Copy link', () => clip(d.__url || d.permalink_url || '', 'Track link copied'));
@@ -14923,8 +14932,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try { spdR.input.value = CFG.speed; } catch (e) {} spdR.paint(); paintSpeed(); toast(lit ? 'Slowed + reverb off' : 'Slowed + reverb · 0.85×, pitch follows, a little room');
       });
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
-      const bpmLine = D.createElement('div'); bpmLine.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:8px;font-variant-numeric:tabular-nums'; bodyEl.appendChild(bpmLine);
-      const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); if (bpmLine.textContent !== t) bpmLine.textContent = t; };
+      const bpmLine = D.createElement('div'); bpmLine.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:8px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px'; bodyEl.appendChild(bpmLine);
+      const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); bpmLine.append(bpmTxt, bpmUnlock);
+      const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); if (bpmTxt.textContent !== t) bpmTxt.textContent = t; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; };
       paintBpm(); liveSync.push(paintBpm);
       paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
@@ -15640,8 +15650,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
-    ['pauseUnplug', 'toggle', 'Pause when headphones disconnect', 'An audio output that vanishes — unplugged, or Bluetooth dropped — pauses playback instead of switching to the speakers'],
-    ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'Podcasts and mixes: a pause of three minutes resumes 5 s back, of fifteen minutes 15 s back'],
+    ['pauseUnplug', 'toggle', 'Pause when headphones disconnect', 'Any audio output that vanishes — unplugged, or a Bluetooth link dropped — pauses playback instead of switching to the speakers (the browser cannot tell which output is in use)'],
+    ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
     ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
@@ -16077,9 +16087,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.enhancerRender = enhancerRender; } catch (e) {}
   // whole-suite backup: the shuffle module's Export/Import bundles these in
   try {   // the hub loops a lyric line or a picked section on the same A–B loop as the player bar
-    SUITE.abLoop = (a, b) => { try { if (!(+b > +a)) return false; abA = +a; abB = +b; abOn = true; abM = activeMedia(); armAb(); refreshBar(); return true; } catch (e) { return false; } };
+    SUITE.abLoop = (a, b) => { try { if (!(+b > +a)) return false; abA = +a; abB = +b; abOn = true; abM = activeMedia(); abHref = curTrackHref(); abSrc = 'hub'; armAb(); refreshBar(); return true; } catch (e) { return false; } };
     SUITE.abOff = () => { try { if (abOn) abClear(true); } catch (e) {} };
-    SUITE.abState = () => ({ on: !!abOn, a: abA, b: abB });
+    SUITE.abState = () => ({ on: !!abOn, a: abA, b: abB, hub: abSrc === 'hub' });
   } catch (e) {}
   try { SUITE.enhancerDump = () => { try { return Object.assign({}, CFG); } catch (e) { return null; } }; } catch (e) {}
   try {
@@ -16102,7 +16112,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
         if (obj.later && typeof obj.later === 'object') {
           const cur = laterMap();
-          for (const k of Object.keys(obj.later)) { const e = obj.later[k]; if (!path(k) || !e || !e.n) continue; cur[k] = { t: +e.t > 0 ? +e.t : Date.now(), n: String(e.n).slice(0, 120), a: String(e.a || '').slice(0, 80), d: Math.max(0, Math.round(+e.d || 0)) }; }
+          for (const k of Object.keys(obj.later)) { const e = obj.later[k]; if (!path(k) || !e || !e.n) continue; cur[k] = { t: Math.min(Date.now(), +e.t > 0 ? +e.t : Date.now()), n: String(e.n).slice(0, 120), a: String(e.a || '').slice(0, 80), d: Math.min(86400, Math.max(0, Math.round(+e.d || 0))) }; }
           const keys = Object.keys(cur); if (keys.length > LATER_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - LATER_MAX).forEach((k) => { delete cur[k]; }); }
           SET(LATER_KEY, cur);
         }

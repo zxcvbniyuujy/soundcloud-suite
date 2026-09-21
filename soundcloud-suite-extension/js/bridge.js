@@ -15,8 +15,8 @@
       if (msg && msg.scss === 'cmd' && typeof msg.name === 'string') {
         const id = ++cmdSeq;
         let done = false;
-        const finish = (handled) => { if (done) return; done = true; window.removeEventListener('message', onAck); try { sendResponse(handled === true); } catch (e) {} };
-        const onAck = (e) => { const d = e.data; if (e.source === window && d && d.scss === 'cmd-ack' && d.id === id) finish(d.handled); };
+        const finish = (handled, info) => { if (done) return; done = true; window.removeEventListener('message', onAck); try { sendResponse(info && typeof info === 'object' ? { handled: handled === true, info } : handled === true); } catch (e) {} };
+        const onAck = (e) => { const d = e.data; if (e.source === window && d && d.scss === 'cmd-ack' && d.id === id) finish(d.handled, d.info); };
         window.addEventListener('message', onAck);
         setTimeout(() => finish(false), 400);
         try { window.postMessage({ scss: 'cmd', id, name: msg.name, broadcast: !!msg.broadcast }, location.origin); } catch (e) { finish(false); }

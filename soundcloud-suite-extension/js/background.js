@@ -49,26 +49,38 @@ chrome.action.onClicked.addListener((tab) => {
   try { chrome.tabs.create({ url: 'https://soundcloud.com/' }); } catch (e) {}
 });
 
-/* Keyboard commands (chrome://extensions/shortcuts): the page cannot hear them, so the command goes to
- * the SoundCloud tab that last reported playing, else the one last focused, else every tab in turn until
- * one says it handled it (a hidden, silent tab declines a broadcast so four tabs never start at once). */
-const cmdTabs = { playing: null, focused: null };
+/* Keyboard commands (chrome://extensions/shortcuts): the page cannot hear them. The tab that last reported
+ * playing gets the command straight away; otherwise (the worker restarted, or nothing is playing) every tab is
+ * asked who it is and the best one is chosen: playing first, then the tab that started or stopped most recently,
+ * then a visible one. A hidden, silent tab still declines a blind broadcast so four tabs never start at once. */
+const cmdTabs = { playing: null };
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!msg || msg.scss !== 'state' || !sender || !sender.tab || sender.tab.id == null || !SC_FRAME.test(String(sender.url || ''))) return;
   if (msg.playing === true) cmdTabs.playing = sender.tab.id;
   else if (msg.playing === false && cmdTabs.playing === sender.tab.id) cmdTabs.playing = null;
-  if (msg.focus) cmdTabs.focused = sender.tab.id;
 });
-try { chrome.tabs.onRemoved.addListener((id) => { if (cmdTabs.playing === id) cmdTabs.playing = null; if (cmdTabs.focused === id) cmdTabs.focused = null; }); } catch (e) {}
+try { chrome.tabs.onRemoved.addListener((id) => { if (cmdTabs.playing === id) cmdTabs.playing = null; }); } catch (e) {}
+// resolves true (handled), false (the tab declined), an info object (a whoami answer) or null (no receiver: the tab is gone or has no content script)
 function sendCommand(tabId, name, broadcast) {
   return new Promise((resolve) => {
-    try { chrome.tabs.sendMessage(tabId, { scss: 'cmd', name, broadcast: !!broadcast }, (r) => { void chrome.runtime.lastError; resolve(r === true); }); } catch (e) { resolve(false); }
+    try { chrome.tabs.sendMessage(tabId, { scss: 'cmd', name, broadcast: !!broadcast }, (r) => { const dead = !!chrome.runtime.lastError || r === undefined; void chrome.runtime.lastError; resolve(dead ? null : (r === true || !!(r && r.handled === true && !r.info) ? true : (r && r.info) ? r.info : false)); }); } catch (e) { resolve(null); }
   });
 }
-async function dispatchCommand(name) {
-  for (const id of [cmdTabs.playing, cmdTabs.focused]) { if (id != null && await sendCommand(id, name, false)) return id; }
+async function pickTab() {
   let tabs = []; try { tabs = await chrome.tabs.query({}); } catch (e) {}
-  for (const t of tabs) { if (t && t.id != null && await sendCommand(t.id, name, true)) return t.id; }
+  const answers = await Promise.all(tabs.filter((t) => t && t.id != null).map(async (t) => { const r = await sendCommand(t.id, 'whoami', false); return r && typeof r === 'object' && r.player ? { id: t.id, info: r } : null; }));
+  const c = answers.filter(Boolean);
+  if (!c.length) return null;
+  c.sort((p, q) => (q.info.playing - p.info.playing) || ((q.info.lastAt || 0) - (p.info.lastAt || 0)) || (q.info.visible - p.info.visible));
+  return c[0].id;
+}
+async function dispatchCommand(name) {
+  // a tab that declines (next is greyed out, nothing loaded) ends the command: it must not land in another tab
+  if (cmdTabs.playing != null) { const r = await sendCommand(cmdTabs.playing, name, false); if (r === true) return cmdTabs.playing; if (r === false) return null; cmdTabs.playing = null; }
+  const id = await pickTab();
+  if (id != null) { const r = await sendCommand(id, name, false); return r === true ? id : null; }
+  let tabs = []; try { tabs = await chrome.tabs.query({}); } catch (e) {}
+  for (const t of tabs) { if (t && t.id != null && await sendCommand(t.id, name, true) === true) return t.id; }
   return null;
 }
 try { chrome.commands.onCommand.addListener((name) => { dispatchCommand(name); }); } catch (e) {}
