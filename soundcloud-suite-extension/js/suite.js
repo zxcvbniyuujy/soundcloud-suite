@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.60.0
+// @version      4.61.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.60.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.61.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -3908,7 +3908,7 @@
     var LEVEL_FLOOR_DB = 60;      // per-frame level floored this far below the loudest frame
     var NEAR_PEAK_FRAC = 0.15;    // peaks within 15 % of the top prominence compete; nearest 0 wins
     var EXCLUDE_SEC = 0.15;       // runner-up must sit outside ±150 ms of the chosen peak
-    var Z_LO = 4, Z_HI = 8;       // prominence (robust σ) → 0..1
+    var Z_LO = 2, Z_HI = 4;       // prominence (robust σ) → 0..1 — measured on real tracks, right sheets reach z 2.4–3.3 on 7–17 lines
     var RATIO_FULL = 0.5;         // runner-up ratio ≤ 0.5 → full marks, 1.0 → none
     var MIN_LINES = 6;            // fewer usable lines → decline
     var MIN_COVER_SEC = 15;       // less recorded audio than this → decline
@@ -3995,13 +3995,14 @@
       // 3. line impulses (frame index + weight from the gap to the previous line)
       var lines = [];
       var ls = Array.prototype.slice.call(lineStarts || []).map(Number).filter(function (t) { return !isNaN(t) && t >= 0; }).sort(function (x, y) { return x - y; });
-      var windowSec = n * hop;
+      var windowSec = n * hop, t0 = env.t0 || 0;
       for (i = 0; i < ls.length; i++) {
         if (i > 0 && ls[i] - ls[i - 1] < 0.05) continue;   // duplicate timestamp (bilingual sheets)
-        if (ls[i] > windowSec) break;
+        if (ls[i] < t0) continue;                          // before the window
+        if (ls[i] > t0 + windowSec) break;
         var gap = i > 0 ? ls[i] - ls[i - 1] : GAP_W_HI;
         var w = 0.5 + 0.5 * clamp01((gap - GAP_W_LO) / (GAP_W_HI - GAP_W_LO));
-        lines.push({ f: Math.round(ls[i] / hop), w: w });
+        lines.push({ f: Math.round((ls[i] - t0) / hop), w: w });
       }
       // usable = the line's own frame is inside the recorded envelope
       var used = 0, wTotal = 0;
@@ -4078,7 +4079,7 @@
       var hopMs = opts.hopMs > 0 ? +opts.hopMs : DEFAULT_HOP_MS, hop = hopMs / 1000;
       var windowSec = opts.windowSec > 0 ? +opts.windowSec : 90;
       var n = Math.ceil(windowSec / hop) + 1;
-      var env = { mid: new Float32Array(n), side: new Float32Array(n), cnt: new Uint16Array(n), hop: hop };
+      var env = { mid: new Float32Array(n), side: new Float32Array(n), cnt: new Uint16Array(n), hop: hop, t0: 0 };   // t0: media time of frame 0 — the window slides along the track
       var FFT = 2048, buf = new Float32Array(FFT);
       var own = [];
       var gain = function (g) { var nd = ctx.createGain(); nd.gain.value = g; own.push(nd); return nd; };
@@ -4121,14 +4122,26 @@
           seg.off = median(seg.offs);
           t = ct + seg.off;
         }
-        var idx = Math.round((t - halfWin) / hop);   // stamp the frame at the centre of the analyser window
-        if (idx < 0 || idx >= n) return;             // outside the recorded window → idle
+        var idx = Math.round((t - halfWin - env.t0) / hop);   // stamp the frame at the centre of the analyser window
+        if (idx >= n) {
+          // the window slides: drop the older half and keep going (a look uses whatever the last 90 s hold)
+          var sh = n >> 1;
+          env.mid.copyWithin(0, sh); env.side.copyWithin(0, sh); env.cnt.copyWithin(0, sh);
+          env.mid.fill(0, n - sh); env.side.fill(0, n - sh); env.cnt.fill(0, n - sh);
+          env.t0 += sh * hop; idx -= sh;
+          if (idx >= n) { env.mid.fill(0); env.side.fill(0); env.cnt.fill(0); env.t0 = t - halfWin; idx = 0; }   // a jump far ahead: start over there
+        }
+        if (idx < 0) {
+          if (idx < -(n >> 1)) { env.mid.fill(0); env.side.fill(0); env.cnt.fill(0); env.t0 = t - halfWin; idx = 0; }   // a jump far back: start over there
+          else return;
+        }
         anM.getFloatTimeDomainData(buf); var m2 = meanSq(buf);
         anS.getFloatTimeDomainData(buf); var s2 = meanSq(buf);
         if (env.cnt[idx] < 65535) { env.mid[idx] += m2; env.side[idx] += s2; env.cnt[idx]++; frames++; }
       };
       var tick = function () { if (disposed) return; var t0 = now(); ticks++; try { body(); } catch (e) {} cpuMs += now() - t0; };
-      var timer = setInterval(tick, hopMs);
+      // the shared worker ticker where there is one: a hidden tab clamps setInterval to once a second, which starves the envelope
+      var timer = (typeof Ticker !== 'undefined' && Ticker && Ticker.every) ? Ticker.every(tick, hopMs) : (function (id) { return { stop: function () { clearInterval(id); } }; })(setInterval(tick, hopMs));
 
       return {
         estimate: function (lineStarts, o2) {
@@ -4137,11 +4150,11 @@
           r.stats = r.stats || {}; r.stats.estimateMs = round3(now() - t0);
           return r;
         },
-        stats: function () { return { ticks: ticks, cpuMs: round3(cpuMs), frames: frames, hop: hop, sampleRate: ctx.sampleRate }; },
+        stats: function () { return { ticks: ticks, cpuMs: round3(cpuMs), frames: frames, hop: hop, t0: env.t0, sampleRate: ctx.sampleRate }; },
         envelope: function () { return { mid: Array.prototype.slice.call(env.mid), side: Array.prototype.slice.call(env.side), cnt: Array.prototype.slice.call(env.cnt), hop: hop }; },
         dispose: function () {
           if (disposed) return; disposed = true;
-          clearInterval(timer);
+          try { timer.stop(); } catch (e) {}
           try { rawDisconnect.call(src, midIn); } catch (e) {}
           try { rawDisconnect.call(src, split); } catch (e) {}
           for (var i = 0; i < own.length; i++) { try { own[i].disconnect(); } catch (e) {} }
@@ -5443,9 +5456,12 @@
 
   /* ----- NETEASE (synced LRC, huge catalog incl. Western, keyless) ----- */
 
+  // NetEase answers some regions with a “cheating” refusal unless the request looks domestic: the headers its own
+  // clients send (the well-known workaround of every third-party NetEase client)
+  const NE_HEADERS = { 'X-Real-IP': '211.161.244.70', 'X-Forwarded-For': '211.161.244.70' };
   async function neteaseSearch(q, durSec) {
     const j = await gmJSON('https://music.163.com/api/search/get?s=' + encodeURIComponent(q)
-      + '&type=1&limit=6&offset=0', { timeout: 8000 });
+      + '&type=1&limit=6&offset=0', { headers: NE_HEADERS, timeout: 8000 });
     const songs = (j && j.result && j.result.songs) || [];
     return {
       songs: songs.map((s, i) => {
@@ -5483,7 +5499,7 @@
     return cachedBody('n:' + nid, async () => {
       // the v1 endpoint carries the word-level sheet next to the line sheet; without it, the karaoke wipe is a straight line
       try {
-        const j = await gmJSON('https://music.163.com/api/song/lyric/v1?os=pc&id=' + nid + '&cp=false&tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0', { timeout: 8000 });
+        const j = await gmJSON('https://music.163.com/api/song/lyric/v1?os=pc&id=' + nid + '&cp=false&tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0', { headers: NE_HEADERS, timeout: 8000 });
         const y = j && j.yrc && j.yrc.lyric ? parseYrc(j.yrc.lyric) : null;
         if (y) { if (y.wt) NE_WORDS.set(nid, y.wt); return y.lrc; }
         const raw0 = j && j.lrc && j.lrc.lyric;
@@ -5492,13 +5508,13 @@
       // os=pc matters: without it this endpoint refuses many clients —
       // the diagnostics trail showed search working but every body failing
       try {
-        const j = await gmJSON('https://music.163.com/api/song/lyric?os=pc&id=' + nid + '&lv=-1&kv=-1&tv=-1', { timeout: 8000 });
+        const j = await gmJSON('https://music.163.com/api/song/lyric?os=pc&id=' + nid + '&lv=-1&kv=-1&tv=-1', { headers: NE_HEADERS, timeout: 8000 });
         const raw = j && j.lrc && j.lrc.lyric;
         if (raw && raw.trim()) return raw;
       } catch (e) {}
       // second door: the legacy media endpoint serves the same LRC and
       // answers from networks the lyric API refuses outright
-      const j2 = await gmJSON('https://music.163.com/api/song/media?id=' + nid, { timeout: 8000 });
+      const j2 = await gmJSON('https://music.163.com/api/song/media?id=' + nid, { headers: NE_HEADERS, timeout: 8000 });
       const raw2 = j2 && j2.lyric;
       return raw2 && raw2.trim() ? raw2 : null;
     });
@@ -5991,7 +6007,7 @@
     lines: [],
     add(s) {
       this.lines.push(new Date().toTimeString().slice(0, 8) + ' ' + s);
-      if (this.lines.length > 50) this.lines.shift();
+      if (this.lines.length > (this.max || 50)) this.lines.shift();
       // console mirror only in debug mode — the in-memory buffer always feeds diagReport
       try { if (SUITE.debug && SUITE.debug()) console.debug('[SuperLyrics]', s); } catch (e) {}
     },
@@ -8474,6 +8490,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['≡', 'Sync that holds still, NetEase that loads', 'The vocal aligner waits for the audio instead of missing it on a cached sheet, keeps listening past the first 90 s, and trusts only two looks that agree — so a NetEase or Kugou sheet is pulled onto the vocals like an LRCLIB one, and a wrong sheet is left alone. NetEase requests carry the headers its own apps send, and when a sheet still will not load, the toast says why. A run of skipped tracks no longer starts a search for each.'],
           ['♪', 'Lyrics: found faster, synced tighter', 'The exact duration-matched lookup runs first on every track, junk like “sped up” or “Official Video” no longer poisons the search, and a search never runs past 14 s. Sheets a few seconds off the upload keep their timing instead of being stretched, and the vocal aligner now applies a clear finding by itself (0 undoes it). NetEase sheets bring word-level timing to the karaoke wipe.'],
           ['◐', 'Loudness that ignores the volume slider', 'Loudness normalize measures the source at unity, so a track played at 50 % is no longer read as quiet and pushed back up. Parameter ramps start from the true current value, and the reverb tail now has a pre-delay, damped highs and no mud below 140 Hz.'],
           ['♫', 'The Audio tab in the same clothes', 'Five chips (EQ, Play, Tone, Level, Space) stay pinned while you scroll and follow where you are. Every pill, select and slider row matches the Tweaks tab; the Stats pills too, and they read on the light panel now.'],
@@ -9143,7 +9160,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // a clear vocal-alignment finding (≥ 200 ms, not declined) for this synced sheet, not yet applied
       { const r = SyncAuto.last; const lagR = r ? (r.lagAdj != null ? r.lagAdj : r.lagSec) : 0; if (r && !r.reason && r.confidence > 0 && Math.abs(lagR) >= SyncAuto.MIN_SEC && !SyncAuto.ms && curLyr && curLyr.synced && SyncAuto.apply) {
         const ms = -Math.round(lagR * 1000);
-        mi('Align to vocals: ' + (ms > 0 ? '+' : '') + (ms / 1000).toFixed(2) + 's (' + (r.confidence >= 0.5 ? 'clear' : r.confidence >= 0.2 ? 'likely' : 'weak') + ')', () => SyncAuto.apply());
+        mi('Align to vocals: ' + (ms > 0 ? '+' : '') + (ms / 1000).toFixed(2) + 's (' + (r.agreed ? 'clear' : r.confidence >= 0.2 ? 'likely' : 'weak') + ')', () => SyncAuto.apply());
       } }
       mi('Sync wizard: ' + (wizOn ? 'on' : 'off'), () => toggleWizard());
       mi('Audio latency: auto ' + (App.autoLatencyMs() || 0) + 'ms' + ((App.latencyMs() || 0) ? ' + ' + App.latencyMs() + ' manual' : ''), () => {
@@ -10627,15 +10644,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * "Align to vocals"; applying it sets a third offset term, SyncAuto.ms (clock-side: −lagSec), persisted with
      * the cache entry, shown as "auto" in the source line. '0' clears it like the other offsets; a manual nudge
      * sits on top of it. */
-    let aligner = null, alignT = null, alignTries = 0;   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
-    const AUTO_ALIGN_AT_MS = [30000, 15000, 15000, 30000];   // looks at 30 s, 45 s, 60 s and 90 s of playback
+    let aligner = null, alignT = null, alignTries = 0, alignerEl = null, alignRetaps = 0, alignWaits = 0, alignHist = [];   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
+    const AUTO_ALIGN_AT_MS = [20000, 15000, 15000, 20000, 30000, 40000, 60000];   // looks at 20, 35, 50, 70, 100, 140 and 200 s of playback (the window slides with the track)
     const ALIGN_BIAS_SEC = 0.12;    // on sheets that ARE right the estimator still reads +0.1..0.18 s: the sung energy rises after the instant people tap, so that much is not a sheet error
-    const ALIGN_AUTO_CONF = 0.5;    // a clear finding applies itself; weaker ones wait in the ⋯ menu
+    const ALIGN_MIN_LINES = 12, ALIGN_MIN_Z = 2.0, ALIGN_MAX_RATIO = 0.85;   // what one look must have to count; two counting looks that agree within 150 ms are a finding
     function alignStop() { stopT(alignT); alignT = null; if (aligner) { try { aligner.dispose(); } catch (e) {} aligner = null; } }
-    function alignStart() {
-      alignStop(); alignTries = 0; SyncAuto.last = null;
+    function alignStart(retap) {
+      alignStop(); alignTries = 0; SyncAuto.last = null; if (!retap) { alignRetaps = 0; alignWaits = 0; alignHist = []; }
       try {
-        const tap = SUITE.audioTap && SUITE.audioTap(); if (!tap || !tap.ctx || !tap.src || typeof LYRIC_ALIGN === 'undefined') return;
+        if (typeof LYRIC_ALIGN === 'undefined') return;
+        const tap = SUITE.audioTap && SUITE.audioTap();
+        if (!tap || !tap.ctx || !tap.src) {
+          // a cached sheet paints before SoundCloud has created its media source: wait for the element, then tap it
+          if (alignWaits++ < 30) alignT = Ticker.after(() => alignStart(true), 2000);
+          return;
+        }
+        alignerEl = tap.el || null;
         aligner = LYRIC_ALIGN.create(tap.ctx, tap.src, {
           mediaTime: () => { try { const c = SUITE.audioClock && SUITE.audioClock(); return c == null ? NaN : c; } catch (e) { return NaN; } },
           paused: () => !Media.playing(),
@@ -10656,11 +10680,27 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         // the lag can be as large as the duration difference — search that far and prefer lags near 0 or ±that difference
         const dd = (lyr.srcDur > 0 && meta && meta.dur > 0 && !lyr.scaled) ? Math.abs(meta.dur - lyr.srcDur) : 0;
         const r = aligner.estimate(starts, dd > 2 ? { maxLagSec: Math.min(15, dd + 1.5), priorLags: [0, dd, -dd] } : null); SyncAuto.last = r;
-        if (r && !r.reason && r.confidence > 0) {
+        try { Trail.add('align look ' + (alignTries + 1) + ' (' + lyr.src + ', ' + Math.round(Media.time()) + ' s): ' + (r ? (r.reason || ('lag ' + r.lagSec + ' s, z ' + (r.peak ? r.peak.z : '?') + ', runner-up ' + (r.runnerUp ? r.runnerUp.ratio : '-') + ', ' + r.linesUsed + ' lines')) : 'no estimate')); } catch (e) {}
+        // nothing heard: SoundCloud may have switched elements under the tap (it keeps one per upcoming track) — tap the audible one and go on
+        if (r && /^(no-activity|no-audio|silence)$/.test(r.reason || '') && alignRetaps < 3) {
+          const tap = SUITE.audioTap && SUITE.audioTap();
+          if (tap && tap.el && tap.el !== alignerEl) { alignRetaps++; alignStart(true); return; }
+        }
+        if (r && !r.reason) {
           r.lagAdj = Math.round((r.lagSec - ALIGN_BIAS_SEC) * 1000) / 1000;
-          // a clear finding applies itself, once, while nothing manual is in place; the toast says how to undo it
-          if (r.confidence >= ALIGN_AUTO_CONF && Math.abs(r.lagAdj) >= 0.25 && !SyncAuto.ms && !off && !anch.length && SyncAuto.apply) { SyncAuto.apply(true); return; }
-          if (Math.abs(r.lagAdj) >= SyncAuto.MIN_SEC) return;   // a finding the menu can offer
+          // one look is a hint; two looks that agree, each on a dozen lines or more with a clear peak, are a finding:
+          // a wrong sheet's lag wanders from look to look, a right one's holds still (measured on real tracks)
+          const solid = r.linesUsed >= ALIGN_MIN_LINES && r.peak && r.peak.z >= ALIGN_MIN_Z && (!r.runnerUp || r.runnerUp.ratio <= ALIGN_MAX_RATIO);
+          if (solid) alignHist.push(r.lagAdj); else alignHist.length = 0;
+          const n = alignHist.length, agreed = n >= 2 && Math.abs(alignHist[n - 1] - alignHist[n - 2]) <= 0.15;
+          r.agreed = agreed;
+          if (agreed) {
+            const lag = (alignHist[n - 1] + alignHist[n - 2]) / 2; r.lagAdj = Math.round(lag * 1000) / 1000;
+            Trail.add('align agreed: ' + r.lagAdj + ' s' + (Math.abs(lag) < 0.25 ? ' (sheet is right)' : (!SyncAuto.ms && !off && !anch.length) ? ' → applied' : ' → offered (an offset is already set)'));
+            // a finding applies itself, once, while nothing manual is in place; the toast says how to undo it
+            if (Math.abs(lag) >= 0.25 && !SyncAuto.ms && !off && !anch.length && SyncAuto.apply) { SyncAuto.apply(true); return; }
+            if (Math.abs(lag) < 0.25) return;   // the sheet is right: done looking
+          }
         }
         again();   // more audio, another look
       } catch (e) {}
@@ -10674,6 +10714,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
         UI.toast('Lyrics aligned to the vocals (' + (SyncAuto.ms > 0 ? '+' : '') + (SyncAuto.ms / 1000).toFixed(2) + ' s) · 0 undoes it');
       } catch (e) {}
+    };
+
+    // diagnostics: the aligner's verdict on this sheet shifted by a known amount (the debug probes measure its power with it)
+    SUITE.lyricsAlignTest = (shift, o2) => {
+      try {
+        if (!aligner || !lyr || !lyr.synced) return null;
+        let st = lyr.lines.map((l) => +l[0] + (+shift || 0));
+        if (o2 && o2.stretch > 0) st = st.map((t) => t * o2.stretch);                                   // a sheet timed to a faster or slower master
+        if (o2 && o2.jitter > 0) st = st.map((t, i) => t + ((((i * 7919 + 13) % 200) / 100) - 1) * o2.jitter);   // a wrong sheet: every line off by its own amount
+        const r = aligner.estimate(st, o2 || null); r.tapStats = aligner.stats(); return r;
+      } catch (e) { return { err: String(e) }; }
     };
 
     // permalink-first cache key: archive accounts post many distinct tracks
@@ -10775,8 +10826,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       };
       const same = result && lyr && (result === lyr ||
         (result.src === lyr.src && !!result.synced === !!lyr.synced && sameLines(result.lines, lyr.lines)));
+      const swapped = !!lyr && !same;   // a different sheet replacing one already shown (a pick, an import, an upgrade), not the first to arrive
       lyr = result;
       if (!aligner && result && result.synced) alignStart();   // the source arrived after the track change
+      else if (aligner && swapped && result && result.synced) { alignHist = []; alignTries = 0; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
       // (e.g. left by an older version) so they can't linger in storage / diagnostics
       if (result && result.synced && anch.length) { anch = []; try { persistSync(); } catch (e) {} }
@@ -11011,8 +11064,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       });
     }
 
+    let lastChangeAt = 0;   // when the previous track became current: two changes within 2.5 s are a skip run
     function onTrackChange(m) {
       preconnect();   // first music = first third-party contact, not page load
+      const changedAt = Date.now(), skipping = changedAt - lastChangeAt < 2500; lastChangeAt = changedAt;
       meta = m;
       meta.key = trackKey(m);
       try { Chapters.load(meta); } catch (e) {}
@@ -11035,6 +11090,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let kicks = 0;
       const kick = () => {
         if (SUITE.shuffleBusy && SUITE.shuffleBusy()) { prefetchT = Ticker.after(kick, 1200); return; }
+        // the second track inside 2.5 s is a skip run (a playlist flipped through, SoundCloud stepping over unavailable
+        // tracks): searching for each one floods the providers and slows the one the listener stops on, so a track in a
+        // run must stay current for 900 ms before its search starts — the first track after a settled one, and any
+        // cached sheet, still gets going at once
+        if (skipping && !Cache.has(meta.key) && !Miss.has(meta.key) && Date.now() - changedAt < 900) { prefetchT = Ticker.after(kick, 900 - (Date.now() - changedAt)); return; }
         // duration is the engine's strongest right-version signal, but the
         // player DOM often exposes it a beat AFTER the title changes — wait
         // for it (max ~1 s) instead of searching blind without it
@@ -11280,6 +11340,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const myToken = token;
       UI.exitSearch(true);
       UI.showLoading();
+      let why = '';   // when nothing renders: what actually happened, for the toast and the trail
       try {
         let result = null;
         const wantDur = meta ? meta.dur : 0;
@@ -11288,16 +11349,21 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (lines && lines.length) result = { src: 'genius', synced: false, lines, a: item.a, t: item.t, picked: true };
         } else if (item.src === 'kugou' || item.src === 'netease') {
           const raw = item.src === 'netease' ? await neteaseLyric(item.nid) : await kugouLyric(item.kid, item.kkey);
+          const nm = SRC_NAME[item.src] || item.src;
+          if (!raw) why = nm + ' didn’t answer — its lyric service may be blocked from your network';
           if (raw) {
             const lines = parseLRC(raw, item.a, item.t);
             if (lrcIsPlaceholder(lines)) {
-              // an instrumental placeholder is not lyrics — leave the result empty
+              why = nm + ' has no lyrics for that one, only a placeholder';   // an instrumental placeholder is not lyrics
+            } else if (!lines.length) {
+              why = nm + ' sent a sheet with no timed lines';
             } else if (lines.length) {
               // same ladder as the automatic path: scale to the upload's length,
               // or render text when the version is too far off to trust.
-              const fit = fitSync(lines, item.dur, wantDur);
+              const fit = fitSync(lines, item.dur, wantDur, (meta && meta.title) ? cleanTitle(meta.title).flags : {});
+              const wt = (fit && !fit.scaled && item.src === 'netease' && NE_WORDS.has(item.nid)) ? NE_WORDS.get(item.nid) : null;
               result = fit
-                ? { src: item.src, synced: true, scaled: fit.scaled, lines: fit.lines, a: item.a, t: item.t, srcDur: item.dur || 0, picked: true }
+                ? { src: item.src, synced: true, scaled: fit.scaled, lines: fit.lines, a: item.a, t: item.t, srcDur: item.dur || 0, picked: true, wt }
                 : { src: item.src, synced: false, lines: lines.map((l) => l[1]), a: item.a, t: item.t, picked: true };
             }
           }
@@ -11307,7 +11373,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (result) { result.picked = true; result.low = false; }
         }
         if (!result) {
-          if (myToken === token && UI.isOpen()) { UI.showNone(); UI.toast("Couldn't load that one"); }
+          Trail.add('pick ' + item.src + ' "' + (item.t || '') + '" failed: ' + (why || 'no body'));
+          if (myToken === token && UI.isOpen()) { UI.showNone(); UI.toast(why || "Couldn't load that one"); }
           return;
         }
         if (myToken !== token) return;   // track changed during the await — don't zero/cache the NEW track's state
@@ -11652,7 +11719,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       hotkeys();
       SUITE.lyricsOpen = () => UI.isOpen();
       SUITE.lyricsAlign = () => { try { return { last: SyncAuto.last, ms: SyncAuto.ms, conf: SyncAuto.conf, auto: !!SyncAuto.auto }; } catch (e) { return null; } };
-      try { if (localStorage.getItem('scss:debug') === '1') window.__slxAlign = SUITE.lyricsAlign; } catch (e) {}
+      try { if (localStorage.getItem('scss:debug') === '1') { window.__slxAlign = SUITE.lyricsAlign; window.__slxAlignTest = SUITE.lyricsAlignTest; window.__slxTrail = () => Trail.dump(); Trail.max = 600; } } catch (e) {}
       // all-in-one: the ✦ enhancer button opens the hub on its Tweaks tab
       SUITE.openLyricsTweaks = () => { try { UI.setOpen(true); UI.setTab('tweaks'); } catch (e) {} };
       // the ✦ gear TOGGLES settings: already on Tweaks → close; otherwise open + show Tweaks
@@ -15871,7 +15938,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // the captured source and its context for the hub's own analysis taps (lyric auto-align):
   // the newest entry, whether or not the chain is routed — a tap on the source node hears the
   // track either way. null before SoundCloud has built its graph.
-  try { SUITE.audioTap = () => { const e = [...sceFx].pop(); return e ? { ctx: e.ctx, src: e.src } : null; }; } catch (e) {}
+  // the tap for module 2's vocal aligner: the entry whose element is the one playing (SoundCloud keeps a second element
+  // around for the next track, so the newest capture is not always the audible one), else the newest
+  try { SUITE.audioTap = () => { let m = null; try { m = activeMedia(); } catch (e) {} let e = null; sceFx.forEach((x) => { if (m && x.src && x.src.mediaElement === m) e = x; }); if (!e) e = [...sceFx].pop(); return e ? { ctx: e.ctx, src: e.src, el: (e.src && e.src.mediaElement) || null } : null; }; } catch (e) {}
   // the captured media elements, oldest first: the shuffle module mutes, watches and fades playback through
   // these because SoundCloud's player element never enters the DOM and its own querySelectorAll finds nothing
   try { SUITE.mediaEls = () => [...sceMediaEls]; } catch (e) {}

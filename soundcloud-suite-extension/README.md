@@ -83,10 +83,15 @@ never plays.
   first on every track; bare “sped up” / “slowed + reverb” / “Official Video”
   words are stripped from queries; a search ends within 14 s. A sheet timed to
   a master a few seconds longer or shorter keeps its timestamps (no stretching)
-  and the vocal aligner applies a clear finding on its own, looking at 30, 45,
-  60 and 90 s of playback; pressing 0 undoes it. NetEase sheets carry word-level timing
-  for the karaoke wipe. The first related track is pre-warmed when no shuffle
-  queue is set.
+  and the vocal aligner applies a finding on its own once two looks agree
+  (at 20, 35, 50, 70, 100, 140 and 200 s of playback, each on twelve lines or
+  more); pressing 0 undoes it. NetEase sheets carry word-level timing for the
+  karaoke wipe. The first related track is pre-warmed when no shuffle queue is
+  set, and a run of skipped tracks starts one search, not one per track.
+- **NetEase that loads** — its requests carry the headers its own apps send,
+  which is what its lyric service wants from outside China; when a sheet still
+  will not load, the toast says what happened (no answer, a placeholder, no
+  timed lines) and the Copy diagnostics trail records it.
 - **Loudness normalize measures the source at unity** — SoundCloud’s own
   volume slider sits before the capture point; it is compensated now, so a
   track played at 50 % is no longer read as quiet and pushed back up.
@@ -193,11 +198,14 @@ entirely, so SoundCloud plays exactly as it does without the extension.
 
 Lyrics sync: the highlight follows the audio clock minus the measured output
 and effects delay, lights the sung line on its own frame, and — for synced
-sheets — listens to the first 90 s of the track through its own taps to
-estimate the constant lag between the sheet and the vocals it hears. A clear
-finding of 200 ms or more shows up in the ⋯ menu as **Align to vocals**;
-applying it sets an "auto" offset (shown in the source line; **0** clears it,
-and any manual nudge sits on top).
+sheets — listens to the track through its own taps (a 90 s window that slides
+along with playback) to estimate the constant lag between the sheet and the
+vocals it hears. A finding of 200 ms or more shows up in the ⋯ menu as
+**Align to vocals**; two looks that agree within 150 ms, each on twelve lines
+or more with a clear peak, apply themselves. Applying sets an "auto" offset
+(shown in the source line; **0** clears it, and any manual nudge sits on top).
+The aligner waits for SoundCloud's media element when a cached sheet paints
+before it exists, and re-taps when SoundCloud swaps elements between tracks.
 
 Audio hotkeys (with **Global hotkeys** on in Tweaks): **A** hold to compare,
 **N** night mode, **,** / **.** speed −5 % / +5 %. Inside the hub they work on
