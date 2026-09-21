@@ -3591,6 +3591,20 @@
     SUITE.openShuffleStats = (a) => { try { openStats(a); } catch (e) {} };
     // v2 hub bridges: the lyrics panel hosts Queue and Stats tabs now
     SUITE.queueList = () => (S.poolList && S.poolList.length ? S.poolList : null);
+    // the palette's "search your likes": title-or-artist substring, title hits first, then artist hits; a few thousand items scan in a millisecond
+    SUITE.libSearch = (q, n) => {
+        try {
+            const items = (getLibMap() || {}).__items; if (!items || !items.length) return null;
+            const needle = String(q || '').toLowerCase().trim(); if (needle.length < 2) return [];
+            const first = [], second = [], max = Math.max(1, n | 0 || 6);
+            for (const it of items) {
+                const t = (it[5] || '').toLowerCase(), a = (it[4] || '').toLowerCase();
+                if (t.indexOf(needle) !== -1) { if (first.push(it) >= max) break; }
+                else if (second.length < max && a.indexOf(needle) !== -1) second.push(it);
+            }
+            return first.concat(second).slice(0, max).map(it => ({ url: it[1], title: it[5] || '', artist: it[4] || '', durMs: it[2] || 0 }));
+        } catch (e) { return null; }
+    };
     SUITE.statsSnapshot = () => {
         try {
             let streak = 0;
@@ -8177,13 +8191,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const go = () => { wrap.remove(); if (href) { try { const a = document.createElement('a'); a.href = href; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (er) { try { location.assign(href); } catch (er2) {} } } else { try { window.open('https://soundcloud.com/search?q=' + encodeURIComponent(((e.a || '') + ' ' + (e.t || '')).trim()), '_blank'); } catch (er) {} } };
           r.title = href ? 'Open this track' : 'Search SoundCloud for it';
           r.addEventListener('click', go);
-          r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); go(); } });
+          r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); swallowNextKeyup(ev.key); go(); } });
           list.appendChild(r);
         }
         if (!shown) { const none = document.createElement('div'); none.style.cssText = 'padding:14px;color:#8a8a92;font-size:12px'; none.textContent = 'Nothing in the cached lyrics has those words'; list.appendChild(none); }
       };
       inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 160); });
-      inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') { ev.preventDefault(); wrap.remove(); } if (ev.key === 'Enter') { const first = list.querySelector('.qrow'); if (first) first.click(); } });
+      inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') { ev.preventDefault(); wrap.remove(); } if (ev.key === 'Enter') { const first = list.querySelector('.qrow'); if (first) { swallowNextKeyup('Enter'); first.click(); } } });
       const row = document.createElement('div'); row.className = 'row';
       const close = document.createElement('button'); close.className = 'btn'; close.textContent = 'Close'; close.addEventListener('click', () => wrap.remove());
       row.appendChild(close);
@@ -10046,17 +10060,55 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       closePalette();
       if (c) { try { c.run(); } catch (e) {} }
     }
+    // Enter is play / pause on SoundCloud, on the key's release: when a sheet or the palette acts on the keydown
+    // and closes, the keyup lands on the page, so the next release of that key is swallowed at the window
+    function swallowNextKeyup(key) {
+      function off() { try { window.removeEventListener('keyup', onUp, true); } catch (e) {} }
+      function onUp(e) { if (e.key !== key) return; e.stopImmediatePropagation(); e.preventDefault(); off(); }
+      try { window.addEventListener('keyup', onUp, true); setTimeout(off, 1500); } catch (e) {}
+    }
+    // open a track page through SoundCloud's router and press its play button once the page has settled. A press
+    // in the first second after the hero renders, and sometimes a later one, gets the site's sign-in nag instead of
+    // playback (signed-out visitors), so the button has to sit enabled for a moment first, the nag is closed if it
+    // shows, and the press is repeated up to three times until the player bar reports playing
+    function playHref(url) {
+      let path = url; try { path = new URL(url, location.origin).pathname; } catch (e) {}
+      const here = () => location.pathname.replace(/\/$/, '') === path.replace(/\/$/, '');
+      const hero = () => document.querySelector('.fullHero');
+      const btn = (h) => h && h.querySelector('.sc-button-play');
+      const ready = (h) => { const b = btn(h); return !!(b && !b.classList.contains('sc-button-disabled') && !b.disabled); };
+      const playing = () => { const pb = document.querySelector('.playControls__play'); return !!(pb && pb.classList.contains('playing')); };
+      const nag = () => document.querySelector('.modal.auth-modal .modal__closeButton, .modal.auth-modal .modal__close');
+      const press = (h) => { const b = btn(h); if (b && !/sc-button-pause/.test(b.className) && !b.classList.contains('playing')) b.click(); };
+      const old = here() ? null : hero();   // the router swaps the hero for the new page; until it does, the old page's button is the one on screen
+      if (!here()) { try { const a = document.createElement('a'); a.href = path; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (e) { try { location.assign(path); } catch (e2) {} } }
+      let ticks = 0, settled = 0, pressed = 0, pressedAt = 0, sawHero = false;
+      const t = setInterval(() => {
+        ticks++;
+        const h = hero(), ok = here() && h && h !== old;
+        if (ok && ready(h)) settled++; else settled = 0;
+        if (ok) sawHero = true;
+        if (pressed && playing()) { clearInterval(t); return; }
+        if (pressed && ticks - pressedAt >= 10 && pressed < 3 && ok) { const x = nag(); if (x) { try { x.click(); } catch (e) {} pressedAt = ticks - 6; return; } press(h); pressed++; pressedAt = ticks; return; }   // no start in 2.5 s: close the nag if it showed, press again
+        if (!pressed && settled >= 6) { press(h); pressed = 1; pressedAt = ticks; return; }   // enabled for 1.5 s: press
+        if (ticks > 80) { clearInterval(t); if (!pressed) toast(sawHero ? 'This track can’t be played here' : 'Could not open that track'); }
+      }, 250);
+    }
+    function fmtDur(ms) { const s = Math.round(ms / 1000), m = Math.floor(s / 60); return m >= 60 ? Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0') : m + ':' + String(s % 60).padStart(2, '0'); }
     function renderPalette(all) {
       const q = (cmdkIn.value || '').trim().toLowerCase();
       let list = all;
       if (q) {
         list = all.map((c) => ({ c, s: Math.max(cmdkFuzzy(q, c.label), cmdkFuzzy(q, c.hint) - 5) }))
           .filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.c);
+        // your likes, by title or artist, after the commands: pick one and it opens and plays
+        let hits = null; try { hits = SUITE.libSearch ? SUITE.libSearch(q, 6) : null; } catch (e) { hits = null; }
+        if (hits && hits.length) list = list.concat(hits.map((h) => ({ icon: '♥', label: h.title + (h.artist ? ' — ' + h.artist : ''), hint: 'Likes' + (h.durMs ? ' · ' + fmtDur(h.durMs) : ''), run: () => playHref(h.url) })));
       }
       cmdkView = list; cmdkSel = 0;
       cmdkListEl.replaceChildren();
       if (!list.length) {
-        const e = document.createElement('div'); e.className = 'cmdkempty'; e.textContent = 'No matching commands';
+        const e = document.createElement('div'); e.className = 'cmdkempty'; e.textContent = (SUITE.libSearch && SUITE.libSearch('__', 1) !== null) ? 'No matching commands or liked tracks' : 'No matching commands';
         cmdkListEl.appendChild(e); return;
       }
       list.forEach((c, i) => {
@@ -10087,7 +10139,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if ((e.metaKey || e.ctrlKey) && e.code === 'KeyK') { e.preventDefault(); closePalette(); return; }
         if (e.key === 'ArrowDown') { e.preventDefault(); cmdkMove(1); return; }
         if (e.key === 'ArrowUp') { e.preventDefault(); cmdkMove(-1); return; }
-        if (e.key === 'Enter') { e.preventDefault(); cmdkRun(); return; }
+        if (e.key === 'Enter') { e.preventDefault(); swallowNextKeyup('Enter'); cmdkRun(); return; }
       });
       cmdkEl.__setAll = (a) => { all = a; };
       root.appendChild(cmdkEl);
