@@ -116,6 +116,21 @@ never plays.
   yet; a pick that cannot load leaves the sheet that was showing; the manual
   search opens with the artist the library knows; the results list paints
   once and then settles instead of rebuilding on every source.
+- **Audio that follows the element that plays** — SoundCloud keeps a media
+  source ready for the next track while the current one plays; the meters,
+  loudness normalize, the Enhance tracker, the EQ spectrum and the silent-ending
+  trim now read the chain of the element that is audible, and a seek, mute,
+  restart or volume change while paused lands on the element that played, not
+  the pre-created one. The player-bar title link is looked up with fallbacks
+  and its absence is noted in the debug snapshot. The speed and text-size
+  sliders touch only what they change (no full stylesheet rebuild, graph
+  write and DOM scan per input event), the stylesheet is replaced only when
+  it changed, and the promo-bar sweep tests text nodes instead of serialising
+  the page. The Enhance glide waits out a bank crossfade; list keys leave a
+  focused button, link, select, menu or dialog alone and the Liked toast
+  reads the state before the click; the theme lands at document_start (no
+  light flash on a dark theme); timestamps are re-linked after "Show more";
+  the OS scrubber follows a speed change at once.
 - **Loudness normalize measures the source at unity** — SoundCloud’s own
   volume slider sits before the capture point; it is compensated now, so a
   track played at 50 % is no longer read as quiet and pushed back up.

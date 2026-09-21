@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.61.0
+// @version      4.62.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.61.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.62.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -8621,6 +8621,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⚙', 'Sturdier everywhere', 'The toolbar icon toggles the hub without reloading the tab. Meters, loudness normalize and every current-track action follow the element that is playing, not the one SoundCloud keeps ready for the next track. Lyric requests you wait for go first, NetEase and Kugou are parked when they keep timing out, and the “no lyrics” card says which sources were unavailable. A failed shuffle says why, a rate-limited fetch counts down on the button, toasts in a hidden tab go away on their own, the dark theme lands before first paint, and slider drags no longer rebuild the page.'],
           ['≡', 'Sync that holds still, NetEase that loads', 'The vocal aligner waits for the audio instead of missing it on a cached sheet, keeps listening past the first 90 s, and trusts only two looks that agree — so a NetEase or Kugou sheet is pulled onto the vocals like an LRCLIB one, and a wrong sheet is left alone. NetEase requests carry the headers its own apps send, and when a sheet still will not load, the toast says why. A run of skipped tracks no longer starts a search for each.'],
           ['♪', 'Lyrics: found faster, synced tighter', 'The exact duration-matched lookup runs first on every track, junk like “sped up” or “Official Video” no longer poisons the search, and a search never runs past 14 s. Sheets a few seconds off the upload keep their timing instead of being stretched, and the vocal aligner now applies a clear finding by itself (0 undoes it). NetEase sheets bring word-level timing to the karaoke wipe.'],
           ['◐', 'Loudness that ignores the volume slider', 'Loudness normalize measures the source at unity, so a track played at 50 % is no longer read as quiet and pushed back up. Parameter ramps start from the true current value, and the reverb tail now has a pre-delay, damped highs and no mud below 140 Hz.'],
@@ -12303,16 +12304,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // a correction switch that was left on without a profile did nothing but route the chain
   try { if (CFG.peqOn && !(Array.isArray(CFG.peq) && CFG.peq.length)) { CFG.peqOn = false; save(); } } catch (e) {}
 
+  let lastPlayingEl = null;   // the captured element that played most recently: after a pause, still the current one
   const activeMedia = () => {
     // SoundCloud plays through the Web Audio API with a DETACHED media element
     // that never enters the DOM. We capture that real element via
     // createMediaElementSource into `sceMediaEls`. Whichever set it lives in,
     // the PLAYING element wins; otherwise the freshest captured one, then any
     // in-DOM one — a paused promo <video> must never outrank the real player.
-    let playing = null, captured = null, inDom = null;
-    try { sceMediaEls.forEach((a) => { if (!a) return; captured = a; if (!playing && !a.paused && a.readyState > 0) playing = a; }); } catch (e) {}
+    let playing = null, captured = null, inDom = null, seenLast = false;
+    try { sceMediaEls.forEach((a) => { if (!a) return; captured = a; if (a === lastPlayingEl) seenLast = true; if (!playing && !a.paused && a.readyState > 0) playing = a; }); } catch (e) {}
     try { D.querySelectorAll('audio,video').forEach((a) => { if (!inDom) inDom = a; if (!playing && !a.paused && a.readyState > 0) playing = a; }); } catch (e) {}
-    let m = playing || captured || inDom;
+    // SoundCloud keeps an element for the next track: while paused, the one that played is the track on the bar
+    const recent = (lastPlayingEl && !playing && seenLast && lastPlayingEl.readyState > 0) ? lastPlayingEl : null;
+    let m = playing || recent || captured || inDom;
     return m;
   };
 
@@ -12569,14 +12573,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (CFG.customCss) css += '\n/* your CSS */\n' + CFG.customCss;
     return css;
   }
-  let styleEl = null;
+  let styleEl = null, lastCss = '';
   function applyCss() {
     try {
       if (!styleEl || !styleEl.isConnected) {
         styleEl = D.createElement('style'); styleEl.id = 'sce-style';
         (D.head || D.documentElement).appendChild(styleEl);
       }
-      styleEl.textContent = buildCss();
+      const css = buildCss();
+      if (css !== lastCss || !styleEl.textContent) { styleEl.textContent = css; lastCss = css; }   // a rewrite recalculates every style on the page
       applyTheme();
     } catch (e) {}
   }
@@ -12613,7 +12618,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
       m.addEventListener('playing', () => { try { offerResume(m); applyPendingJump(m); } catch (e) {} setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // long tracks: offer to resume when one starts from the top; the session update stays off the play-start path
       m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); tellState({ playing: false }); rewindNote(m); });
-      m.addEventListener('playing', () => { tellState({ playing: true }); rewindApply(m); });
+      m.addEventListener('playing', () => { lastPlayingEl = m; tellState({ playing: true }); rewindApply(m); });
+      m.addEventListener('ratechange', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // the OS scrubber follows the new speed at once
       m.addEventListener('seeked', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
       m.addEventListener('ended', () => { try { resumeForget(curTrackHref()); } catch (e) {} });
       // A–B (2.28): a seek, a rate change or a (re)start moves the wrap point — re-aim the timer
@@ -12662,6 +12668,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * prototype — so nothing else on the page is affected. Every step is guarded;
    * any failure falls back to the original connect. */
   const sceFx = new Set();   // { ctx, src, chain, dests, reroute }
+  // the routed chain of the element that is playing, else the newest routed one: SoundCloud keeps a source for the
+  // next track too, and its chain is silent — meters, loudness, the tracker and the spectrum must read the audible one
+  const activeEntry = () => { let m = null; try { m = activeMedia(); } catch (e) {} let hit = null, last = null; sceFx.forEach((x) => { if (!x.routed) return; last = x; if (m && x.src && x.src.mediaElement === m) hit = x; }); return hit || last; };
   let fxRouted = false, audioTabOn = false, fxBypass = false;
   let sleepFadeOn = false;   // a sleep-timer fade is riding output.gain (WP10): applyFx must not reset it
   let paintCmp = null;     // set by audioRender (the Compare button's painter); null until the tab has rendered
@@ -13117,6 +13126,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     w(b.enhPre.gain, db2g(-ENH_HEAD * a));
     w(b.sub.gain, ENH.sub * a); w(b.warm.gain, ENH.warm * a); w(b.mud.gain, ENH.mud * a); w(b.pres.gain, ENH.pres * a); w(b.air.gain, ENH.air * a);
     w(b.exGain.gain, ENH.exMix * a, 0.05);
+    if (b.bankOn !== !!bank) b.bankAt = Date.now();   // the tracker's glide keeps off the 50 ms crossfade that follows
     b.bankOn = !!bank;
     w(b.mbG.gain, bank ? db2g(off) : 0, 0.05); w(b.mbOut.gain, db2g(-off), 0.05);
     for (const [c, k] of [[b.mbLo, ENH.lo], [b.mbMid, ENH.mid], [b.mbHi, ENH.hi]]) {
@@ -13137,7 +13147,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const enhTrack = { href: null, entry: null, recent: [], lufs: NaN, off: 0 };
   function enhTick() {
     if (!CFG.enhanceOn) return;
-    let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); if (!e) return;   // the newest routed chain
+    const e = activeEntry(); if (!e) return;   // the audible chain
     const m = activeMedia(); if (!m || m.paused || !(m.readyState > 0)) return;
     // a new track (the badge's href) or a new source node (a fresh chain entry): start over from its first block
     const href = curTrackHref();
@@ -13157,6 +13167,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const gIn = Math.pow(10, off / 20), gOut = Math.pow(10, -off / 20);
     sceFx.forEach((x) => {
       if (!x.routed || !x.chain.bankOn) return;   // bankOn is stamped on the object setEnhanceParams wrote (the chain)
+      if (x.chain.bankAt && Date.now() - x.chain.bankAt < 150) return;   // mid-crossfade: .value is neither target, glide from it and the level dips
       try {
         const now = x.ctx.currentTime || 0, a = x.chain.mbG.gain, b = x.chain.mbOut.gain;
         const a0 = Math.max(1e-4, a.value), b0 = Math.max(1e-4, b.value);   // exponential ramps need non-zero ends
@@ -13862,7 +13873,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // untouched source peak, read from the newest routed chain's taps into `meter` (dBFS)
   function peakTick(vote) {   // vote: the 1 Hz / 500 ms meter ticks decide the mono-upload verdict; the tab's 10 Hz reads only paint
     try {
-      let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); if (!e) return;
+      const e = activeEntry(); if (!e) return;
       const c = e.chain;
       const rd = (a, b) => { a.getFloatTimeDomainData(b); let pk = 0, ss = 0; for (let i = 0; i < b.length; i++) { const v = b[i]; ss += v * v; const av = v < 0 ? -v : v; if (av > pk) pk = av; } return { pk, ss, n: b.length }; };
       const l = rd(c.oL, c.bufOL), r = rd(c.oR, c.bufOR), pk = Math.max(l.pk, r.pk), ms = (l.ss + r.ss) / (l.n + r.n);
@@ -13894,7 +13905,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   // ── Loudness normalize (2.4): K-weighted, gated, measured at `input` (the untouched
   //    source, so the value is the track's — ReplayGain semantics — whatever the chain does) ──
-  const newestRouted = () => { let e = null; sceFx.forEach((x) => { if (x.routed) e = x; }); return e; };
+  const newestRouted = activeEntry;   // the audible chain (see activeEntry)
   function loudReset(href) {
     lnorm.href = href; lnorm.blocks = []; lnorm.recent = []; lnorm.trackPeak = 0; lnorm.curGainDb = 0; lnorm.lint = NaN; lnorm.dur = NaN;
     lnorm.measuring = true; lnorm.src = ''; lnorm.pending = false; lnorm.lastWrite = 0;
@@ -14159,20 +14170,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       // The full-document scan below is costly; the promo bar appears rarely and
       // hiding it a few seconds late is invisible, so run it every ~5s, not every tick.
-      if ((_upsellTick++ % 5) !== 0) return;
+      if ((_upsellTick++ % 5) !== 0 || D.hidden || !D.body) return;
       const RX = /100%\s*royalt|distribute to every major|unlock new ways to get paid|keep 100%|earn more without fees/i;
-      // scan all block elements (the banner often has no upsell-ish class and
-      // sits deep in the tree); the children-count guard keeps it cheap by only
-      // reading textContent on small, leaf-ish elements
-      const cand = D.querySelectorAll('div,section,aside');
+      // test the text nodes themselves: reading textContent on the page's wrappers (few children, huge subtrees)
+      // serialised most of a long feed a dozen times per sweep
       const vw = (W.innerWidth || 1280) * 0.65;
-      for (const el of cand) {
-        if (el.__sceKilled || el.children.length > 6) continue;
+      const walker = D.createTreeWalker(D.body, W.NodeFilter ? W.NodeFilter.SHOW_TEXT : 4);
+      let tn;
+      while ((tn = walker.nextNode())) {
+        const v = tn.nodeValue;
+        if (!v || v.length < 10 || !RX.test(v)) continue;
+        let el = tn.parentElement;
+        if (!el || el.__sceKilled) continue;
         // never inside real content: a comment or description that quotes the
         // upsell wording is the user's, not SoundCloud's
         if (el.closest && el.closest('.commentsList,.commentItem,.commentNode,.soundDescription,.truncatedAudioInfo,.soundList__item,.trackList__item,.soundTitle')) continue;
+        // the small block around the text (the old scan's leaf-ish element), never a large container
+        for (let i = 0; i < 3 && el.parentElement && el.parentElement !== D.body && !/^(DIV|SECTION|ASIDE)$/.test(el.tagName); i++) el = el.parentElement;
         const t = el.textContent;
-        if (!t || t.length < 10 || t.length > 360 || !RX.test(t)) continue;
+        if (!t || t.length < 10 || t.length > 360) continue;
         // climb to find a VERIFIED full-width/short banner bar; if none is found
         // we hide only the original text-gated element — never an unverified
         // ancestor, so we can't nuke a large legit container
@@ -14208,7 +14224,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (pos < 60) return;
     const map = resumeMap();
     let n = '', a = '';
-    try { const tl = D.querySelector('.playbackSoundBadge__titleLink'); n = ((tl && (tl.getAttribute('title') || tl.textContent)) || '').trim().slice(0, 120); const ul = D.querySelector('.playbackSoundBadge__lightLink'); a = ((ul && (ul.getAttribute('title') || ul.textContent)) || '').trim().slice(0, 80); } catch (e) {}
+    try { const tl = badgeLink(); n = ((tl && (tl.getAttribute('title') || tl.textContent)) || '').trim().slice(0, 120); const ul = D.querySelector('.playbackSoundBadge__lightLink'); a = ((ul && (ul.getAttribute('title') || ul.textContent)) || '').trim().slice(0, 80); } catch (e) {}
     map[href] = { pos: Math.round(pos), dur: Math.round(m.duration), t: now, n, a };
     const keys = Object.keys(map);
     if (keys.length > RESUME_MAX) { keys.sort((a, b) => (map[a].t || 0) - (map[b].t || 0)); keys.slice(0, keys.length - RESUME_MAX).forEach((k) => { delete map[k]; }); }
@@ -14274,7 +14290,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const href = curTrackHref();
     if (href) {
       let n = '', a = '', d = 0; const m = activeMedia();
-      try { const tl = D.querySelector('.playbackSoundBadge__titleLink'); n = ((tl && (tl.getAttribute('title') || tl.textContent)) || '').trim(); const ul = D.querySelector('.playbackSoundBadge__lightLink'); a = ((ul && (ul.getAttribute('title') || ul.textContent)) || '').trim(); } catch (e) {}
+      try { const tl = badgeLink(); n = ((tl && (tl.getAttribute('title') || tl.textContent)) || '').trim(); const ul = D.querySelector('.playbackSoundBadge__lightLink'); a = ((ul && (ul.getAttribute('title') || ul.textContent)) || '').trim(); } catch (e) {}
       if (m && isFinite(m.duration)) d = m.duration;
       if (n) return { href, n, a, d };
     }
@@ -14454,7 +14470,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       set('seekforward', (d) => nudgeSeek((d && d.seekOffset) || 10));
       set('seekto', (d) => { const el = activeMedia(); if (el && d && isFinite(d.seekTime) && isFinite(el.duration)) { __sceUserSeek = Date.now(); el.currentTime = Math.min(Math.max(0, d.seekTime), el.duration - 0.25); } });
     }
-    const tl = D.querySelector('.playbackSoundBadge__titleLink');
+    const tl = badgeLink();
     if (!tl) return;
     const title = (tl.getAttribute('title') || tl.textContent || '').trim();
     const ul = D.querySelector('.playbackSoundBadge__lightLink');
@@ -14494,9 +14510,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (/^\/[\w.-]+\/sets\//.test(location.pathname)) return;   // a playlist description has no single track to jump within
     const roots = D.querySelectorAll('.truncatedAudioInfo__content, .commentItem__body');
     for (const root of roots) {
-      if (root.__sceTs) continue;
-      root.__sceTs = true;
-      if (!/\d:\d\d/.test(root.textContent || '')) continue;
+      const txt0 = root.textContent || '';
+      if (root.__sceTs === txt0.length) continue;   // the text changed (Show more, a re-rendered comment): look again
+      root.__sceTs = txt0.length;
+      if (!/\d:\d\d/.test(txt0)) continue;
       const walker = D.createTreeWalker(root, W.NodeFilter ? W.NodeFilter.SHOW_TEXT : 4);
       const nodes = []; let n;
       while ((n = walker.nextNode())) { if (/\d:\d\d/.test(n.nodeValue) && !(n.parentElement && n.parentElement.closest('a'))) nodes.push(n); }
@@ -14881,7 +14898,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       return true;
     }
     if (what === 'open') { const a = r.querySelector('a.soundTitle__title, .trackItem__trackTitle, a.sc-link-primary'); if (a) { a.click(); return true; } }
-    if (what === 'like') { const b = r.querySelector('.sc-button-like'); if (b) { b.click(); toast(b.classList.contains('sc-button-selected') ? 'Unliked' : 'Liked ♥'); return true; } }
+    if (what === 'like') { const b = r.querySelector('.sc-button-like'); if (b) { const was = b.classList.contains('sc-button-selected'); b.click(); toast(was ? 'Unliked' : 'Liked ♥'); return true; } }
     return false;
   }
   function rowKey(e) {
@@ -14890,6 +14907,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return false;
     if (SUITE.lyricsOpen && SUITE.lyricsOpen()) return false;
     const k = e.key;
+    // a focused button, link or select, or an open menu or dialog, owns Enter and the letters
+    try { const ae = D.activeElement; if (ae && ae !== D.body && (/^(BUTTON|A|SELECT)$/.test(ae.tagName) || (ae.closest && ae.closest('[role="dialog"],[role="menu"],.modal')))) return false; } catch (er) {}
     if (k === 'j' || k === 'J') return rowMove(1);
     if (k === 'k' || k === 'K') return rowMove(-1);
     if (!rowCur || !rowCur.isConnected) return false;
@@ -15040,7 +15059,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // per-track speed memory (opt-in): each track remembers the last speed you set
   // for it and restores it on play; untracked tracks keep whatever's current.
   let lastSpeedUrl = null;
-  function curTrackHref() { try { const a = D.querySelector('.playbackSoundBadge__titleLink'); const h = (a && a.getAttribute('href')) || ''; return h ? h.split('?')[0].split('#')[0] || null : null; } catch (e) { return null; } }   // canonical: the badge link carries ?in=… when played from a set
+  // the player bar's title link: a dozen features key off its href, so a SoundCloud rename must fall through to the
+  // next shape of the same thing, and say so once in the debug snapshot rather than go quiet
+  let badgeMissAt = 0;
+  function badgeLink() {
+    for (const sel of ['.playbackSoundBadge__titleLink', '.playbackSoundBadge__titleContextContainer a[href^="/"]', '.playbackSoundBadge a[href^="/"]:not([class*="avatar"]):not([class*="lightLink"])']) {
+      const a = D.querySelector(sel); if (a) return a;
+    }
+    try { if (!badgeMissAt && D.querySelector('.playbackSoundBadge')) { badgeMissAt = Date.now(); logErr('badge', 'player bar present, title link not found: SoundCloud markup changed'); } } catch (e) {}
+    return null;
+  }
+  function curTrackHref() { try { const a = badgeLink(); const h = (a && a.getAttribute('href')) || ''; return h ? h.split('?')[0].split('#')[0] || null : null; } catch (e) { return null; } }   // canonical: the badge link carries ?in=… when played from a set
   function rememberSpeed() {
     if (!CFG.speedPerTrack) return;
     try {
@@ -15126,7 +15155,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   function copyTrackLink() {
     try {
-      const a = D.querySelector('.playbackSoundBadge__titleLink');
+      const a = badgeLink();
       const href = a && a.getAttribute('href');
       if (!href) { toast('Play a track first'); return; }
       clip('https://soundcloud.com' + href.split('?')[0], 'Track link copied');
@@ -15150,7 +15179,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   const cid = () => { try { return (SUITE.clientId && SUITE.clientId()) || null; } catch (e) { return null; } };
   async function fetchTrack() {
-    const a = D.querySelector('.playbackSoundBadge__titleLink');
+    const a = badgeLink();
     const href = a && a.getAttribute('href');
     if (!href) return { err: 'Play a track first' };
     const url = 'https://soundcloud.com' + href.split('?')[0];
@@ -15987,7 +16016,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (!changed && idle && hoverBand === drawnHover && dragBand === drawnDrag && (frame & 3)) return;
           drawnHover = hoverBand; drawnDrag = dragBand;
           cx.clearRect(0, 0, CW, CH);
-          const e = [...sceFx].pop(); const ch = e && e.chain;
+          const e = activeEntry() || [...sceFx].pop(); const ch = e && e.chain;
           if (ch) {
             ch.analyser.getByteFrequencyData(ch.freq);
             const bins = ch.freq, n = bins.length, bw = CW / BARS;
@@ -16245,7 +16274,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function ensureMini() {
     try {
       if (!CFG.miniPlayer) { if (miniEl) miniEl.style.display = 'none'; return; }
-      const tl = D.querySelector('.playbackSoundBadge__titleLink');
+      const tl = badgeLink();
       if (!tl) { if (miniEl) miniEl.style.display = 'none'; return; }
       if (!miniEl) buildMini();
       miniEl.style.display = 'flex';
@@ -16582,7 +16611,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } else if (type === 'range') {
         const rng = D.createElement('input'); rng.type = 'range'; rng.className = 'rng'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
         const val = D.createElement('span'); val.className = 'val'; val.textContent = CFG[key] + (r[3] || '');
-        rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
+        rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); rangeApply(key); });
         row.appendChild(rng); row.appendChild(val);
       } else if (type === 'text') {
         const inp = D.createElement('input'); inp.type = 'text'; inp.value = CFG[key] || ''; inp.spellcheck = false; inp.setAttribute('aria-label', label);
@@ -16796,7 +16825,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const val = el('span', 'tw-val');
           const paint = () => { const pct = (+rng.value - r[4]) / (r[5] - r[4]) * 100; rng.style.background = 'linear-gradient(90deg,' + ACC + ' ' + pct + '%,rgba(255,255,255,.12) ' + pct + '%)'; val.textContent = CFG[key] + (r[3] || ''); rng.setAttribute('aria-valuetext', val.textContent); };
           paint();
-          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); paint(); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
+          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); paint(); saveSoon(); rangeApply(key); });
           addRow(label, '').append(rng, val);
         } else if (type === 'text') {
           const inp = el('input', 'tw-in'); inp.type = 'text'; inp.value = CFG[key] || ''; inp.spellcheck = false; inp.setAttribute('aria-label', label);
@@ -16996,6 +17025,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.setTheme = (id) => { try { if (typeof id !== 'string') return; CFG.theme = id; CFG.autoDark = false; save(); applyAll(); } catch (e) {} }; } catch (e) {}
 
   function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); ensureTop(); }
+  // a slider fires ~60 input events a second: the speed slider sets the rate and the bar, the text-size slider the
+  // stylesheet — not a full CSS rebuild, graph write, DOM scan and banner sweep per event
+  let rememberSpeedT = null;
+  function rangeApply(key) {
+    if (key === 'speed') { clearTimeout(rememberSpeedT); rememberSpeedT = setTimeout(() => { try { rememberSpeed(); } catch (e) {} }, 400); applySpeed(); refreshBar(); repaintAudioSoon(); return; }
+    if (key === 'fontScale') { applyCss(); return; }
+    applyAll(); refreshBar();
+  }
   // the feed rules the shuffle module's API layer applies to the feed / search / related JSON
   try {
     SUITE.feedRules = () => {
@@ -17140,6 +17177,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       } catch (e) {}
     } catch (e) { try { console.warn('[SC Enhancer] failed to start:', e); } catch (e2) {} }
   }
+  try { if (D.readyState === 'loading') applyCss(); } catch (e) {}   // the stylesheet before first paint; boot refreshes it once the DOM is there
   if (D.readyState === 'loading') D.addEventListener('DOMContentLoaded', boot, { once: true });
   else boot();
 })();

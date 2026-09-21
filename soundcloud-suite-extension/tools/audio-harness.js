@@ -2549,6 +2549,32 @@ const FIXTURE_SRC = `
     await stopPlay();
   });
 
+  scenario('second-element', async () => {
+    // SoundCloud keeps a MediaElementSource for the NEXT track while the current one plays. The meters, the loudness
+    // measurement and every "current track" action must follow the audible element, not the newest source (a silent
+    // chain read −120 dBFS, loudness never got a block, and a seek while paused landed on the pre-created element).
+    await resetAudio();
+    await play('A', { loop: true, href: '/test/second-a' });
+    const before = (await snap()).chains;
+    await page.evaluate(() => { const c = window.__afx.cur; const el = new Audio(window.__afx.url('A')); const s = c.ctx.createMediaElementSource(el); s.connect(c.ctx.destination); window.__afx.second = { el, src: s }; });
+    await sleep(600);
+    assert((await snap()).chains >= Math.min(6, before + 1), 'the second source got a chain of its own');
+    await set('loudnessOn', true); await sleep(1200);
+    const mt = await dbg(`return d.meterTick();`);
+    approx(mt.srcPeak, -23, 1.5, 'the meter reads the playing element, not the silent newest source');
+    let blocks = 0; for (let i = 0; i < 24 && !blocks; i++) { await sleep(250); blocks = await dbg(`return d.loud().blocks;`); }
+    assert(blocks > 0, 'loudness measures the playing element (blocks ' + blocks + ')');
+    await set('loudnessOn', false);
+    // paused: the element that played is still the current one
+    await page.evaluate(() => window.__afx.cur.el.pause()); await sleep(250);
+    await dbg(`d.seek(5);`); await sleep(150);
+    const t = await page.evaluate(() => ({ first: window.__afx.cur.el.currentTime, second: window.__afx.second.el.currentTime }));
+    assert(Math.abs(t.first - 5) < 0.6, 'a seek while paused lands on the element that played (got ' + t.first.toFixed(2) + ')');
+    assert(t.second < 0.5, 'the pre-created element is left alone (got ' + t.second.toFixed(2) + ')');
+    await page.evaluate(() => { const s = window.__afx.second; try { s.src.disconnect(); } catch (e) {} try { s.el.removeAttribute('src'); s.el.load(); } catch (e) {} window.__afx.second = null; });
+    await stopPlay();
+  });
+
   /* ═══════════ run ═══════════ */
   if (argv.includes('--list')) { scenarios.forEach((s) => console.log(s.name)); await ctx.close(); return; }
   console.log('loading soundcloud.com …');
