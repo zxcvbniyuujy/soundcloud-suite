@@ -67,6 +67,35 @@ never plays.
   clock, or the OS colour scheme, applied the moment it flips.
 - **Copy as…** — the track-info popover copies “Artist – Title” and a Markdown
   link; Shift+C (with global hotkeys on) copies the link at the current time.
+- **Keyboard in lists** — J and K walk the tracks of the feed, search and
+  playlists with a visible ring; Enter plays, O opens, L likes, Escape clears
+  (Tweaks → Player). Tracks you played for 30 s or more carry a small ✓.
+- **More Chrome-wide commands** — Back 10 s, Forward 10 s, Mute and Jump to the
+  SoundCloud tab that is playing, unbound until you give them keys at
+  `chrome://extensions/shortcuts`.
+- **Translation language and romanization** — Lyrics ⋯ menu: twenty target
+  languages, and a romanized line under non-Latin lyrics (Japanese, Korean,
+  Chinese, Cyrillic, Arabic, Greek, Hebrew, Thai, Hindi). Lines go to Google
+  Translate without cookies, only while translation is on.
+- **Quiet synced upgrade** — a text-only lyric sheet is re-checked against
+  LRCLIB's exact match once a week; a synced version replaces it quietly.
+- **Audio scenes** — the whole Audio tab under a name: save, recall (tab or
+  palette), delete. Scenes ride in the backup.
+- **Quiet hours** — Night mode and the −18 LUFS target between two hours,
+  both put back at the end (Tweaks → Player).
+- **Notes** — a private note on any track in the track-info popover, searched
+  from Ctrl+K (a word from the note, the title or the artist opens the track).
+- **History browser** — Stats tab: every logged play grouped by day, one
+  click opens and plays, *Export history CSV*.
+- **Playlist tools** — under the runtime chip on any set: *Copy links* (every
+  track, one per line) and *Export CSV* (title, artist, length, link).
+- **Your data** — Tweaks → Your data lists every store with its size and a
+  Clear for each; the total against the browser's allowance.
+- **Comment noise filter** — Tweaks → Declutter: emoji-only, promo and
+  duplicate comments stay out of the comment list (an API-layer rule).
+- **Accessibility** — the site and hub follow the OS reduce-motion setting;
+  skip links (Skip to content, Skip to player) wait at the top of every page;
+  *Readable secondary text* lifts the light grey copy to WCAG contrast.
 - **Lyric share card** — ⋯ menu → *Share a lyric card*: pick up to six lines,
   get a 1080×1080 image on the clipboard or as a file.
 - **Listening card** — Stats → *Share card*: total time, a 24-hour listening

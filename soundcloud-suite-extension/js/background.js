@@ -83,8 +83,15 @@ async function dispatchCommand(name) {
   for (const t of tabs) { if (t && t.id != null && await sendCommand(t.id, name, true) === true) return t.id; }
   return null;
 }
-try { chrome.commands.onCommand.addListener((name) => { dispatchCommand(name); }); } catch (e) {}
-if (typeof module !== 'undefined' && module.exports) module.exports = { dispatchCommand, cmdTabs, hostAllowed };   // the unit test
+async function focusPlayingTab() {   // bring the SoundCloud tab that plays (else the most recent one) to the front
+  let id = cmdTabs.playing;
+  if (id == null || await sendCommand(id, 'whoami', false) === null) id = await pickTab();
+  if (id == null) return null;
+  try { const t = await chrome.tabs.update(id, { active: true }); if (t && t.windowId != null) { try { await chrome.windows.update(t.windowId, { focused: true }); } catch (e) {} } } catch (e) { return null; }
+  return id;
+}
+try { chrome.commands.onCommand.addListener((name) => { if (name === 'focus-tab') focusPlayingTab(); else dispatchCommand(name); }); } catch (e) {}
+if (typeof module !== 'undefined' && module.exports) module.exports = { dispatchCommand, focusPlayingTab, cmdTabs, hostAllowed };   // the unit test
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.scss !== 'xhr' || !msg.req) return;

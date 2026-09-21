@@ -14,6 +14,7 @@ Open the hub and the words are right there, line by line, moving with the vocals
 • Share a lyric card: pick up to six lines, get an image for your story
 • Remember three words? Find the song across every lyric sheet you have seen
 • Loop one line until you have it
+• Twenty languages to translate into, with a pronunciation line under Japanese, Korean or Cyrillic lyrics
 
 
 Audio
@@ -25,6 +26,7 @@ Drag an equalizer curve on a live spectrum, or just switch on Enhance and hear t
 • Speed from 0.5× to 2×, pitch that follows or holds
 • Stereo width, crossfeed, headphone correction
 • The tempo, measured from the audio itself, in BPM — and a lock that plays every track at the BPM you choose
+• Save the whole Audio tab as a scene and recall it in one tap
 • Every control is an exact passthrough when off. Hold Compare to hear the original.
 
 
@@ -50,6 +52,7 @@ True random across every track you have ever liked, not the first page the site 
 • Skip what you just heard
 • Listening stats, a one-file backup, a likes export
 • Listen later: a private shortlist that needs no account
+• A private note on any track, a history browser, a playlist export
 • A listening card: your hours, your peak hour, your week, as one image
 
 
@@ -59,9 +62,11 @@ Eleven dark themes. A light one. Zen mode for when you want nothing but the musi
 
 • Hide the upsells, the sidebar, the footer, the noise
 • Mute words, hide over-long mixes or tracks you already liked or played, straight from the feed
+• Hide comment noise: emoji-only, promo and duplicates
 • Open on the page you choose
 • Title, artwork and seek on your media keys and the system now-playing panel
 • Play, skip and like from any tab with Alt+Shift+P, N, B and L
+• J and K walk any list, Enter plays, and the tracks you heard carry a ✓
 • Lose your audio output and playback pauses instead of switching to the speakers
 • Speed, an A–B loop and a sleep timer in the player bar
 • Track info, timecodes, a waveform timeline

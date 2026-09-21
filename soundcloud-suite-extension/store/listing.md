@@ -8,7 +8,7 @@ Paste these into the developer dashboard. Files referenced are in this folder.
 |---|---|
 | Name (from manifest) | SoundCloud Suite |
 | Summary (from manifest, 130 chars) | All-in-one SoundCloud upgrade: themes & declutter, player tools, studio-grade audio, a synced-lyrics hub and full-library shuffle. |
-| Description | `description.txt` (3402 characters) |
+| Description | `description.txt` (3779 characters) |
 | Category | Entertainment |
 | Language | English (United States) |
 | Store icon (128×128) | `store-icon-128.png` |

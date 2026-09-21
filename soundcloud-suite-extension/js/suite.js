@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.56.0
+// @version      4.57.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.56.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.57.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -799,10 +799,29 @@
             if (p === '/stream' || p === '/me/stream' || /^\/stream\/users\/\d+$/.test(p)) return 'stream';
             if (p === '/search' || p === '/search/tracks') return 'search';
             if (/^\/tracks\/\d+\/related$/.test(p)) return 'related';
+            if (/^\/tracks\/\d+\/comments$/.test(p)) return 'comments';
             return null;
         } catch (e) { return null; }
     }
+    // comment noise: emoji / punctuation-only bodies, promo (links, "check out my", "follow me", "sub4sub"), and a body a user already posted on this track
+    const NOISE_RX = /https?:\/\/|\bwww\.|check ?out my|follow me|follow back|f4f|sub4sub|link in (my )?bio|dm me|free download|\bpromo(te|tion)?\b|my (new )?(track|mix|song|beat|remix|channel|page|profile|soundcloud)\b|listen to my|repost (me|mine)|feedback on my/i;
+    function commentFilter(json) {
+        const col = json && json.collection;
+        if (!Array.isArray(col)) return { json, dropped: 0 };
+        const seen = new Set(), keep = []; let dropped = 0;
+        for (const c of col) {
+            const body = c && typeof c.body === 'string' ? c.body.trim() : '';
+            if (!c || !body) { keep.push(c); continue; }
+            const letters = body.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\p{P}\p{S}\s\d]/gu, '');
+            const key = ((c.user && c.user.id) || '') + '\u0000' + body.toLowerCase().replace(/\s+/g, ' ');
+            if (!letters.length || NOISE_RX.test(body) || seen.has(key)) { dropped++; continue; }
+            seen.add(key); keep.push(c);
+        }
+        if (!dropped) return { json, dropped: 0 };
+        return { json: Object.assign({}, json, { collection: keep }), dropped };
+    }
     function feedFilter(json, rules, kind) {
+        if (kind === 'comments') return rules.commentNoise ? commentFilter(json) : { json, dropped: 0 };
         const col = json && json.collection;
         if (!Array.isArray(col)) return { json, dropped: 0 };
         const words = (rules.mute || []).map(w => String(w).toLowerCase().trim()).filter(Boolean);
@@ -3683,6 +3702,16 @@
     };
     SUITE.resetSession = () => {
         try { sess.listenMs = 0; sess.played = 0; sess.skipped = 0; sess.start = Date.now(); SS.set('bh_sc_sess', sess); } catch (e) {}
+    };
+    // the history browser: every logged play, newest first, with names from the library when known
+    SUITE.historyList = (max) => {
+        try {
+            const h = loadHistory(); if (!h.urls.length) return [];
+            const lm = getLibMap(), tsOff = h.urls.length - h.ts.length, out = [];
+            const name = u => { const hit = lm && lm.get(u); return { t: (hit && hit[5]) || (u.split('/').filter(Boolean).pop() || u).replace(/-/g, ' ').slice(0, 60), a: (hit && hit[4]) || '' }; };
+            for (let i = h.urls.length - 1; i >= 0 && out.length < (max || 200); i--) { const u = h.urls[i]; const n = name(u); out.push({ u, ts: i - tsOff >= 0 ? h.ts[i - tsOff] : 0, t: n.t, a: n.a }); }
+            return out;
+        } catch (e) { return []; }
     };
     SUITE.historyText = () => {
         try {
@@ -6883,6 +6912,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 @supports not (-webkit-background-clip: text) { .line.act { color: #fff; background: none; } }
 .line.u { font-weight: 500; color: #c9c9cf; cursor: default; padding: 4px 14px; font-size: calc(var(--fs, 16px) - 1px); opacity: .92; }
 .tline { padding: 0 14px 5px; margin-top: -3px; font-size: calc(var(--fs, 16px) - 4px); line-height: 1.35; font-weight: 500; font-style: italic; color: #6f6f78; letter-spacing: 0.1px; animation: lin 0.38s ease both; }
+.rline { padding: 0 14px 2px; margin-top: -3px; font-size: calc(var(--fs, 16px) - 3px); line-height: 1.35; font-weight: 500; color: #8f8f98; letter-spacing: 0.2px; animation: lin 0.38s ease both; }
 .line.act + .tline { color: #9a9aa2; }
 /* premium custom range sliders + select chevron (Audio tab) */
 .sxr { -webkit-appearance: none; appearance: none; height: 5px; border-radius: 5px; outline: none; cursor: pointer; background: rgba(255,255,255,0.13); }
@@ -7379,7 +7409,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let lineEls = [], times = [], lineWords = [], activeI = -1, isSynced = false, estMode = false;
     // lyric translation (optional, persisted) — target = the user's own language
     let transToken = 0; const transCache = new Map();
-    let transLang = (() => { try { return (navigator.language || 'en').split('-')[0] || 'en'; } catch (e) { return 'en'; } })();
+    let transLang = (() => { try { const saved = GM_getValue('sl:tlang', ''); if (saved && /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(saved)) return saved; } catch (e) {} try { return (navigator.language || 'en').split('-')[0] || 'en'; } catch (e) { return 'en'; } })();
+    let romOn = (() => { try { return !!GM_getValue('sl:rom', false); } catch (e) { return false; } })();   // romanized lines under non-Latin lyrics
+    const TRANS_LANGS = [['en', 'English'], ['es', 'Español'], ['pt', 'Português'], ['fr', 'Français'], ['de', 'Deutsch'], ['it', 'Italiano'], ['nl', 'Nederlands'], ['pl', 'Polski'], ['tr', 'Türkçe'], ['ru', 'Русский'], ['uk', 'Українська'], ['ar', 'العربية'], ['hi', 'हिन्दी'], ['id', 'Indonesia'], ['vi', 'Tiếng Việt'], ['th', 'ไทย'], ['ja', '日本語'], ['ko', '한국어'], ['zh-CN', '中文 (简)'], ['zh-TW', '中文 (繁)']];
+    const NON_LATIN_RX = /[\u0370-\u03FF\u0400-\u052F\u0530-\u058F\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u1100-\u11FF\u3040-\u30FF\u3130-\u318F\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]/;
     let transOn = (() => { try { return GM_getValue('sl:trans', false) === true; } catch (e) { return false; } })();
     let estBaseTimes = null;            // est-mode unwarped times (for tap-along)
     let tapOn = false, tapIdx = 0;      // tap-along calibration state
@@ -8276,6 +8309,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⌥', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists, Enter plays, O opens, L likes. Tracks you already played carry a small ✓. Four more Chrome-wide commands (seek, mute, jump to the playing tab) wait for keys at chrome://extensions/shortcuts.'],
+          ['文', 'Lyrics in your language, pronounced', 'Lyrics ⋯ menu → Translation language & romanization: twenty languages to pick from, and a romanized line under Japanese, Korean, Chinese, Cyrillic, Arabic, Greek, Hebrew, Thai or Hindi lyrics. Text-only sheets are quietly re-checked for a synced version once a week.'],
+          ['◈', 'Audio scenes, quiet hours', 'Save the whole Audio tab under a name and recall it from the tab or the palette. Quiet hours switch Night mode and the −18 LUFS target on between two hours and back off after (Tweaks → Player).'],
+          ['✎', 'Notes, history, playlist tools', 'A private note on any track in the track-info popover, searchable from Ctrl+K. The Stats tab has a history browser grouped by day with a CSV export. Playlist pages get Copy links and Export CSV. Tweaks → Your data shows what the suite stores, with a Clear for each.'],
+          ['◌', 'Quieter, more reachable', 'Hide comment noise (emoji-only, promo, duplicates) in Tweaks → Declutter. The site follows the OS reduce-motion setting, skip links wait at the top of every page, and Readable secondary text lifts the grey copy to WCAG contrast.'],
           ['⌨', 'Play SoundCloud from any tab', 'Alt+Shift+P plays or pauses, N and B skip, L likes — from any Chrome tab. Change the keys at chrome://extensions/shortcuts. Headphones unplugged? Playback pauses instead of switching to the speakers.'],
           ['⌘', 'A palette that takes arguments', 'Ctrl+K: type 12:34, +30, -1:00 or 40% to jump, 1.5x for the speed, 170 bpm to lock the tempo of every track, or a title or artist from your likes to play it. Night mode, Enhance and the rest are switches in the list, and your recent commands come first.'],
           ['☆', 'Listen later', 'A private shortlist, no account needed: save the playing track from the ⋯ menu, the palette or the track-info popover, find it on the Queue tab, and it clears itself once you have listened.'],
@@ -8822,7 +8860,32 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (x.topArtists.length) { sbody.appendChild(qh('Top artists')); rows(x.topArtists.map((a) => ({ t: a.n, v: a.p + ' plays' }))); }
         if (x.onRepeat.length) { sbody.appendChild(qh('On repeat')); rows(x.onRepeat.map((r) => ({ t: r.t, a: r.a, v: r.n + '×' }))); }
         if (x.skipped.length) { sbody.appendChild(qh('Often skipped')); rows(x.skipped.map((r) => ({ t: r.t, a: r.a, v: r.n + '× skipped' }))); }
-        if (x.recent.length) { sbody.appendChild(qh('Recently played')); rows(x.recent.map((r) => ({ t: r.t, a: r.a, v: r.when }))); }
+        const hist = (SUITE.historyList && SUITE.historyList(200)) || [];
+        if (hist.length) {
+          sbody.appendChild(qh('History · ' + hist.length + (hist.length >= 200 ? '+' : '')));
+          const dayOf = (ts) => { if (!ts) return 'Earlier'; const d = new Date(ts), n = new Date(); const k = (v) => v.getFullYear() * 1000 + Math.floor((v - new Date(v.getFullYear(), 0, 1)) / 864e5); const dd = k(n) - k(d); return dd === 0 ? 'Today' : dd === 1 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
+          const clock = (ts) => ts ? new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+          const box = document.createElement('div'); let shown = 0, lastDay = null, expanded = false;
+          const paintHist = () => {
+            box.replaceChildren(); shown = 0; lastDay = null;
+            for (const e of hist) {
+              if (!expanded && shown >= 8) break;
+              const day = dayOf(e.ts);
+              if (day !== lastDay) { lastDay = day; const dh = document.createElement('div'); dh.className = 'qhead'; dh.style.cssText = 'font-size:10px;opacity:.75;margin-top:4px'; dh.textContent = day; box.appendChild(dh); }
+              const r = document.createElement('div'); r.className = 'qrow ch hist'; r.tabIndex = 0; r.setAttribute('role', 'button'); r.title = 'Open and play';
+              const n = document.createElement('span'); n.className = 'n'; n.textContent = clock(e.ts);
+              const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = e.t;
+              const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = e.a || '';
+              r.append(n, qt, qa);
+              const go = () => playHref('https://soundcloud.com' + e.u);
+              r.addEventListener('click', go);
+              r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); swallowNextKeyup(ev.key); go(); } });
+              box.appendChild(r); shown++;
+            }
+            if (hist.length > 8) { const more = document.createElement('button'); more.className = 'sbtn'; more.style.margin = '6px 14px'; more.textContent = expanded ? 'Show less' : 'Show all ' + hist.length; more.addEventListener('click', () => { expanded = !expanded; paintHist(); }); box.appendChild(more); }
+          };
+          paintHist(); sbody.appendChild(box);
+        }
       }
       sbody.appendChild(qh('More'));
       const btns2 = document.createElement('div'); btns2.className = 'sbtns';
@@ -8833,6 +8896,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         toast(msg || 'Shuffling this genre…');
       });
       mk('Shuffle settings', () => { if (SUITE.openShuffleSettings) SUITE.openShuffleSettings(bMenuEl); });
+      mk('Export history CSV', () => {
+        const h = (SUITE.historyList && SUITE.historyList(5000)) || []; if (!h.length) { toast('No history yet'); return; }
+        const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+        const csv = ['played_at,title,artist,url'].concat(h.map((e) => [e.ts ? new Date(e.ts).toISOString() : '', e.t, e.a, 'https://soundcloud.com' + e.u].map(esc).join(','))).join('\n');
+        try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'soundcloud-history-' + new Date().toISOString().slice(0, 10) + '.csv'; (document.body || document.documentElement).appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1000); toast('History exported · ' + h.length + ' plays'); } catch (e) { toast('Export failed'); }
+      });
       mk('Copy history', () => {
         const txt2 = SUITE.historyText ? SUITE.historyText() : '';
         if (!txt2) { toast('No history yet'); return; }
@@ -8966,6 +9035,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Shuffle my Likes', () => { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Shuffle module not loaded'; if (m) toast(m); }, 'Alt+S');
       mi('Hotkeys', () => showKeys(true), '?');
       mi(transOn ? 'Stop translating lyrics' : ('Translate lyrics → ' + transLang.toUpperCase()), () => toggleTranslate());
+      mi('Translation language & romanization…', () => translateSheet());
       mi("What's new in v" + VER, () => showWhatsNew());
       mi('Diagnostics', () => { setTab('lyrics'); showDiag(); });
       mi('Copy sync debug → paste it to me', () => {
@@ -9513,19 +9583,46 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // translation in the user's language. ADDITIVE: inserts a .tline SIBLING after
     // each .line, never touching the line's own content, so the karaoke wipe and
     // highlight loop (which read lineEls) are completely unaffected.
-    function gtxTranslate(text, lang) {
+    function gtxTranslate(text, lang, rom) {   // rom: also ask for the source romanization (dt=rm); resolves { text, rom } then
       return new Promise((res) => {
         try {
-          const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(lang) + '&dt=t&q=' + encodeURIComponent(text);
+          const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(lang) + '&dt=t' + (rom ? '&dt=rm' : '') + '&q=' + encodeURIComponent(text);
           GM_xmlhttpRequest({
             method: 'GET', url, timeout: 12000, anonymous: true,   // don't send the user's Google cookies
-            onload: (r) => { try { const j = JSON.parse(r.responseText); const segs = (j && j[0]) || []; let out = ''; for (const s of segs) { if (s && s[0] != null) out += s[0]; } res(out); } catch (e) { res(null); } },
+            onload: (r) => { try { const j = JSON.parse(r.responseText); const segs = (j && j[0]) || []; let out = '', ro = ''; for (const s of segs) { if (s && s[0] != null) out += s[0]; if (s && typeof s[3] === 'string') ro += s[3]; } res(rom ? { text: out, rom: ro } : out); } catch (e) { res(null); } },
             onerror: () => res(null), ontimeout: () => res(null),
           });
         } catch (e) { res(null); }
       });
     }
-    function clearTranslation() { try { if (body) body.querySelectorAll('.tline').forEach((e) => e.remove()); } catch (e) {} }
+    function clearTranslation() { try { if (body) body.querySelectorAll('.tline, .rline').forEach((e) => e.remove()); } catch (e) {} }
+    function setTransLang(code) {
+      if (!TRANS_LANGS.some((l) => l[0] === code)) return;
+      transLang = code; try { GM_setValue('sl:tlang', code); } catch (e) {}
+      if (transOn) { ++transToken; clearTranslation(); decorateTranslation(); }
+    }
+    function translateSheet() {   // pick the language, switch romanization
+      const wrap = document.createElement('div'); wrap.className = 'keys on'; wrap.style.cursor = 'default';
+      const h = document.createElement('h3'); h.textContent = 'Translation';
+      const grid = document.createElement('div'); grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px';
+      const offB = document.createElement('button'); offB.className = 'btn';
+      function offPaint() { offB.textContent = transOn ? 'Stop translating' : 'Close'; }
+      const paint = () => { for (const b of grid.children) { const on = b.dataset.code === transLang; b.className = 'btn' + (on ? ' acc' : ''); } };
+      for (const [code, name] of TRANS_LANGS) { const b = document.createElement('button'); b.className = 'btn'; b.dataset.code = code; b.textContent = name; b.style.padding = '6px 11px'; b.addEventListener('click', () => { setTransLang(code); if (!transOn) toggleTranslate(); paint(); offPaint(); }); grid.appendChild(b); }
+      paint();
+      const romB = document.createElement('button'); romB.className = 'btn'; const romPaint = () => { romB.textContent = 'Romanized lyrics · ' + (romOn ? 'on' : 'off'); romB.className = 'btn' + (romOn ? ' acc' : ''); }; romPaint();
+      romB.title = 'A pronunciation line under Japanese, Korean, Chinese, Cyrillic, Arabic, Greek, Hebrew, Thai or Hindi lyrics';
+      romB.addEventListener('click', () => { romOn = !romOn; try { GM_setValue('sl:rom', romOn); } catch (e) {} romPaint(); if (transOn) { ++transToken; clearTranslation(); decorateTranslation(); } else if (romOn) toggleTranslate(); offPaint(); });
+      const note = document.createElement('div'); note.style.cssText = 'font-size:11px;color:#8a8a92;margin:10px 0 6px'; note.textContent = 'Lines are sent to Google Translate without cookies, only while translation is on.';
+      const row = document.createElement('div'); row.className = 'row';
+      offPaint(); offB.addEventListener('click', () => { if (transOn) toggleTranslate(); wrap.remove(); });
+      const close = document.createElement('button'); close.className = 'btn'; close.textContent = 'Done'; close.addEventListener('click', () => wrap.remove());
+      row.append(romB, offB, close);
+      wrap.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') { ev.preventDefault(); wrap.remove(); } });
+      wrap.append(h, grid, note, row);
+      panel.appendChild(wrap);
+      setTimeout(() => { try { close.focus(); } catch (e) {} }, 30);
+    }
     async function decorateTranslation() {
       try {
         if (!transOn || !body) return;
@@ -9538,29 +9635,39 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const chunks = []; let cur = [], len = 0;
         for (const t of texts) { if (len + t.length > 3500 && cur.length) { chunks.push(cur); cur = []; len = 0; } cur.push(t); len += t.length + 1; }
         if (cur.length) chunks.push(cur);
-        const out = [];
+        const out = [], romOut = [];
         for (const ch of chunks) {
           const key = transLang + '\u0000' + ch.join('\n');
           let tr;
-          if (transCache.has(key)) tr = transCache.get(key);
+          const wantRom = romOn && ch.some((t) => NON_LATIN_RX.test(t));
+          const rkey = 'rom\u0000' + ch.join('\n');
+          if (transCache.has(key) && (!wantRom || transCache.has(rkey))) tr = transCache.get(key);
           else {
-            const raw = await gtxTranslate(ch.join('\n'), transLang);
+            const got = await gtxTranslate(ch.join('\n'), transLang, wantRom);
             if (myToken !== transToken) return;   // track changed / toggled off mid-flight — abandon
+            const raw = got == null ? null : (typeof got === 'string' ? got : got.text);
             if (raw != null) { tr = raw.split('\n'); transCache.set(key, tr); if (transCache.size > 200) { try { transCache.delete(transCache.keys().next().value); } catch (e) {} } }
             else tr = null;   // don't cache failures — retry next time
+            if (got && typeof got === 'object' && typeof got.rom === 'string') { const rl = got.rom.split('\n'); transCache.set(rkey, rl.length === ch.length ? rl : null); }
           }
           // only trust a chunk whose line count survived translation 1:1
           if (tr && tr.length === ch.length) { for (let i = 0; i < tr.length; i++) out.push(tr[i]); }
           else { for (let i = 0; i < ch.length; i++) out.push(null); }
+          const rl = wantRom ? transCache.get(rkey) : null;
+          for (let i = 0; i < ch.length; i++) romOut.push(rl && rl[i] && NON_LATIN_RX.test(ch[i]) ? rl[i] : null);
         }
         if (myToken !== transToken || !transOn) return;
         if (!out.some(Boolean)) toast('Translation unavailable right now');   // every chunk failed: say so instead of silently showing nothing
         for (let i = 0; i < els.length; i++) {
-          const el = els[i], t = out[i];
-          const nx = el.nextSibling;
+          const el = els[i], t = out[i], ro = romOut[i];
+          // siblings after the line: an optional .rline (romanization) then an optional .tline (translation)
+          let nx = el.nextSibling;
+          if (nx && nx.classList && nx.classList.contains('rline')) { if (ro) nx.textContent = ro; else { const dead = nx; nx = nx.nextSibling; dead.remove(); } }
+          else if (ro) { const rl = document.createElement('div'); rl.className = 'rline'; rl.textContent = ro; if (el.parentNode) el.parentNode.insertBefore(rl, el.nextSibling); nx = rl.nextSibling; }
+          if (nx && nx.classList && nx.classList.contains('rline')) nx = nx.nextSibling;
           if (!t || t === texts[i]) { if (nx && nx.classList && nx.classList.contains('tline')) nx.remove(); continue; }
           if (nx && nx.classList && nx.classList.contains('tline')) nx.textContent = t;
-          else { const tl = document.createElement('div'); tl.className = 'tline'; tl.textContent = t; if (el.parentNode) el.parentNode.insertBefore(tl, el.nextSibling); }
+          else { const tl = document.createElement('div'); tl.className = 'tline'; tl.textContent = t; const anchor = (el.nextSibling && el.nextSibling.classList && el.nextSibling.classList.contains('rline')) ? el.nextSibling : el; if (el.parentNode) el.parentNode.insertBefore(tl, anchor.nextSibling); }
         }
       } catch (e) {}
     }
@@ -10052,6 +10159,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('▣', 'Share a lyric card', 'Lyrics', () => { setOpen(true); shareSheet(); });
       add('▣', 'Share my listening card', 'Stats', () => { setOpen(true); setTab('stats'); recapSheet(); });
       add('⌕', 'Find a song by a lyric', 'Lyrics', () => { setOpen(true); setTab('lyrics'); lyricSearchSheet(); });
+      add('文', 'Translation language & romanization', 'Lyrics', () => { setOpen(true); setTab('lyrics'); translateSheet(); });
       try { const lt = SUITE.laterTarget && SUITE.laterTarget(); add('☆', lt && SUITE.laterHas(lt.href) ? 'Remove from Listen later' : 'Listen later', lt && lt.n ? 'Queue · ' + lt.n.slice(0, 40) : 'Queue', () => { if (SUITE.laterToggle) SUITE.laterToggle(); if (tab === 'queue') renderQueue(); }); } catch (e) {}
       // chapters / cue points
       if (Chapters.list.length) {
@@ -10086,6 +10194,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           sw('☾', 'Night mode', 'night'); sw('✨', 'Enhance', 'enhance'); sw('≡', 'Loudness normalize', 'loudness'); sw('⫶', 'Equalizer', 'eq'); sw('◎', 'Crossfeed', 'crossfeed'); sw('●', 'Mono', 'mono');
           [75, 100, 125, 150, 200].forEach((v) => add('⏩', 'Speed ' + (v / 100) + '×' + (st.speed === v ? ' · now' : ''), 'Audio', () => SUITE.audioCmd('speed', v)));
           if (st.tempoLock) add('♩', 'Tempo lock off (' + st.tempoLock + ' BPM)', 'Audio', () => SUITE.audioCmd('tempoLock', 0));
+          try { (SUITE.sceneNames ? SUITE.sceneNames() : []).forEach((n) => add('◈', 'Scene: ' + n, 'Audio', () => SUITE.sceneLoad(n))); } catch (e) {}
         }
       } catch (e) {}
       add('⭳', 'Back up everything', 'Backup', () => { if (SUITE.backupAll) SUITE.backupAll(); });
@@ -10185,6 +10294,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           .filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.c);
         // typed arguments: a time to jump to, a speed, a tempo to lock to
         const arg = cmdkArg(q); if (arg) list = [arg].concat(list);
+        // your notes: a word from a note, a title or an artist finds the track
+        let notes = null; try { notes = SUITE.notesSearch ? SUITE.notesSearch(q, 5) : null; } catch (e) { notes = null; }
+        if (notes && notes.length) list = list.concat(notes.map((h) => ({ arg: true, icon: '✎', label: (h.n || h.href) + (h.a ? ' — ' + h.a : ''), hint: 'Note · ' + h.x.slice(0, 48), run: () => playHref(h.href) })));
         // your likes, by title or artist, after the commands: pick one and it opens and plays
         let hits = null; try { hits = SUITE.libSearch ? SUITE.libSearch(q, 6) : null; } catch (e) { hits = null; }
         if (hits && hits.length) list = list.concat(hits.map((h) => ({ arg: true, icon: '♥', label: h.title + (h.artist ? ' — ' + h.artist : ''), hint: 'Likes' + (h.durMs ? ' · ' + fmtDur(h.durMs) : ''), run: () => playHref(h.url) })));
@@ -10588,6 +10700,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // the user's own choice wins: bump the generation so a still-running automatic search
     // (or its late rescue) can neither repaint over it nor overwrite it in the cache
     function supersede() { token++; if (meta) keyGen.set(meta.key, (keyGen.get(meta.key) || 0) + 1); return token; }
+    // a text-only sheet is re-checked against LRCLIB's exact match once a week; a synced version found quietly replaces it
+    async function quietUpgrade(entry, key, myToken) {
+      try {
+        if (!meta || !meta.title || !entry) return;
+        const now = Date.now(); if (entry.rechk && now - entry.rechk < 7 * 864e5) return;
+        entry.rechk = now; Cache.set(key, entry);
+        const r = await lrcGet({ track: meta.title, artist: meta.uploader || '', dur: meta.dur > 0 ? meta.dur : 0 });
+        const it = r && r.songs && r.songs[0]; if (!it || !it.synced || myToken !== token) return;
+        it.score = 0.9;
+        const res = fromInline(it, meta.dur > 0 ? meta.dur : (it.dur || 0), {});
+        if (!res || !res.synced || !res.lines || !res.lines.length) return;
+        const e2 = toCache(res); e2.off = 0; e2.rechk = now; Cache.set(key, e2);
+        off = 0; anch = []; apply(res, myToken);
+        UI.toast('Synced lyrics found for this track');
+      } catch (e) {}
+    }
     function ensure(force) {
       if (!meta) { if (UI.isOpen()) UI.showIdle(); return; }
       const key = meta.key;
@@ -10603,6 +10731,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           SyncAuto.ms = (entry && entry.aoff) | 0; SyncAuto.conf = SyncAuto.ms ? 1 : 0;
           anch = (entry && entry.anch) || [];
           apply(c, myToken);
+          if (!c.synced && !c.instr && !entry.picked) quietUpgrade(entry, key, myToken);
           return;
         }
         if (Miss.has(key)) { apply(null, myToken); return; }
@@ -11476,6 +11605,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     tempoLock: 0,           // BPM to play every track at (the speed follows the measured tempo); 0 = off
     smartRewind: true,      // a long pause on a long track resumes a few seconds back
     laterAutoClear: true,   // Listen later: 30 s of playing a saved track takes it off the shelf
+    listKeys: true,         // J / K walk the tracks of a list, Enter plays, O opens, L likes
+    heardMarks: true,       // a ✓ on tracks in lists you already played
+    commentNoise: false,    // hide emoji-only, promo and duplicate comments
+    quietHours: false,      // Night mode and the quiet loudness target on a schedule
+    quietFrom: '22',        // hour the quiet window starts
+    quietTo: '7',           // hour it ends
+    motionOs: true,         // honour the OS "reduce motion" setting on the site and the hub
+    skipLinks: true,        // Tab from the top of the page: Skip to content / Skip to player
     feedMaxPlays: '0',      // hide tracks with more plays than this (fresh finds); '0' = off
     feedMaxAgeDays: '0',    // hide tracks older than this many days; '0' = off
     tsLinks: true,          // m:ss in descriptions and comments jumps there
@@ -11606,6 +11743,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // ── Reading / focus (wave 2) ──
     ['mrZen', 'Reading', 'Zen mode (hide sidebar, footer & header menu)', 'hide', '.l-sidebar-right,.sidebar,#app__footer,.footer__inner,.header__nav .header__moreMenu'],
     ['mrA11yFocus', 'Reading', 'Always-visible focus rings', 'css', '.l-container a:focus,.sc-button:focus{outline:2px solid #ff5500 !important;outline-offset:2px}'],
+    ['mrReadable', 'Reading', 'Readable secondary text', 'css', '.sc-text-light,.sc-text-secondary,.sc-text-h4,.soundTitle__uploadTime,.sound__uploadTime,.commentItem__createdAt{color:#595959 !important}.theme-dark .sc-text-light,.theme-dark .sc-text-secondary,.theme-dark .soundTitle__uploadTime,.theme-dark .commentItem__createdAt{color:#b3b3b3 !important}'],
     ['mrReduceTransparency', 'Reading', 'Reduce transparency', 'css', '.l-container [style*="rgba"],.modal__modal{backdrop-filter:none !important}'],
     // ── Hide more (wave 3) ──
     ['mhHeaderMore', 'Hide more', 'Header “⋯” menu', 'hide', '.header__moreActions,.header__moreMenu'],
@@ -11670,7 +11808,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
     fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1], reverbAmt: [0, 100, 5],
-    resumePos: { one: ['ask', 'auto', 'off'] }, startPage: { one: ['', '/feed', '/you/library', '/you/likes', '/discover'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxPlays: { one: ['0', '1000', '10000', '100000', '1000000'] }, feedMaxAgeDays: { one: ['0', '7', '30', '365'] }, autoDarkMode: { one: ['clock', 'system'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
+    resumePos: { one: ['ask', 'auto', 'off'] }, startPage: { one: ['', '/feed', '/you/library', '/you/likes', '/discover'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxPlays: { one: ['0', '1000', '10000', '100000', '1000000'] }, feedMaxAgeDays: { one: ['0', '7', '30', '365'] }, autoDarkMode: { one: ['clock', 'system'] }, quietFrom: { one: ['20', '21', '22', '23', '0'] }, quietTo: { one: ['5', '6', '7', '8', '9'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
   };
   const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
   // one PEQ filter entry, re-validated field by field (data only)
@@ -11924,6 +12062,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) { return false; }
   }
   try { if (W.matchMedia) W.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { try { if (CFG.autoDark && CFG.autoDarkMode === 'system') applyAll(); } catch (e) {} }); } catch (e) {}   // the OS flips: the site follows at once
+  try { if (W.matchMedia) W.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => { try { if (CFG.motionOs) applyAll(); } catch (e) {} }); } catch (e) {}   // the OS asks for less (or more) motion: rebuild the CSS
   // the theme that should actually render right now — auto-dark, when enabled,
   // takes over (dark theme at night, light by day); otherwise the chosen theme
   function effTheme() {
@@ -12000,6 +12139,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!CFG[f[0]]) continue;
       css += (f[3] === 'hide') ? (f[4] + '{display:none !important}') : f[4];
     }
+    css += '\n.sce-row{outline:2px solid #ff5500 !important;outline-offset:-2px;border-radius:8px}'
+      + '.sce-heard{display:inline-block;margin-left:6px;font-size:10px;line-height:1;padding:2px 5px;border-radius:99px;background:rgba(255,85,0,.16);color:#ff5500;vertical-align:middle}'
+      + '.sce-skip a{position:fixed;left:8px;top:-60px;z-index:2147483300;background:#ff5500;color:#fff;font:600 13px/1 system-ui,sans-serif;padding:10px 14px;border-radius:8px;text-decoration:none;transition:top .12s}.sce-skip a:focus{top:8px;outline:2px solid #fff}';
+    try { if (CFG.motionOs && W.matchMedia && W.matchMedia('(prefers-reduced-motion: reduce)').matches) css += '\n.l-container *,.playControls *{transition-duration:.01s !important;animation-duration:.01s !important}'; } catch (e) {}
     if (CFG.customCss) css += '\n/* your CSS */\n' + CFG.customCss;
     return css;
   }
@@ -13227,6 +13370,26 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     laptop: { set: { crossfeedOn: false, bassDb: 3, tiltDb: 1, loudCompOn: true }, toast: 'Laptop · bass +3 dB, brighter, loudness contour' },
     speakers: { set: { crossfeedOn: false, bassDb: 0, tiltDb: 0, loudCompOn: false }, toast: 'Speakers · neutral' },
   };
+  /* ── audio scenes: the whole Audio tab under a name — save, recall, delete; the palette lists them ── */
+  const SCENES_KEY = 'enh:scenes', SCENE_KEYS = ['eqOn', 'eqBands', 'eqPreamp', 'eqAutoPre', 'peqOn', 'peq', 'peqPreamp', 'peqName', 'bassDb', 'bassHarm', 'tiltDb', 'vocalAmt', 'loudCompOn', 'loudCompAmt', 'listenOn', 'stereoWidth', 'crossfeedOn', 'crossfeedMode', 'balance', 'monoOn', 'swapLR', 'loudnessOn', 'loudTarget', 'boostAmt', 'limiterOn', 'nightOn', 'nightAmt', 'enhanceOn', 'enhanceAmt', 'fadeOn', 'fadeIn', 'fadeOut', 'vinylMode', 'skipSilence', 'reverbAmt', 'speed', 'hpOn', 'hpProfile'];
+  function scenesMap() { const o = GET(SCENES_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  function sceneNames() { return Object.keys(scenesMap()).sort((a, b) => a.localeCompare(b)); }
+  function sceneSave(name) {
+    name = String(name || '').trim().slice(0, 40); if (!name) return false;
+    const map = scenesMap(), snap = {};
+    for (const k of SCENE_KEYS) if (k in CFG && k in DEFAULTS) snap[k] = JSON.parse(JSON.stringify(CFG[k]));
+    map[name] = { t: Date.now(), v: snap };
+    const keys = Object.keys(map); if (keys.length > 24) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); delete map[keys[0]]; }
+    SET(SCENES_KEY, map); toast('Scene saved · ' + name); return true;
+  }
+  function sceneLoad(name) {
+    const e = scenesMap()[name]; if (!e || !e.v) { toast('No such scene'); return false; }
+    for (const k of SCENE_KEYS) if (k in e.v && k in DEFAULTS && typeof e.v[k] === typeof DEFAULTS[k]) CFG[k] = JSON.parse(JSON.stringify(e.v[k]));
+    listenSig = null; ensureEqBands(); clampAudioCfg(); save(); applyFx(); applySpeed(); try { refreshBar(); } catch (er) {} repaintAudioSoon();
+    toast('Scene · ' + name); return true;
+  }
+  function sceneDelete(name) { const map = scenesMap(); if (!(name in map)) return false; delete map[name]; SET(SCENES_KEY, map); toast('Scene deleted · ' + name); return true; }
+  try { SUITE.sceneNames = sceneNames; SUITE.sceneLoad = sceneLoad; SUITE.sceneSave = sceneSave; SUITE.sceneDelete = sceneDelete; } catch (e) {}
   function applyListenOn(which) {
     try {
       const p = LISTEN_ON[which]; if (!p) return;
@@ -13629,6 +13792,24 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const t = playedCache[path]; return !!(t && Date.now() - t < PLAYED_TTL);
   }
   try { SUITE.resumeList = resumeList; SUITE.resumeForget = resumeForget; SUITE.playedPath = playedPath; } catch (e) {}
+  /* ── notes: a private line or two on any track, searchable from the palette ── */
+  const NOTES_KEY = 'enh:notes', NOTES_MAX = 300;
+  function notesMap() { const o = GET(NOTES_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  function noteGet(href) { const e = notesMap()[href]; return e && typeof e.x === 'string' ? e.x : ''; }
+  function noteSet(href, text, n, a) {
+    if (!href || href.charAt(0) !== '/') return;
+    const map = notesMap(); text = String(text || '').slice(0, 600).trim();
+    if (!text) delete map[href]; else map[href] = { x: text, t: Date.now(), n: String(n || '').slice(0, 120), a: String(a || '').slice(0, 80) };
+    const keys = Object.keys(map); if (keys.length > NOTES_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - NOTES_MAX).forEach((k) => { delete map[k]; }); }
+    SET(NOTES_KEY, map);
+  }
+  function notesSearch(q, max) {
+    const needle = String(q || '').toLowerCase().trim(); if (needle.length < 2) return [];
+    const map = notesMap(), out = [];
+    for (const href of Object.keys(map)) { const e = map[href]; const hay = ((e.x || '') + ' ' + (e.n || '') + ' ' + (e.a || '')).toLowerCase(); if (hay.indexOf(needle) !== -1) out.push({ href, x: e.x, n: e.n, a: e.a, t: e.t }); }
+    return out.sort((p, q) => (q.t || 0) - (p.t || 0)).slice(0, max || 6);
+  }
+  try { SUITE.noteGet = noteGet; SUITE.noteSet = noteSet; SUITE.notesSearch = notesSearch; } catch (e) {}
   /* ── Listen later: a private, local shortlist of tracks to come back to — no account, no like, nothing sent ── */
   const LATER_KEY = 'enh:later', LATER_MAX = 100;
   function laterMap() { const o = GET(LATER_KEY, null); return (o && typeof o === 'object') ? o : {}; }
@@ -13920,6 +14101,26 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const setMemo = new Map();
   let setTick = 0;
   function fmtLong(ms) { const mn = Math.round(ms / 60000); return mn >= 60 ? Math.floor(mn / 60) + ' h ' + String(mn % 60).padStart(2, '0') + ' min' : mn + ' min'; }
+  // the full tracklist of a set: the resolve answer carries whole objects for the first tracks and only ids for the rest,
+  // which come from /tracks?ids= in batches of 50 (the page's own anonymous client id); memoised per page
+  const setTracksMemo = new Map();
+  function setTracks(path) {
+    if (setTracksMemo.has(path)) return setTracksMemo.get(path);
+    const c = SUITE.clientId ? SUITE.clientId() : null; if (!c) return Promise.resolve([]);
+    const shape = (t) => ({ url: (t.permalink_url || '').split('?')[0], title: t.title || '', artist: (t.user && t.user.username) || '', ms: t.full_duration || t.duration || 0 });
+    const p = gmGetJSON('https://api-v2.soundcloud.com/resolve?url=' + encodeURIComponent('https://soundcloud.com' + path) + '&client_id=' + encodeURIComponent(c)).then(async (j) => {
+      if (!j || j.kind !== 'playlist' || !Array.isArray(j.tracks)) return [];
+      const full = new Map(); const ids = [];
+      for (const t of j.tracks) { if (t && t.permalink_url) full.set(t.id, shape(t)); else if (t && t.id != null) ids.push(t.id); }
+      for (let i = 0; i < ids.length && i < 500; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        try { const arr = await gmGetJSON('https://api-v2.soundcloud.com/tracks?ids=' + chunk.join('%2C') + '&client_id=' + encodeURIComponent(c)); if (Array.isArray(arr)) for (const t of arr) if (t && t.permalink_url) full.set(t.id, shape(t)); } catch (e) {}
+      }
+      return j.tracks.map((t) => t && full.get(t.id)).filter(Boolean);
+    }).catch(() => []);
+    setTracksMemo.set(path, p); p.then((l) => { if (!l.length) setTracksMemo.delete(path); });
+    return p;
+  }
   function playlistRuntime() {
     if (!CFG.setRuntime || (setTick++ % 3)) return;
     const path = location.pathname.replace(/\/$/, '');
@@ -13934,6 +14135,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       el.textContent = d.track_count + (d.track_count === 1 ? ' track' : ' tracks') + ' · ' + fmtLong(d.duration) + (d.duration < 20 * 3600000 ? ' · done by ' + end.getHours() + ':' + String(end.getMinutes()).padStart(2, '0') : '');
       el.title = 'Total length of this playlist, and when it would end if played from now';
       h2.appendChild(el);
+      // tools: every track link on the clipboard, or the list as CSV
+      const tools = D.createElement('span'); tools.className = 'sce-settools'; tools.style.cssText = 'display:inline-flex;gap:6px;margin-left:8px;vertical-align:middle';
+      const mkT = (txt, title, fn) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; b.style.cssText = 'border:0;border-radius:8px;padding:5px 9px;font:600 11px inherit;cursor:pointer;background:rgba(0,0,0,.55);color:#fff'; b.addEventListener('click', () => { b.disabled = true; fn().finally(() => { b.disabled = false; }); }); tools.appendChild(b); };
+      const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      mkT('Copy links', 'Every track link in this playlist, one per line', () => setTracks(path).then((list) => { if (!list.length) { toast('Could not read the tracklist'); return; } const txt = list.map((t) => t.url).join('\n'); try { if (GM_setClipboard(txt) !== false) { toast(list.length + ' links copied'); return; } } catch (e) {} return navigator.clipboard.writeText(txt).then(() => toast(list.length + ' links copied'), () => toast('Copy failed')); }));
+      mkT('Export CSV', 'Title, artist, length and link of every track', () => setTracks(path).then((list) => { if (!list.length) { toast('Could not read the tracklist'); return; } const csv = ['n,title,artist,length,url'].concat(list.map((t, i) => [i + 1, t.title, t.artist, fmtClock(Math.round(t.ms / 1000)), t.url].map(esc).join(','))).join('\n'); const a = D.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'soundcloud-playlist-' + path.split('/').pop() + '.csv'; (D.body || D.documentElement).appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1000); toast('Playlist exported · ' + list.length + ' tracks'); }));
+      el.appendChild(tools);
     };
     const prev = setMemo.get(path);
     if (prev && prev.fail) { if (Date.now() - prev.fail < 60000) return; setMemo.delete(path); }   // a failed lookup waits a minute
@@ -13961,6 +14169,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
       try { linkTimestamps(); } catch (e) {}
       try { playlistRuntime(); } catch (e) {}
+      try { paintHeard(); } catch (e) {}
+      try { quietTick(); } catch (e) {}
+      try { skipLinks(); } catch (e) {}
       const m = activeMedia();
       if (!m) { try { mediaSessionSync(null); } catch (e) {} return; }
       try { offerResume(m); recordResume(m); applyResume(m); applyPendingJump(m); mediaSessionSync(m); } catch (e) {}
@@ -14195,6 +14406,68 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       paintSleep();
     } catch (e) {}
   }
+  /* ── lists: J and K walk the tracks of the feed, search and playlists with a visible ring, Enter plays, O opens,
+   * L likes the ringed track; never while typing, never while the hub owns the keys. ── */
+  const ROW_SEL = '.soundList__item, .searchList__item, .trackList__item, .systemPlaylistTrackList__item';
+  let rowCur = null;
+  function rowsAll() { return Array.from(D.querySelectorAll(ROW_SEL)).filter((r) => r.offsetParent !== null); }
+  function rowRing(r) {
+    if (rowCur && rowCur !== r) { rowCur.classList.remove('sce-row'); rowCur.removeAttribute('data-sce-row'); }
+    rowCur = r || null;
+    if (r) { r.classList.add('sce-row'); r.setAttribute('data-sce-row', '1'); try { r.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { try { r.scrollIntoView(false); } catch (e2) {} } }
+  }
+  function rowMove(dir) {
+    const rows = rowsAll(); if (!rows.length) return false;
+    let i = rowCur ? rows.indexOf(rowCur) : -1;
+    if (i < 0) { const y = W.innerHeight * 0.3; i = rows.findIndex((r) => r.getBoundingClientRect().bottom > y); if (i < 0) i = 0; if (dir < 0 && i > 0) i--; }
+    else i = Math.max(0, Math.min(rows.length - 1, i + dir));
+    rowRing(rows[i]); return true;
+  }
+  function rowAct(what) {
+    const r = rowCur; if (!r || !r.isConnected) return false;
+    if (what === 'play') {
+      const b = r.querySelector('.sc-button-play, .playButton, .trackItem__playButton'); if (!b) return false;
+      // signed-out visitors get the site's sign-in nag on a list play: close the one our click raised and press once more
+      const nag = () => D.querySelector('.modal.auth-modal .modal__closeButton, .modal.auth-modal .modal__close');
+      const had = !!nag(); b.click();
+      setTimeout(() => { try { const m = activeMedia(); if (m && !m.paused) return; const x = nag(); if (x && !had) { x.click(); setTimeout(() => { try { if (r.isConnected) b.click(); } catch (e) {} }, 300); } } catch (e) {} }, 1200);
+      return true;
+    }
+    if (what === 'open') { const a = r.querySelector('a.soundTitle__title, .trackItem__trackTitle, a.sc-link-primary'); if (a) { a.click(); return true; } }
+    if (what === 'like') { const b = r.querySelector('.sc-button-like'); if (b) { b.click(); toast(b.classList.contains('sc-button-selected') ? 'Unliked' : 'Liked ♥'); return true; } }
+    return false;
+  }
+  function rowKey(e) {
+    if (!CFG.listKeys || e.altKey || e.ctrlKey || e.metaKey) return false;
+    const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return false;
+    if (SUITE.lyricsOpen && SUITE.lyricsOpen()) return false;
+    const k = e.key;
+    if (k === 'j' || k === 'J') return rowMove(1);
+    if (k === 'k' || k === 'K') return rowMove(-1);
+    if (!rowCur || !rowCur.isConnected) return false;
+    if (k === 'Enter') return rowAct('play');
+    if (k === 'o' || k === 'O') return rowAct('open');
+    if (k === 'l' || k === 'L') return rowAct('like');
+    if (k === 'Escape') { rowRing(null); return true; }
+    return false;
+  }
+  try { W.addEventListener('keydown', (e) => { try { if (rowKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); } } catch (er) {} }, true); } catch (e) {}
+  // ✓ on tracks in lists you already played (the played memory the feed rule reads)
+  function paintHeard() {
+    if (!CFG.heardMarks) return;
+    const rows = D.querySelectorAll(ROW_SEL + ':not([data-sce-heard])');
+    let n = 0;
+    for (const r of rows) {
+      if (++n > 120) break;
+      const a = r.querySelector('a.soundTitle__title, .trackItem__trackTitle, a.sc-link-primary'); const href = a && a.getAttribute('href');
+      if (!href) continue;
+      r.setAttribute('data-sce-heard', '1');
+      if (!playedPath(href.split('?')[0])) continue;
+      const host = r.querySelector('.soundTitle__titleContainer, .trackItem__content, .soundTitle') || r;
+      const m = D.createElement('span'); m.className = 'sce-heard'; m.textContent = '✓'; m.title = 'You played this'; host.appendChild(m);
+    }
+  }
   /* ── Chrome-wide keyboard commands (manifest "commands", set at chrome://extensions/shortcuts): the
    * background picks a tab and bridge.js posts the command in here; a broadcast (no tab was known to be
    * playing or in front) is taken only by a tab that is visible or already playing, so it never starts
@@ -14203,6 +14476,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (name === 'play-pause') { const b = D.querySelector('.playControls__play'); if (!b) return false; b.click(); return true; }
     if (name === 'next-track' || name === 'prev-track') { const b = D.querySelector(name === 'next-track' ? '.skipControl__next' : '.skipControl__previous'); if (!b || b.disabled) return false; b.click(); return true; }
     if (name === 'like-track') { const b = D.querySelector('.playbackSoundBadge__actions .sc-button-like, .playbackSoundBadge__like, .playControls .sc-button-like'); if (!b) return false; likeCurrent(); return true; }
+    if (name === 'seek-back' || name === 'seek-forward') { const m = activeMedia(); if (!m || !isFinite(m.duration)) return false; nudgeSeek(name === 'seek-back' ? -10 : 10); return true; }
+    if (name === 'mute') { const m = activeMedia(); if (!m) return false; toggleMute(); return true; }
     return false;
   }
   let cmdLastAt = 0;   // when this tab last started or stopped playing: the router's tie-breaker
@@ -14264,6 +14539,32 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   try { watchDevices(); } catch (e) {}
+  /* ── quiet hours: Night mode and the quiet loudness target between two hours, both put back at the end ── */
+  const QUIET_KEY = 'enh:quietPrev';
+  function quietNow() { const h = new Date().getHours(), a = parseInt(CFG.quietFrom, 10), b = parseInt(CFG.quietTo, 10); if (!isFinite(a) || !isFinite(b)) return false; return a <= b ? (h >= a && h < b) : (h >= a || h < b); }
+  function quietTick() {
+    const prev = GET(QUIET_KEY, null);
+    if (CFG.quietHours && quietNow()) {
+      if (prev) return;   // already applied
+      SET(QUIET_KEY, { nightOn: !!CFG.nightOn, loudTarget: CFG.loudTarget, loudnessOn: !!CFG.loudnessOn });
+      CFG.nightOn = true; CFG.loudTarget = -18; CFG.loudnessOn = true; save(); applyFx(); repaintAudioSoon(); toast('Quiet hours · Night mode, −18 LUFS');
+    } else if (prev) {
+      SET(QUIET_KEY, null);
+      CFG.nightOn = !!prev.nightOn; CFG.loudTarget = [-18, -14, -11].indexOf(+prev.loudTarget) !== -1 ? +prev.loudTarget : -14; CFG.loudnessOn = !!prev.loudnessOn; save(); applyFx(); repaintAudioSoon();
+      if (CFG.quietHours) toast('Quiet hours over · settings back');
+    }
+  }
+  /* ── skip links: two links that show only when focused, for keyboard and screen-reader users ── */
+  let skipEl = null;
+  function skipLinks() {
+    if (!CFG.skipLinks) { if (skipEl) { skipEl.remove(); skipEl = null; } return; }
+    if (skipEl && skipEl.isConnected) return;
+    const body = D.body; if (!body) return;
+    skipEl = D.createElement('nav'); skipEl.className = 'sce-skip'; skipEl.setAttribute('aria-label', 'Skip links');
+    const mk = (txt, sel) => { const a = D.createElement('a'); a.href = '#'; a.textContent = txt; a.addEventListener('click', (e) => { e.preventDefault(); const el = D.querySelector(sel); if (!el) return; if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1'); el.focus(); el.scrollIntoView({ block: 'start' }); }); skipEl.appendChild(a); };
+    mk('Skip to content', '#content, .l-container, main'); mk('Skip to player', '.playControls__play, .playControls');
+    body.insertBefore(skipEl, body.firstChild);
+  }
   function likeCurrent() {
     // the player bar only, most specific first: a selector list returns the first match in DOCUMENT order, i.e. a stream item's button
     const b = ['.playbackSoundBadge__actions .sc-button-like', '.playbackSoundBadge__like', '.playControls__soundBadge .sc-button-like', '.playControls .sc-button-like'].map((s) => D.querySelector(s)).find(Boolean);
@@ -14507,6 +14808,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (dl) mkA('⤓  Download', () => downloadTrack(d), true, true);   // only when the artist allows downloads
     mkA('Open artist', () => { if (uhref) { try { W.open(uhref, '_blank'); } catch (e) {} } });
     if (d.artwork_url) mkA('Artwork ↗', () => { try { W.open(String(d.artwork_url).replace('-large', '-original'), '_blank'); } catch (e) {} });
+    try {   // your note on this track, saved as you type
+      let np = ''; try { np = new URL(d.permalink_url || d.__url, location.origin).pathname; } catch (e) { np = ''; }
+      if (np) {
+        const ta = D.createElement('textarea'); ta.className = 'sce-note'; ta.rows = 2; ta.placeholder = 'Your note on this track — private, searchable from Ctrl+K'; ta.value = noteGet(np); ta.setAttribute('aria-label', 'Your note on this track');
+        ta.style.cssText = 'flex:1 1 100%;width:100%;box-sizing:border-box;margin-top:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:inherit;font:inherit;font-size:11.5px;line-height:1.4;padding:7px 9px;resize:vertical;min-height:38px';
+        ta.addEventListener('keydown', (e) => e.stopPropagation()); ta.addEventListener('keyup', (e) => e.stopPropagation());
+        let nT = 0; ta.addEventListener('input', () => { clearTimeout(nT); nT = setTimeout(() => noteSet(np, ta.value, d.title, d.user && d.user.username), 350); });
+        acts.appendChild(ta);
+      }
+    } catch (e) {}
     try {
       let lp = ''; try { lp = new URL(d.permalink_url || d.__url, location.origin).pathname; } catch (e) { lp = ''; }
       if (lp) { const lb = mkA(laterHas(lp) ? '☆ Remove from Listen later' : '☆ Listen later', () => { if (laterHas(lp)) { laterForget(lp); toast('Removed from Listen later'); } else { laterAdd(lp, d.title, d.user && d.user.username, (d.full_duration || d.duration || 0) / 1000); if (lp === curTrackHref()) laterSkipHref = lp; toast('Saved for later · Queue tab'); } try { if (lb && lb.nodeType) lb.textContent = laterHas(lp) ? '☆ Remove from Listen later' : '☆ Listen later'; } catch (e) {} }); }
@@ -14903,6 +15214,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       });
       bodyEl.appendChild(chipRow);
       liveSync.push(() => chips.forEach((b) => b._paint()));
+      // ── scenes: the whole tab under a name ──
+      const scRow = D.createElement('div'); scRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px';
+      const scSel = D.createElement('select'); scSel.className = 'sel'; scSel.setAttribute('aria-label', 'Audio scenes'); scSel.style.cssText = 'flex:1;min-width:0;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:inherit;font:inherit;font-size:11.5px;padding:7px 8px';
+      const scSave = mkBtn('Save scene…'); scSave.style.padding = '8px 12px'; scSave.title = 'Save every Audio setting under a name';
+      const scDel = mkBtn('Delete…'); scDel.style.padding = '8px 12px'; scDel.title = 'Delete a saved scene';
+      const scPaint = () => { const names = sceneNames(); scSel.replaceChildren(); const o0 = D.createElement('option'); o0.value = ''; o0.textContent = names.length ? 'Scenes · pick one to recall' : 'No scenes saved yet'; scSel.appendChild(o0); for (const n of names) { const o = D.createElement('option'); o.value = n; o.textContent = n; scSel.appendChild(o); } scDel.style.display = names.length ? '' : 'none'; };
+      scSel.addEventListener('change', () => { if (scSel.value) { sceneLoad(scSel.value); scSel.value = ''; repaintAll(); } });
+      scSave.addEventListener('click', () => { let n = ''; try { n = W.prompt('Name this scene (every Audio setting is saved):', ''); } catch (e) { n = ''; } if (n && sceneSave(n)) scPaint(); });
+      scDel.addEventListener('click', () => { const names = sceneNames(); if (!names.length) return; let n = ''; try { n = W.prompt('Delete which scene?\n' + names.join(', '), names[0]); } catch (e) { n = ''; } if (n && sceneDelete(n.trim())) scPaint(); });
+      scRow.append(scSel, scSave, scDel); scPaint(); bodyEl.appendChild(scRow);
 
       // ── playback (2.19 – 2.21): Speed + tempo chips, Pitch follows speed, Fade in / out + lengths.
       //    Speed is the suite's most-used control, so it sits right under Listening on ──
@@ -15416,7 +15737,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), scene: (op, name) => (op === 'save' ? sceneSave(name) : op === 'load' ? sceneLoad(name) : op === 'delete' ? sceneDelete(name) : sceneNames()), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15615,11 +15936,49 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 @media (prefers-reduced-motion:reduce){.wrap{transition:none}.sw::after,.sw{transition:none}}
 `;
   // feature rows for the panel — declarative so it stays clean & extensible
+  // Tweaks → Your data: every store with its size and a Clear; used by both the hub's Tweaks tab and the standalone panel
+  function buildDataPanel(row) {
+      const box = D.createElement('div'); box.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:4px';
+      const STORES = [
+        ['Settings', ['scssgm:enh:cfg', 'scssgm:sl:'], 'Every switch and slider (the shuffle keeps its own)'],
+        ['Lyrics cache', ['scssgm:sl4:'], 'Lyric sheets this browser has seen'],
+        ['Cue points', ['scssgm:sl:cues'], ''],
+        ['Resume positions', ['scssgm:enh:resumeMap'], ''],
+        ['Played tracks', ['scssgm:enh:played'], 'What the feed rule and the ✓ marks read'],
+        ['Measured tempos', ['scssgm:enh:bpm'], ''],
+        ['Listen later', ['scssgm:enh:later'], ''],
+        ['Notes', ['scssgm:enh:notes'], ''],
+        ['Audio scenes', ['scssgm:enh:scenes'], ''],
+        ['Shuffle: library', ['bh_sc_lib'], 'A copy of your likes for the shuffle and the palette'],
+        ['Shuffle: history & stats', ['bh_sc_history', 'bh_sc_daily', 'bh_sc_alltime', 'bh_sc_plays', 'bh_sc_hours', 'bh_sc_broken'], ''],
+      ];
+      const keysOf = (pfx) => { const out = []; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && pfx.some((px) => (px.endsWith(':') || px.endsWith('_')) ? k.indexOf(px) === 0 : k === px)) out.push(k); } } catch (e) {} return out; };
+      const size = (keys) => { let n = 0; try { for (const k of keys) n += (k.length + (localStorage.getItem(k) || '').length) * 2; } catch (e) {} return n; };
+      const fmtB = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(2) + ' MB';
+      const paint = () => {
+        box.replaceChildren(); let total = 0;
+        for (const [name, pfx, note] of STORES) {
+          const keys = keysOf(pfx).filter((k) => !(name === 'Settings' && k.indexOf('scssgm:sl4:') === 0)); const b = size(keys); total += b;
+          const line = D.createElement('div'); line.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:11.5px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)';
+          const nm = D.createElement('span'); nm.style.cssText = 'flex:1;min-width:0'; nm.textContent = name; if (note) nm.title = note;
+          const sz = D.createElement('span'); sz.style.cssText = 'font-variant-numeric:tabular-nums;color:#8a8a92;min-width:64px;text-align:right'; sz.textContent = keys.length ? fmtB(b) : '—';
+          const clr = D.createElement('button'); clr.type = 'button'; clr.textContent = 'Clear'; clr.className = 'sw'; clr.style.cssText = 'width:auto;height:auto;border-radius:8px;padding:4px 9px;font-size:10.5px;background:rgba(255,255,255,.08);color:#dcdce2'; clr.disabled = !keys.length; clr.style.opacity = keys.length ? '1' : '.4';
+          clr.setAttribute('aria-label', 'Clear ' + name);
+          clr.addEventListener('click', () => { let ok = true; try { ok = W.confirm('Clear ' + name + ' (' + fmtB(b) + ')? This cannot be undone.'); } catch (e) {} if (!ok) return; try { for (const k of keys) localStorage.removeItem(k); } catch (e) {} if (name === 'Lyrics cache') { try { localStorage.removeItem('scssgm:sl4:idx'); } catch (e) {} } toast(name + ' cleared'); paint(); });
+          line.append(nm, sz, clr); box.appendChild(line);
+        }
+        const tot = D.createElement('div'); tot.style.cssText = 'font-size:11px;color:#8a8a92;margin-top:6px'; tot.textContent = 'Total ' + fmtB(total) + ' of about 5 MB the browser allows this site · a backup keeps all of it (Back up everything, in the palette)';
+        box.appendChild(tot);
+      };
+      paint(); row.appendChild(box);
+  }
   const ROWS = [
     ['SEC', 'Appearance'],
     ['theme', 'select', 'Theme', 'Real dark themes + tints', [['none', 'Default (light)'], ['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED black'], ['midnight', '🌌 Midnight blue'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate'], ['dim', 'Dim (tint)'], ['dimmer', 'Dimmer (tint)'], ['warm', 'Night warm (tint)'], ['cool', 'Cool (tint)'], ['vivid', 'Vivid (tint)'], ['muted', 'Muted (tint)'], ['vintage', 'Vintage (tint)'], ['rose', 'Rosé (tint)'], ['sunset', 'Sunset (tint)'], ['forest', 'Forest (tint)'], ['neon', 'Neon (tint)'], ['noir', 'Noir (tint)'], ['cyber', 'Cyberpunk (tint)'], ['pastel', 'Pastel (tint)'], ['gray', 'Grayscale (tint)'], ['contrast', 'High contrast (tint)'], ['custom', '🎨 Custom…']]],
     ['autoDark', 'toggle', 'Auto dark', 'A dark theme by night and light by day, or whatever the system says — overrides the theme above while on'],
     ['autoDarkMode', 'select', 'Auto dark follows', 'The clock, or the OS colour scheme', [['clock', 'The clock (dark 7pm–7am)'], ['system', 'The system colour scheme']]],
+    ['motionOs', 'toggle', 'Reduce motion with the system', 'When the OS asks for less motion, the site and the hub animate less — whatever the switch above says'],
+    ['skipLinks', 'toggle', 'Skip links', 'Press Tab at the top of a page: Skip to content, Skip to player'],
     ['autoDarkTheme', 'select', 'After-dark theme', 'Which dark theme to use at night', [['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED'], ['midnight', '🌌 Midnight'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate']]],
     ['accent', 'select', 'Accent colour', 'Recolours buttons & links', [['default', 'SoundCloud orange'], ['red', 'Red'], ['pink', 'Pink'], ['purple', 'Purple'], ['blue', 'Blue'], ['cyan', 'Cyan'], ['green', 'Green'], ['gold', 'Gold'], ['custom', '🎨 Custom…']]],
     ['grayArt', 'toggle', 'Grayscale artwork', 'Colour returns on hover'],
@@ -15641,6 +16000,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['feedMaxMin', 'select', 'Hide tracks longer than', 'Keeps hour-long mixes out of a song feed', [['0', 'Off'], ['10', '10 minutes'], ['20', '20 minutes'], ['30', '30 minutes'], ['60', '1 hour']]],
     ['feedHideLiked', 'toggle', 'Hide tracks you already liked', 'In the feed, search and related · uses the shuffle library'],
     ['feedHidePlayed', 'toggle', 'Hide tracks you already played', 'Anything you played for 30 s or more in the last month'],
+    ['commentNoise', 'toggle', 'Hide comment noise', 'Emoji-only, promo (“check out my…”, links) and duplicate comments stay out of the comment list'],
     ['feedMaxPlays', 'select', 'Hide tracks with more plays than', 'Fresh finds: keep the big hits out of the feed and search', [['0', 'Off'], ['1000', '1,000'], ['10000', '10,000'], ['100000', '100,000'], ['1000000', '1,000,000']]],
     ['feedMaxAgeDays', 'select', 'Hide tracks older than', 'Only the newest uploads', [['0', 'Off'], ['7', '1 week'], ['30', '1 month'], ['365', '1 year']]],
     ['hidePlaylistsFeed', 'toggle', 'Hide playlists in feed', 'Only tracks in the stream'],
@@ -15664,6 +16024,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['pauseUnplug', 'toggle', 'Pause when the audio output goes away', 'Headphones unplugged or a Bluetooth link dropped: playback pauses instead of switching to the speakers. Chrome only names outputs once the site may use your microphone; before that it pauses when no output is left'],
     ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
     ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
+    ['listKeys', 'toggle', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists · Enter plays · O opens · L likes'],
+    ['heardMarks', 'toggle', 'Mark tracks you played', 'A small ✓ on tracks in lists you played for 30 s or more in the last month'],
+    ['quietHours', 'toggle', 'Quiet hours', 'Night mode and the −18 LUFS loudness target between the hours below; both go back at the end'],
+    ['quietFrom', 'select', 'Quiet from', 'When the quiet window starts', [['20', '8 pm'], ['21', '9 pm'], ['22', '10 pm'], ['23', '11 pm'], ['0', 'Midnight']]],
+    ['quietTo', 'select', 'Quiet until', 'When it ends', [['5', '5 am'], ['6', '6 am'], ['7', '7 am'], ['8', '8 am'], ['9', '9 am']]],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
@@ -15681,6 +16046,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['barCopy', 'toggle', 'Copy track link', ''],
     ['SEC', 'Advanced'],
     ['customCss', 'textarea', 'Custom CSS', 'Power users — applied last, wins over everything'],
+    ['SEC', 'Your data'],
+    ['dataPanel', 'data', 'What the suite stores', 'Everything lives in this browser. Sizes, and a Clear for each store'],
   ];
   // splice the data-driven feature toggles in (grouped by category) just
   // before the Advanced section, so they share the same settings panel + search
@@ -15752,6 +16119,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         let dT = 0;
         inp.addEventListener('input', () => { clearTimeout(dT); dT = setTimeout(() => { CFG[key] = inp.value.slice(0, 400); save(); }, 400); });
         row.appendChild(inp);
+      } else if (type === 'data') {
+        row.style.display = 'block'; buildDataPanel(row);
       } else if (type === 'textarea') {
         row.style.display = 'block';
         const ta = D.createElement('textarea'); ta.className = 'ta'; ta.value = CFG[key] || ''; ta.spellcheck = false; ta.setAttribute('aria-label', label);
@@ -15922,6 +16291,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const val = D.createElement('span'); val.textContent = CFG[key] + (r[3] || ''); val.style.cssText = 'flex:none;font-size:11px;color:#aaa;width:38px;text-align:right';
           rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
           row.appendChild(rng); row.appendChild(val);
+        } else if (type === 'data') {
+          row.style.display = 'block'; buildDataPanel(row);
         } else if (type === 'textarea') {
           row.style.display = 'block';
           const ta = D.createElement('textarea'); ta.value = CFG[key] || ''; ta.spellcheck = false; ta.setAttribute('aria-label', label);
@@ -16104,7 +16475,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   } catch (e) {}
   try { SUITE.enhancerDump = () => { try { return Object.assign({}, CFG); } catch (e) { return null; } }; } catch (e) {}
   try {
-    SUITE.memoryDump = () => { try { const o = { resume: GET(RESUME_KEY, null), bpm: GET(BPM_KEY, null), played: GET(PLAYED_KEY, null), later: GET(LATER_KEY, null) }; return (o.resume || o.bpm || o.played || o.later) ? o : null; } catch (e) { return null; } };
+    SUITE.memoryDump = () => { try { const o = { resume: GET(RESUME_KEY, null), bpm: GET(BPM_KEY, null), played: GET(PLAYED_KEY, null), later: GET(LATER_KEY, null), notes: GET(NOTES_KEY, null), scenes: GET(SCENES_KEY, null) }; return (o.resume || o.bpm || o.played || o.later || o.notes || o.scenes) ? o : null; } catch (e) { return null; } };
     SUITE.memoryRestore = (obj) => {   // untrusted JSON: each map re-shaped field by field and capped like the live stores
       try {
         if (!obj || typeof obj !== 'object') return;
@@ -16126,6 +16497,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           for (const k of Object.keys(obj.later)) { const e = obj.later[k]; if (!path(k) || !e || !e.n) continue; cur[k] = { t: Math.min(Date.now(), +e.t > 0 ? +e.t : Date.now()), n: String(e.n).slice(0, 120), a: String(e.a || '').slice(0, 80), d: Math.min(86400, Math.max(0, Math.round(+e.d || 0))) }; }
           const keys = Object.keys(cur); if (keys.length > LATER_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - LATER_MAX).forEach((k) => { delete cur[k]; }); }
           SET(LATER_KEY, cur);
+        }
+        if (obj.notes && typeof obj.notes === 'object') {
+          const cur = notesMap();
+          for (const k of Object.keys(obj.notes)) { const e = obj.notes[k]; if (!path(k) || !e || typeof e.x !== 'string' || !e.x.trim()) continue; cur[k] = { x: e.x.slice(0, 600), t: Math.min(Date.now(), +e.t > 0 ? +e.t : Date.now()), n: String(e.n || '').slice(0, 120), a: String(e.a || '').slice(0, 80) }; }
+          const keys = Object.keys(cur); if (keys.length > NOTES_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - NOTES_MAX).forEach((k) => { delete cur[k]; }); }
+          SET(NOTES_KEY, cur);
+        }
+        if (obj.scenes && typeof obj.scenes === 'object') {
+          const cur = scenesMap();
+          for (const name of Object.keys(obj.scenes)) { const e = obj.scenes[name]; if (name.length > 40 || !e || !e.v || typeof e.v !== 'object') continue; const v = {}; for (const k of SCENE_KEYS) if (k in e.v && k in DEFAULTS && typeof e.v[k] === typeof DEFAULTS[k]) v[k] = e.v[k]; if (Object.keys(v).length) cur[name] = { t: Math.min(Date.now(), +e.t > 0 ? +e.t : Date.now()), v }; }
+          SET(SCENES_KEY, cur);
         }
         if (obj.played && typeof obj.played === 'object') {
           const o = GET(PLAYED_KEY, null), cur = (o && typeof o === 'object') ? o : {};
@@ -16162,8 +16544,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const mute = String(CFG.feedMute || '').split(/[,\n]/).map((w) => w.trim()).filter((w) => w.length >= 2);
       const minMs = (parseInt(CFG.feedMinMin, 10) || 0) * 60000, maxMs = (parseInt(CFG.feedMaxMin, 10) || 0) * 60000;
       const hideReposts = !!CFG.hideReposts, hideLiked = !!CFG.feedHideLiked, hidePlayed = !!CFG.feedHidePlayed;
-      const maxPlays = parseInt(CFG.feedMaxPlays, 10) || 0, maxAgeMs = (parseInt(CFG.feedMaxAgeDays, 10) || 0) * 864e5;
-      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked || hidePlayed || maxPlays || maxAgeMs), mute, minMs, maxMs, hideReposts, hideLiked, hidePlayed, maxPlays, maxAgeMs };
+      const maxPlays = parseInt(CFG.feedMaxPlays, 10) || 0, maxAgeMs = (parseInt(CFG.feedMaxAgeDays, 10) || 0) * 864e5, commentNoise = !!CFG.commentNoise;
+      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked || hidePlayed || maxPlays || maxAgeMs || commentNoise), mute, minMs, maxMs, hideReposts, hideLiked, hidePlayed, maxPlays, maxAgeMs, commentNoise };
     };
   } catch (e) {}
   /* ── audio commands for the palette: toggles, speeds and the tempo lock, with the live state for labels ── */
