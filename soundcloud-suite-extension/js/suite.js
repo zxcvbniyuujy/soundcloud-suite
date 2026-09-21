@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.54.0
+// @version      4.55.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.54.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.55.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -2660,9 +2660,11 @@
 
     function exportData() {
         try {
-            const data = { v: 8, cfg: CFG, history: loadHistory(), alltime: allTime, block: loadBlock(), plays: LS.get(PLAYS_KEY, {}), daily, hours: hourly, broken: LS.get(BROKEN_KEY, []) };
+            const data = { v: 9, cfg: CFG, history: loadHistory(), alltime: allTime, block: loadBlock(), plays: LS.get(PLAYS_KEY, {}), daily, hours: hourly, broken: LS.get(BROKEN_KEY, []) };
             try { if (SUITE.lyricsDump) { const ld = SUITE.lyricsDump(); if (ld) data.lyrics = ld; } } catch (e) {}
             try { if (SUITE.enhancerDump) { const ed = SUITE.enhancerDump(); if (ed) data.enhancer = ed; } } catch (e) {}   // whole-suite backup
+            try { if (SUITE.cuesDump) { const cd = SUITE.cuesDump(); if (cd) data.cues = cd; } } catch (e) {}                // cue points
+            try { if (SUITE.memoryDump) { const md = SUITE.memoryDump(); if (md) data.memory = md; } } catch (e) {}          // resume positions, measured tempos, played tracks
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -2696,6 +2698,8 @@
                 if (Array.isArray(d.broken)) LS.set(BROKEN_KEY, d.broken.filter(x => x && typeof x.u === 'string' && x.u).slice(-200));
                 try { if (d.lyrics && SUITE.lyricsRestore) SUITE.lyricsRestore(d.lyrics); } catch (e) {}
                 try { if (d.enhancer && SUITE.enhancerRestore) SUITE.enhancerRestore(d.enhancer); } catch (e) {}
+                try { if (d.cues && SUITE.cuesRestore) SUITE.cuesRestore(d.cues); } catch (e) {}
+                try { if (d.memory && SUITE.memoryRestore) SUITE.memoryRestore(d.memory); } catch (e) {}
                 if (d.alltime && typeof d.alltime === 'object') {
                     allTime.listenMs = Math.max(0, +d.alltime.listenMs || 0);
                     allTime.played = Math.max(0, d.alltime.played | 0);
@@ -8236,6 +8240,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🕐', 'Your listening card', 'Stats → Share card: total time, a 24-hour listening clock, top artists and the last seven days as one 1080 × 1080 image, on the clipboard or as a file.'],
+          ['⌕', 'Find a song by a lyric', 'Lyrics ⋯ menu → Find a song by a lyric: type the words you remember and every lyric sheet this browser has cached is searched, newest first. One click opens the track.'],
+          ['♩', 'Tempo, measured', 'The BPM is measured from the audio itself, shown in the Audio tab and the track-info popover, corrected for the speed you play at and remembered per track.'],
+          ['⏩', 'Continue listening, and more', 'A Continue listening shelf at the top of the Queue tab, a Hide tracks you already played feed rule, { and } seek a whole minute, Artwork ↗ opens the full-size cover, a start page for cold loads, and backups now carry cue points, resume positions and measured tempos.'],
           ['☰', 'Chapters for mixes', 'A set whose description carries a timestamped tracklist gets a chapter list at the top of the Queue tab that follows the playhead. Click to jump, Next / Previous chapter from the palette, Copy tracklist, and your own cue points on any track.'],
           ['⏯', 'Long tracks resume', 'Anything over ten minutes remembers where you stopped for a month and offers to pick up there when it starts again. Tweaks → Player → Resume long tracks: ask, automatic or off.'],
           ['🧹', 'Feed rules', 'Tweaks → Declutter: mute words, hide tracks shorter or longer than a limit, hide what you already liked. They run on SoundCloud’s own feed, search and related lists, so a hidden track never shows and never plays.'],
@@ -11224,6 +11232,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           return Object.keys(out).length ? out : null;
         } catch (e) { return null; }
       };
+      SUITE.cuesDump = () => { try { const c = GM_getValue(CUES_KEY, null); return c && typeof c === 'object' && Object.keys(c).length ? c : null; } catch (e) { return null; } };
+      SUITE.cuesRestore = (obj) => {   // untrusted JSON: only well-formed cue lists, capped like the live store
+        try {
+          if (!obj || typeof obj !== 'object') return;
+          const cur = GM_getValue(CUES_KEY, {}) || {};
+          for (const href of Object.keys(obj)) {
+            if (href.length > 300 || !Array.isArray(obj[href])) continue;
+            const list = obj[href].filter((c) => c && isFinite(+c.t) && +c.t >= 0).slice(0, 200).map((c) => ({ t: Math.round(+c.t * 10) / 10, n: String(c.n || '').slice(0, 120) }));
+            if (list.length) cur[href] = list;
+          }
+          const keys = Object.keys(cur); while (keys.length > 100) delete cur[keys.shift()];
+          GM_setValue(CUES_KEY, cur);
+        } catch (e) {}
+      };
       SUITE.lyricsRestore = (obj) => {
         try {
           if (!obj || typeof obj !== 'object') return;
@@ -13491,14 +13513,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * harmonics reinforced and a soft prior around 120 BPM, then divided by the playback rate so the figure
    * is the track's own. Two agreeing estimates publish; a track's BPM is remembered for a year. ── */
   const BPM_KEY = 'enh:bpm', BPM_MAX = 300;
-  const bpm = { env: new Float32Array(4096), n: 0, fs: 0, prevLo: 0, prevHi: 0, last: null, stable: 0, pub: null, href: '', tick: 0 };
-  function bpmReset(href) { bpm.n = 0; bpm.prevLo = 0; bpm.prevHi = 0; bpm.last = null; bpm.stable = 0; bpm.pub = null; bpm.href = href || ''; }
+  const bpm = { env: new Float32Array(4096), n: 0, fs: 0, prevLo: 0, prevHi: 0, last: null, stable: 0, pub: null, href: '', tick: 0, resets: 0, feeds: 0, el: null };
+  function bpmReset(href) { bpm.resets++; bpm.n = 0; bpm.prevLo = 0; bpm.prevHi = 0; bpm.last = null; bpm.stable = 0; bpm.pub = null; bpm.href = href || ''; }
   function bpmFeed(pairs, fs) {
     if (!CFG.bpmDetect || !pairs) return;
+    bpm.feeds++;
     if (fs && fs !== bpm.fs) { bpm.fs = fs; bpm.n = 0; }
     for (let i = 0; i + 1 < pairs.length; i += 2) {
       const lo = Math.log(pairs[i] + 1e-9), hi = Math.log(pairs[i + 1] + 1e-9);
-      const f = Math.max(0, lo - bpm.prevLo) * 1.5 + Math.max(0, hi - bpm.prevHi);
+      const f = Math.min(6, Math.max(0, lo - bpm.prevLo) * 1.5 + Math.max(0, hi - bpm.prevHi));   // capped: a dropout's silence-to-signal edge must not outweigh the beats
       bpm.prevLo = lo; bpm.prevHi = hi;
       if (bpm.n >= bpm.env.length) { bpm.env.copyWithin(0, 512); bpm.n -= 512; }
       bpm.env[bpm.n++] = f;
@@ -13508,10 +13531,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const fs = bpm.fs; if (!fs) return null;
     const N = Math.min(bpm.n, Math.round(fs * 32)); if (N < fs * 16) return null;
     const x = bpm.env.subarray(bpm.n - N, bpm.n);
+    // no beat, no number: a steady tone, speech or silence has a flux of numerical noise, and noise autocorrelates
+    // as confidently as anything — so the window must hold real onsets (a quarter-nat jump at least once a second)
+    let hits = 0; for (let i = 0; i < N; i++) if (x[i] > 0.25) hits++;
+    if (hits < N / fs) return null;
     const w = Math.round(fs), d = new Float32Array(N); let acc = 0;
     for (let i = 0; i < N; i++) { acc += x[i]; if (i >= w) acc -= x[i - w]; d[i] = x[i] - acc / Math.min(i + 1, w); }   // 1 s detrend
     const ac = (L) => { let sum = 0; for (let i = L; i < N; i++) sum += d[i] * d[i - L]; return sum / (N - L); };
-    const a0 = ac(0); if (!(a0 > 0)) return null;
+    const a0 = ac(0); if (!(a0 > 1e-4)) return null;
     const Lmin = Math.max(2, Math.floor(fs * 60 / 200)), Lmax = Math.ceil(fs * 60 / 60);
     const acs = new Float32Array(Lmax * 2 + 3);
     for (let L = Lmin >> 1; L <= Lmax * 2 + 1 && L < N; L++) acs[L] = ac(L) / a0;
@@ -13531,6 +13558,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function bpmMem() { const o = GET(BPM_KEY, null); return (o && typeof o === 'object') ? o : {}; }
   function bpmTick(m) {   // 1 Hz: track changes reset (and recall), an estimate every 4 s of routed playback
     if (!CFG.bpmDetect) { if (bpm.pub) bpm.pub = null; return; }
+    if (m && m !== bpm.el) { bpm.el = m; bpm.n = 0; }   // a new element, a fresh envelope
     const href = curTrackHref() || '';
     if (href !== bpm.href) {
       bpmReset(href);
@@ -13560,7 +13588,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       const c = e.chain; if (!c || c.onset || e.ctx.__sceTpLimiterOk !== true || typeof AudioWorkletNode === 'undefined') return;
       const node = new AudioWorkletNode(e.ctx, 'sce-onset', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: 'clamped-max' });
-      node.port.onmessage = (ev) => { try { if (ev.data && ev.data.e) bpmFeed(ev.data.e, ev.data.fs); } catch (er) {} };
+      // only the element the tempo tick follows feeds the envelope, and only while it plays: a second chain
+      // (a stopped element still posts silent frames) interleaved with the live one would fabricate a beat
+      node.port.onmessage = (ev) => { try { const el = e.src && e.src.mediaElement; if (el && (el.paused || (bpm.el && el !== bpm.el))) return; if (ev.data && ev.data.e) bpmFeed(ev.data.e, ev.data.fs); } catch (er) {} };
       const mute = e.ctx.createGain(); mute.gain.value = 0;
       c.input.connect(node); node.connect(mute); mute.connect(e.ctx.destination);
       c.onset = node; c.onsetMute = mute;
@@ -15095,7 +15125,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n,
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15771,6 +15801,33 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   try { SUITE.enhancerRender = enhancerRender; } catch (e) {}
   // whole-suite backup: the shuffle module's Export/Import bundles these in
   try { SUITE.enhancerDump = () => { try { return Object.assign({}, CFG); } catch (e) { return null; } }; } catch (e) {}
+  try {
+    SUITE.memoryDump = () => { try { const o = { resume: GET(RESUME_KEY, null), bpm: GET(BPM_KEY, null), played: GET(PLAYED_KEY, null) }; return (o.resume || o.bpm || o.played) ? o : null; } catch (e) { return null; } };
+    SUITE.memoryRestore = (obj) => {   // untrusted JSON: each map re-shaped field by field and capped like the live stores
+      try {
+        if (!obj || typeof obj !== 'object') return;
+        const path = (k) => typeof k === 'string' && k.length <= 300 && k.charAt(0) === '/';
+        if (obj.resume && typeof obj.resume === 'object') {
+          const cur = resumeMap();
+          for (const k of Object.keys(obj.resume)) { const e = obj.resume[k]; if (!path(k) || !e || !(+e.pos >= 60) || !(+e.dur > +e.pos)) continue; cur[k] = { pos: Math.round(+e.pos), dur: Math.round(+e.dur), t: +e.t > 0 ? +e.t : Date.now(), n: String(e.n || '').slice(0, 120), a: String(e.a || '').slice(0, 80) }; }
+          const keys = Object.keys(cur); if (keys.length > RESUME_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - RESUME_MAX).forEach((k) => { delete cur[k]; }); }
+          SET(RESUME_KEY, cur);
+        }
+        if (obj.bpm && typeof obj.bpm === 'object') {
+          const cur = bpmMem();
+          for (const k of Object.keys(obj.bpm)) { const e = obj.bpm[k]; if (!path(k) || !e || !(+e.b >= 40 && +e.b <= 240)) continue; cur[k] = { b: Math.round(+e.b * 10) / 10, c: Math.min(1, Math.max(0, +e.c || 0)), t: +e.t > 0 ? +e.t : Date.now() }; }
+          const keys = Object.keys(cur); if (keys.length > BPM_MAX) { keys.sort((p, q) => (cur[p].t || 0) - (cur[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete cur[k]; }); }
+          SET(BPM_KEY, cur);
+        }
+        if (obj.played && typeof obj.played === 'object') {
+          const o = GET(PLAYED_KEY, null), cur = (o && typeof o === 'object') ? o : {};
+          for (const k of Object.keys(obj.played)) { const t = +obj.played[k]; if (path(k) && t > 0) cur[k] = t; }
+          const keys = Object.keys(cur); if (keys.length > PLAYED_MAX) { keys.sort((p, q) => (cur[p] || 0) - (cur[q] || 0)); keys.slice(0, keys.length - PLAYED_MAX).forEach((k) => { delete cur[k]; }); }
+          SET(PLAYED_KEY, cur); playedCache = null;
+        }
+      } catch (e) {}
+    };
+  } catch (e) {}
   try {
     SUITE.enhancerRestore = (obj) => {
       try {

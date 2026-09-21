@@ -207,7 +207,7 @@ const FIXTURE_SRC = `
     bassDb: 0, bassHarm: 0, tiltDb: 0, vocalAmt: 0, loudCompOn: false, loudCompAmt: 6, listenOn: '', stereoWidth: 100, crossfeedOn: false, crossfeedMode: 'natural', balance: 0, monoOn: false, swapLR: false,
     loudnessOn: false, loudTarget: -14, boostAmt: 100, limiterOn: true, nightOn: false, nightAmt: 50, enhanceOn: false, enhanceAmt: 50, fadeOn: false, fadeIn: 0.6, fadeOut: 2.5, vinylMode: false, skipSilence: false, reverbAmt: 0, speed: 100 };
   const resetAudio = async () => {
-    await dbg(`for (const [k, v] of Object.entries(${JSON.stringify(AUDIO_DEFAULTS)})) d.set(k, v); d.bypass(false); if (d.abOn()) d.abClear(); if (d.loudMemClear) d.loudMemClear(); if (d.eqMemClear) d.eqMemClear(); d.gm('enh:vol', '1');`);
+    await dbg(`for (const [k, v] of Object.entries(${JSON.stringify(AUDIO_DEFAULTS)})) d.set(k, v); d.bypass(false); if (d.abOn()) d.abClear(); if (d.loudMemClear) d.loudMemClear(); if (d.eqMemClear) d.eqMemClear(); if (d.bpmClear) d.bpmClear(); d.gm('enh:vol', '1');`);
     await sleep(90);
   };
 
@@ -1794,7 +1794,7 @@ const FIXTURE_SRC = `
     // preservesPitch on the element and, while it is on, shows the semitone shift (12·log2(rate)) in its description
     await play('A', { loop: true });
     await audioTab();
-    const order = await sectionOrder();
+    const order = (await sectionOrder()).filter((t) => !/^(Tempo |Listening for th)/.test(t));   // the tempo line under the chips is its own row; the order below is about the controls
     const iP = order.indexOf('Playback');
     assert(iP > 0, 'Playback section present');
     rowStarts(order, iP - 1, 'HeadphonesLaptop'); rowStarts(order, iP + 1, 'Speed'); rowStarts(order, iP + 2, '0.5×0.75×1×1.25'); rowStarts(order, iP + 3, 'Pitch follows sp');
@@ -1851,7 +1851,7 @@ const FIXTURE_SRC = `
     await play('K', { loop: true, href: '/test/bpm' });
     await audioTab(); await sleep(30000);
     let b = await dbg(`return d.bpm();`);
-    assert(b && Math.abs(b.bpm - 128) < 2, 'detected ≈ 128 BPM (got ' + JSON.stringify(b) + ', fed ' + (await dbg(`return d.bpmFed();`)) + ')');
+    assert(b && Math.abs(b.bpm - 128) < 2, 'detected ≈ 128 BPM (got ' + JSON.stringify(b) + ', diag ' + JSON.stringify(await dbg(`return d.bpmDiag();`)) + ')');
     eq(b.src, 'measured', 'measured, not remembered');
     const line = await abody(`const el = [...a.querySelectorAll('div')].find((d) => /^Tempo ≈/.test(d.textContent)); return el ? el.textContent : null;`);
     assert(line && /Tempo ≈ 12[78](\.\d)? BPM/.test(line), 'the Audio tab shows it (got ' + JSON.stringify(line) + ')');
@@ -1860,7 +1860,12 @@ const FIXTURE_SRC = `
     assert(b && Math.abs(b.bpm - 128) < 3, 'still the track\'s own tempo at 1.25× (got ' + JSON.stringify(b) + ')');
     const mem = await dbg(`return d.gm('enh:bpm');`);
     assert(mem && mem['/test/bpm'] && Math.abs(mem['/test/bpm'].b - 128) < 3, 'remembered per track');
-    await set('speed', 100); await closeHub(); await stopPlay();
+    await set('speed', 100); await stopPlay();
+    // a steady tone has no beat: the estimator must stay silent rather than confidently number the noise
+    await play('A', { loop: true, href: '/test/tone' }); await sleep(26000);
+    b = await dbg(`return d.bpm();`);
+    assert(!b, 'no tempo on a steady tone (got ' + JSON.stringify(b) + ')');
+    await closeHub(); await stopPlay();
   });
 
   scenario('fades', async () => {
