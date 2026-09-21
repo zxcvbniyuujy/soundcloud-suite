@@ -4789,6 +4789,8 @@
     renameCue(t, name) { if (!this.href) return; const cues = this.cues(this.href); for (const c of cues) if (Math.abs(c.t - t) <= 0.05) c.name = name; this.saveCues(this.href, cues); this.rebuild(); },
     tracklistText() { return this.list.map((c) => this.ts(c.t) + '  ' + c.name).join('\n'); },
   };
+  // the OS now-playing panel names the chapter of a mix: the entry at a time, or null outside a tracklist
+  SUITE.chapterAt = (t) => { try { const i = Chapters.indexAt(t || 0); return i >= 0 && Chapters.list[i] ? { name: Chapters.list[i].name || '', index: i, count: Chapters.list.length } : null; } catch (e) { return null; } };
 
   /* ----- LRCLIB ----- */
 
@@ -13681,10 +13683,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const artist = ul ? (ul.getAttribute('title') || ul.textContent || '').trim() : '';
     let art = '';
     try { const ae = D.querySelector('.playbackSoundBadge .sc-artwork[style*="background-image"], .playbackSoundBadge [style*="background-image"]'); const mm = ae && (ae.style.backgroundImage || '').match(/url\(["']?(.+?)["']?\)/); if (mm) art = mm[1].replace(/-t\d+x\d+(\.\w+)/, '-t500x500$1'); } catch (e) {}
-    const key = title + '|' + artist + '|' + art;
+    // inside a mix with a tracklist the panel names the chapter, with the mix as the album
+    let ch = null; try { ch = (m && SUITE.chapterAt) ? SUITE.chapterAt(m.currentTime || 0) : null; } catch (e) { ch = null; }
+    const chName = ch && ch.name ? ch.name : '';
+    const key = title + '|' + artist + '|' + art + '|' + chName;
     if (title && key !== msKey && typeof W.MediaMetadata === 'function') {
       msKey = key;
-      try { ms.metadata = new W.MediaMetadata({ title, artist, album: 'SoundCloud', artwork: art ? [{ src: art, sizes: '500x500', type: 'image/jpeg' }] : [] }); } catch (e) {}
+      try { ms.metadata = new W.MediaMetadata(chName ? { title: chName, artist, album: title, artwork: art ? [{ src: art, sizes: '500x500', type: 'image/jpeg' }] : [] } : { title, artist, album: 'SoundCloud', artwork: art ? [{ src: art, sizes: '500x500', type: 'image/jpeg' }] : [] }); } catch (e) {}
     }
     if (!m) return;
     const paused = !!m.paused, now = Date.now();
@@ -13976,7 +13981,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             else if (k === '=' || k === '+') { bumpVol(0.05); }
             else if (k === '-' || k === '_') { bumpVol(-0.05); }
             else if (k === 'b' || k === 'B') { likeCurrent(); }
-            else if (k === 'c' || k === 'C') { copyTrackLink(); }
+            else if (k === 'c') { copyTrackLink(); }
+            else if (k === 'C') { copyTimeLink(); }   // Shift+C: the link at this moment
             else if (k === 'g' || k === 'G') { gotoArtist(); }
             else if (k === 'i' || k === 'I') { showInfo(); }
             else if (k === '?') { e.preventDefault(); showShortcuts(); }
@@ -14347,6 +14353,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       ['Current track', [
         [['B'], 'Like / unlike'],
         [['C'], 'Copy track link'],
+        [['Shift', 'C'], 'Copy the link at this moment'],
         [['G'], 'Open the artist'],
         [['I'], 'Track info, download & embed'],
         [['/'], 'Focus the SoundCloud search'],
