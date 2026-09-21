@@ -2525,7 +2525,7 @@ const FIXTURE_SRC = `
     const ir = await dbg(`return d.ir;`); approx(ir.sec, 1.6, 0.01, '1.6 s IR'); eq(ir.ch, 2, 'stereo IR'); assert(Math.abs(ir.corr) < 0.1, 'decorrelated channels (' + ir.corr + ')');
     eq(await dbg(`return d.branches.reverb;`), true, 'convolver connected'); eq(s.latencyMs, 12, 'no latency added');
     // a −23 dBFS tone through the seeded, normalized noise IR at wet 0.14 reads −45.9 dBFS (the IR is deterministic)
-    await sleep(600); const wp = await wetPk(); assert(wp > -49 && wp < -43, 'the wet path carries the tone (' + wp.toFixed(1) + ' dBFS, want ≈ −45.9)');
+    await sleep(600); const wp = await wetPk(); assert(wp > -46 && wp < -40, 'the wet path carries the tone (' + wp.toFixed(1) + ' dBFS, want ≈ −42.8: the damped impulse keeps more of its energy in the mids once normalised)');
     await sliderSet('Reverb', 100); await sleep(600); s = await snap(); approx(s.params.rvWet.gain, 0.35, 0.001, 'wet caps at 0.35');
     const wp100 = await wetPk(); approx(wp100, wp + 7.96, 0.6, 'wet 0.35 vs 0.14: +8 dB');
     await sliderReset('Reverb');

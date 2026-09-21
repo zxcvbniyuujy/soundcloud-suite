@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.59.0
+// @version      4.60.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.59.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.60.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -791,6 +791,16 @@
      * feed / search / related JSON before SoundCloud renders it, so a hidden track never shows and never
      * plays. Pure and fail-open: any doubt returns the response untouched. ── */
     const feedStats = { seen: 0, dropped: 0 };
+    // the first related track of the track playing: what SoundCloud autoplays next when no queue is set, so the
+    // lyrics hub can warm it up the way it warms the shuffle's next track
+    let relNext = null;
+    function relatedFromJson(j) {
+        try {
+            const it = j && Array.isArray(j.collection) && j.collection.find((x) => x && x.kind === 'track' && x.permalink_url && x.title);
+            if (it) relNext = { u: it.permalink_url, t: it.title, a: (it.user && it.user.username) || '', d: it.duration || 0, at: Date.now() };
+        } catch (e) {}
+    }
+    SUITE.relatedNext = () => (relNext && Date.now() - relNext.at < 600000) ? relNext : null;
     function feedListKind(url) {
         try {
             const u = new URL(url, location.href);
@@ -850,6 +860,7 @@
         return { json: Object.assign({}, json, { collection: keep }), dropped };
     }
     function filterListResponse(res, kind) {
+        if (kind === 'related' && res && res.ok) { try { res.clone().json().then(relatedFromJson).catch(() => {}); } catch (e) {} }
         let rules = null;
         try { rules = SUITE.feedRules ? SUITE.feedRules() : null; } catch (e) { rules = null; }
         if (!rules || !rules.active || !res || !res.ok) return res;
@@ -880,12 +891,14 @@
             try {
                 if (xhr.status !== 200) return;
                 const rules = SUITE.feedRules ? SUITE.feedRules() : null;
-                if (!rules || !rules.active) return;
+                if ((!rules || !rules.active) && kind !== 'related') return;
                 const rt = xhr.responseType;
                 let j;
                 if (rt === 'json') j = gResp.call(xhr);
                 else if (rt === '' || rt === 'text') j = JSON.parse(gText.call(xhr));
                 else return;
+                if (kind === 'related') relatedFromJson(j);
+                if (!rules || !rules.active) return;
                 const out = feedFilter(j, rules, kind);
                 feedStats.seen += (j && Array.isArray(j.collection)) ? j.collection.length : 0;
                 feedStats.dropped += out.dropped;
@@ -4024,9 +4037,12 @@
       }
       if (!peaks.length || !(top > med)) return decline('flat', { samples: covered, linesUsed: used, stats: stats });
       var thresh = top - NEAR_PEAK_FRAC * (top - med), chosen = null;
+      // among the peaks that compete, the one nearest an expected lag wins: zero, or the lags the caller named
+      var priors = (opts.priorLags && opts.priorLags.length) ? opts.priorLags : [0];
+      var toPrior = function (kk) { var best = Infinity; for (var q = 0; q < priors.length; q++) { var d = Math.abs(kk * hop - priors[q]); if (d < best) best = d; } return best; };
       for (i = 0; i < peaks.length; i++) {
         if (peaks[i].v < thresh) continue;
-        if (!chosen || Math.abs(peaks[i].k) < Math.abs(chosen.k)) chosen = peaks[i];
+        if (!chosen || toPrior(peaks[i].k) < toPrior(chosen.k)) chosen = peaks[i];
       }
       var excl = Math.round(EXCLUDE_SEC / hop), ru = null;
       for (i = 0; i < peaks.length; i++) {
@@ -4115,9 +4131,9 @@
       var timer = setInterval(tick, hopMs);
 
       return {
-        estimate: function (lineStarts) {
+        estimate: function (lineStarts, o2) {
           var t0 = now();
-          var r = analyse(env, lineStarts, { maxLagSec: opts.maxLagSec });
+          var r = analyse(env, lineStarts, { maxLagSec: (o2 && o2.maxLagSec > 0) ? o2.maxLagSec : opts.maxLagSec, priorLags: o2 && o2.priorLags });
           r.stats = r.stats || {}; r.stats.estimateMs = round3(now() - t0);
           return r;
         },
@@ -4427,12 +4443,17 @@
   // wantDur/srcDur cancels that drift exactly. We scale for any mismatch beyond
   // ~0.8% (≈1.5 s on a 3-min track) instead of waving 8% mismatches through raw.
   //   → { lines, scaled }  ·  or null when the version is too far off to trust.
-  function fitSync(lines, srcDur, wantDur) {
+  function fitSync(lines, srcDur, wantDur, flags) {
     if (!lines || !lines.length) return null;
     if (!(srcDur > 0 && wantDur > 0)) return { lines, scaled: false };   // unknown duration → trust raw
     const ratio = wantDur / srcDur;
     if (ratio < 0.6 || ratio > 1.7) return null;                        // wildly off = wrong version
     if (Math.abs(ratio - 1) <= 0.008) return { lines, scaled: false };  // already aligned (sub-2 s)
+    // a few seconds apart with no tempo tag on the upload: the same master with an intro, a tag or silence added or
+    // cut, so the timestamps are right and only start later or earlier — keep them (the vocal aligner finds the
+    // constant lag); stretching would be wrong everywhere but the middle. Sped-up / slowed uploads are stretched.
+    const tempo = !!(flags && (flags.spedUp || flags.slowed));
+    if (!tempo && Math.abs(wantDur - srcDur) <= 10) return { lines, scaled: false };
     return { lines: lines.map((l) => [l[0] * ratio, l[1]]), scaled: true };
   }
 
@@ -4478,6 +4499,9 @@
     feat: /[\(\[\{]\s*(?:feat\.?|ft\.?|featuring|with|w\/)\s+([^\)\]\}]+)[\)\]\}]/i,
     featTrail: /(?:^|\s)(?:feat\.?|ft\.?|featuring)\s+(.+)$/i,
     trailJunk: new RegExp('\\s*[\\-–—|/•·]+\\s*\\(?(?:cdq|hq|lq|leak(?:ed)?|unreleased|snippet|og|rip|full|final|v\\d+|wav|mp3|flac|320|free\\s*dl|exclusive|tag(?:ged)?|untagged|remaster(?:ed)?)\\)?\\s*$', 'i'),
+    // bare version / format words with no bracket or dash around them, only at the tail (a real title keeps its words)
+    bareJunk: new RegExp('(?:\\s+(?:sped\\s*up|sped-up|slowed(?:\\s*(?:\\+|and|&|n|x)?\\s*(?:reverb(?:ed)?|down))?|reverb(?:ed)?|nightcore|daycore|official(?:\\s*(?:music|lyrics?))?\\s*(?:video|audio|visuali[sz]er)|lyrics?(?:\\s*video)?|visuali[sz]er|hq|hd|4k|cdq|full\\s*(?:version|song|track)|out\\s*now|free\\s*(?:dl|download)|download|unreleased|leak(?:ed)?|snippet|tiktok(?:\\s*version)?))+\\s*$', 'i'),
+    leadCore: /^\s*(?:nightcore|daycore|sped\s*up|slowed)\s*[-–—:|]\s*/i,
     anyBracket: /[\(\[\{][^\)\]\}]*[\)\]\}]/g,
     spaces: /\s{2,}/g,
     credit: /(作词|作曲|编曲|混音|制作|词|曲|작사|작곡|편곡)\s*[:：]|^\s*(?:lyrics?|composed?|written|produced|arranged|mixed|performed|engineered|mastered)\s*(?:by)?\s*[:：]|^\[(?:verse|chorus|bridge|intro|outro|hook|pre[\-\s]?chorus|refrain)\s*\d*\]\s*$/i,
@@ -4521,6 +4545,10 @@
     s = s.replace(RX.junkBracket, ' ');
     s = s.replace(RX.bareProd, ' ');
     for (let i = 0; i < 4 && RX.trailJunk.test(s); i++) s = s.replace(RX.trailJunk, '');
+    // bare version words with no bracket or dash around them ("Song sped up", "Song Official Video", "Nightcore - Song"):
+    // the flags already noted them, so from here on they would only poison every query
+    s = s.replace(RX.leadCore, '');
+    { const t2 = s.replace(RX.bareJunk, ''); if (t2.replace(/[\s\-–—|]+/g, '').length >= 2) s = t2; }
     s = s.replace(RX.spaces, ' ').trim().replace(/^["']+|["']+$/g, '').replace(/^[\-–—|]+|[\-–—|]+$/g, '').trim();
 
     let artist = '';
@@ -4658,6 +4686,9 @@
     { in: '@VAMPXXTAR666 ***I FW XANAX*** (no xanax remixx)', t: 'i fw xanax', h: 'vampxxtar666' },
     { in: 'Lil Tracy - Like A Farmer (CDQ)', a: 'lil tracy', t: 'like a farmer' },
     { in: 'artist — song (prod. by someone) [HQ]', a: 'artist', t: 'song' },
+    { in: 'Artist - Song sped up', a: 'artist', t: 'song', x: 'sped' },
+    { in: 'Nightcore - Song Name (Official Video)', a: '', t: 'song name', x: 'official' },
+    { in: 'Artist - Song slowed + reverb', a: 'artist', t: 'song', x: 'reverb' },
   ];
   function titleSelfTest() {
     const has = (got, want) => want === '' ? !got : normKey(got).indexOf(normKey(want)) !== -1;
@@ -4667,6 +4698,7 @@
       if (cse.t != null && !has(c.title, cse.t)) { ok = false; why.push('title="' + c.title + '" wanted~"' + cse.t + '"'); }
       if (cse.a != null && !has(c.artist, cse.a)) { ok = false; why.push('artist="' + c.artist + '" wanted~"' + cse.a + '"'); }
       if (cse.h != null && !has(c.handle || '', cse.h)) { ok = false; why.push('handle="' + (c.handle || '') + '" wanted~"' + cse.h + '"'); }
+      if (cse.x != null && has(c.title, cse.x)) { ok = false; why.push('title="' + c.title + '" still carries "' + cse.x + '"'); }
       return { in: cse.in, ok, why: why.join(' · ') };
     });
   }
@@ -5063,14 +5095,15 @@
 
   // session memo for search calls — retries & repeats cost zero network
   const SearchMemo = (() => {
-    const m = new Map(); const TTL = 30 * 60 * 1000;
+    const m = new Map(); const TTL = 30 * 60 * 1000, EMPTY_TTL = 5 * 60 * 1000;   // an empty answer is remembered too, briefly: the waves re-ask the same query otherwise
     return {
       wrap(prefix, q, fn) {
         const k = prefix + ':' + normKey(q);
         const e = m.get(k);
-        if (e && Date.now() - e.t < TTL) return Promise.resolve(e.v);
+        if (e && Date.now() - e.t < e.ttl) return Promise.resolve(e.v);
         return fn().then((v) => {
-          if (v && v.songs && v.songs.length) { if (m.size > 200) m.clear(); m.set(k, { v, t: Date.now() }); }
+          if (m.size > 200) m.clear();
+          m.set(k, { v, t: Date.now(), ttl: (v && v.songs && v.songs.length) ? TTL : EMPTY_TTL });
           return v;
         });
       },
@@ -5428,8 +5461,34 @@
     };
   }
 
+  // NetEase's word-level sheet ("yrc"): `[lineStartMs,durMs](wordStartMs,durMs,0)text(…)…` per line, JSON credit lines
+  // first. Rebuilt into LRC lines from the SAME segments, so the word map's keys (line start in centiseconds)
+  // always match the rendered lines — the same contract Musixmatch's richsync keeps.
+  function parseYrc(txt) {
+    const ls = [], wt = {};
+    const fmt = (ms) => { const cs = Math.max(0, Math.round(ms / 10)); return '[' + String(Math.floor(cs / 6000)).padStart(2, '0') + ':' + String(Math.floor((cs % 6000) / 100)).padStart(2, '0') + '.' + String(cs % 100).padStart(2, '0') + ']'; };
+    for (const line of String(txt || '').split(/\r?\n/)) {
+      const m = line.match(/^\[(\d+),(\d+)\](.*)$/); if (!m) continue;
+      const start = +m[1], dur = +m[2]; const words = []; let text = '';
+      const re = /\((\d+),(\d+),\d+\)([^(]*)/g; let w;
+      while ((w = re.exec(m[3]))) { const wtxt = w[3]; if (!wtxt.length) continue; words.push([+((+w[1]) / 1000).toFixed(3), wtxt.length]); text += wtxt; }
+      text = text.trim(); if (!text) continue;
+      ls.push(fmt(start) + text);
+      if (words.length) { words.sort((a, b) => a[0] - b[0]); wt[String(Math.round(start / 10))] = { e: dur > 0 ? +((start + dur) / 1000).toFixed(3) : null, w: words }; }
+    }
+    return ls.length >= 4 ? { lrc: ls.join('\n'), wt: Object.keys(wt).length ? wt : null } : null;
+  }
+  const NE_WORDS = new Map();   // nid → word map of the last body fetched this session (the lyric cache keeps the line text only)
   function neteaseLyric(nid) {
     return cachedBody('n:' + nid, async () => {
+      // the v1 endpoint carries the word-level sheet next to the line sheet; without it, the karaoke wipe is a straight line
+      try {
+        const j = await gmJSON('https://music.163.com/api/song/lyric/v1?os=pc&id=' + nid + '&cp=false&tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0', { timeout: 8000 });
+        const y = j && j.yrc && j.yrc.lyric ? parseYrc(j.yrc.lyric) : null;
+        if (y) { if (y.wt) NE_WORDS.set(nid, y.wt); return y.lrc; }
+        const raw0 = j && j.lrc && j.lrc.lyric;
+        if (raw0 && raw0.trim()) return raw0;
+      } catch (e) {}
       // os=pc matters: without it this endpoint refuses many clients —
       // the diagnostics trail showed search working but every body failing
       try {
@@ -5603,7 +5662,7 @@
       return r;
     }
 
-    return { find };
+    return { find, dead: () => dead, warm: () => getToken().catch(() => {}) };
   })();
 
   /* ----- LYRICS.OVH (plain-text last resort) ----- */
@@ -6034,7 +6093,7 @@
     if (c.instrumental) return { instr: true, src: c.src, a: c.a, t: c.t, score: c.score, low: c.score < SOLID };
     const isCover = !!(flags && flags.cover);   // covers get text — the original's timeline is wrong by definition
     if (c.synced && !isCover) {
-      const fit = fitSync(parseLRC(c.syncedRaw, c.a, c.t), c.dur, wantDur);
+      const fit = fitSync(parseLRC(c.syncedRaw, c.a, c.t), c.dur, wantDur, flags);
       if (fit) {
         return { src: c.src, synced: true, scaled: fit.scaled, lines: fit.lines, a: c.a, t: c.t, srcDur: c.dur || 0, score: c.score, low: c.score < SOLID, wt: fit.scaled ? null : (c.wt || null) };
       }
@@ -6155,8 +6214,8 @@
           if (FLAGS.cover) return { src: c.src, synced: false, lines: body.lines.map((l) => l[1]), a: c.a, t: c.t, score: c.score, low, img: c.img };
           // scale the real timestamps onto THIS upload's length (sped-up / slowed
           // mixes drift otherwise); too-far-off = wrong version → render as text
-          const fit = fitSync(body.lines, c.dur, meta.dur);
-          if (fit) return { src: c.src, synced: true, scaled: fit.scaled, lines: fit.lines, a: c.a, t: c.t, srcDur: c.dur || 0, score: c.score, low, img: c.img };
+          const fit = fitSync(body.lines, c.dur, meta.dur, FLAGS);
+          if (fit) return { src: c.src, synced: true, scaled: fit.scaled, lines: fit.lines, a: c.a, t: c.t, srcDur: c.dur || 0, score: c.score, low, img: c.img, wt: fit.scaled ? null : (body.wt || null) };
           return { src: c.src, synced: false, lines: body.lines.map((l) => l[1]), a: c.a, t: c.t, score: c.score, low, img: c.img };
         }
         return { src: c.src, synced: false, lines: body.lines, a: c.a, t: c.t, score: c.score, low, img: c.img };
@@ -6174,7 +6233,7 @@
         const p = c.src === 'genius'
           ? geniusLyrics(c.url).then((lines) => (lines && lines.length ? { synced: false, lines } : null))
           : c.src === 'netease'
-            ? neteaseLyric(c.nid).then(fromLrcRaw)
+            ? neteaseLyric(c.nid).then((raw) => { const b = fromLrcRaw(raw); if (b && NE_WORDS.has(c.nid)) b.wt = NE_WORDS.get(c.nid); return b; })
             : kugouLyric(c.kid, c.kkey).then(fromLrcRaw);
         // a STRONG match whose lyric download dies must not end the search —
         // its artist+title are confirmed evidence: pivot them into exact
@@ -6188,13 +6247,13 @@
           track(MXM.find({ artist: c.a, track: c.t, dur: meta.dur > 0 ? meta.dur : (c.dur || 0) }));
         };
         p.then((body) => {
-          bodies.set(c.id, body ? { state: 'ok', synced: body.synced, lines: body.lines } : { state: 'bad' });
+          bodies.set(c.id, body ? { state: 'ok', synced: body.synced, lines: body.lines, wt: body.wt || null } : { state: 'bad' });
           Trail.add(`body ${c.src} "${c.t}" (${(c.score || 0).toFixed(2)}) → ${body ? 'ok' : 'FAILED on every route'}`);
           if (!body) pivot();
           if (done && body && !lateFired && c.score >= 0.55 && typeof onLate === 'function' && lateOk(c.score, body.synced)) {
             lateFired = true;
             Trail.add('late delivery → rendering now');
-            try { onLate(mkBody(c, { state: 'ok', synced: body.synced, lines: body.lines })); } catch (e) {}
+            try { onLate(mkBody(c, { state: 'ok', synced: body.synced, lines: body.lines, wt: body.wt || null })); } catch (e) {}
           }
           judge();
         }).catch(() => {
@@ -6276,7 +6335,9 @@
         // flight) — be far more patient: this is exactly the song we want
         const rightAnswerLoading = pool.some((c) => c.score >= 0.7 && (c.ts || 0) >= 0.55 && pendingBody(c));
         const cap = lite ? 1 : (rightAnswerLoading ? 9 : 4);
-        if (((strongPending || rightAnswerLoading) && extensions < cap) || (left > 0 && extensions < (lite ? 1 : 4))) {
+        // a hard deadline on top of the extension caps: the right answer may load a while longer, nothing else keeps a search alive past 14 s
+        const wall = lite ? 6000 : (rightAnswerLoading ? 22000 : 14000);
+        if (performance.now() - t0 < wall && (((strongPending || rightAnswerLoading) && extensions < cap) || (left > 0 && extensions < (lite ? 1 : 4)))) {
           extensions++;
           Trail.add(`final: still working (inflight:${left}${rightAnswerLoading ? ' · right answer loading' : ''}) — extending (#${extensions})`);
           after(finalEffort, strongPending ? 3500 : 2500);
@@ -6406,7 +6467,9 @@
         const wantLatin = latinish(G.clean.title) > 0.7;
         for (const it of res.songs || []) {
           // language gate: a Latin-titled track never matches a CJK/Cyrillic candidate
-          if (wantLatin && latinish((it.t || '') + ' ' + (it.a || '')) < 0.4) continue;
+          // a CJK-catalogue entry whose length matches this upload to the second is evidence, not noise: keep it
+          const durHit = meta.dur > 0 && it.dur > 0 && Math.abs(it.dur - meta.dur) <= 1.5 && (it.synced || it.src === 'kugou' || it.src === 'netease');
+          if (wantLatin && !durHit && latinish((it.t || '') + ' ' + (it.a || '')) < 0.4) continue;
           if (banned && banned.includes(banTag(it))) continue;
           if (it.src === 'genius' && primary && (it.rank || 0) <= 1 && reserve.length < 2
             && !reserve.some((p) => p.id === it.id || (it.url && p.url === it.url))) {
@@ -6648,6 +6711,14 @@
       // In proxy mode (Cloudflare blocks direct Genius) those direct searches
       // are known-doomed 9s timeouts: promote webSearch to wave 1 instead and
       // keep ONE direct probe so recovery (gWrap flips back) still happens.
+      // the exact, duration-matched lookup is LRCLIB's fastest and most precise answer (one round trip, ±2 s): fire it
+      // for the best artist guess on every track, not only when the library already knew the artist
+      if (!meta.exactReady && meta.dur > 0 && G.clean.title) {
+        const hx = G.hints[0];
+        if (hx && hx.conf >= 0.5) track(lrcGet({ track: G.clean.title, artist: hx.a, dur: meta.dur }));
+        const up0 = uploaderCore(meta.uploader);
+        if (up0 && G.clean.bare && (!hx || normKey(hx.a) !== normKey(up0))) track(lrcGet({ track: G.clean.bare, artist: up0, dur: meta.dur }));
+      }
       if (G.lq[0]) track(lrcSearch({ q: G.lq[0] }));
       if (G.gq[0]) {
         // official API first when a token is set — it's the only Genius route
@@ -6801,13 +6872,16 @@
         if (s[k]) { delete s[k]; save(); }
         return false;
       },
-      add: (k) => { m.set(k, Date.now()); const s = load(); s[k] = Date.now(); save(); },
+      add: (k, weak) => { m.set(k, Date.now()); if (weak) return; const s = load(); s[k] = Date.now(); save(); },   // weak: this session only
       del: (k) => { m.delete(k); const s = load(); if (s[k]) { delete s[k]; save(); } },
       clearAll: () => { m.clear(); stored = {}; try { GM_setValue(PKEY, {}); } catch (e) {} },
     };
   })();
 
   const Inflight = new Map();
+  // a miss found while a provider was parked (LRCLIB cooling down, Genius behind Cloudflare, Musixmatch's token dead,
+  // the network gone) says little about the track: remember it for this session, not for two days
+  function searchDegraded() { try { return lrcCooldownActive() || Gmode.get() !== 'direct' || MXM.dead() || navigator.onLine === false; } catch (e) { return false; } }
 
   /* ------------------------------------------------------------------ *
    *  8. UI
@@ -8400,6 +8474,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['♪', 'Lyrics: found faster, synced tighter', 'The exact duration-matched lookup runs first on every track, junk like “sped up” or “Official Video” no longer poisons the search, and a search never runs past 14 s. Sheets a few seconds off the upload keep their timing instead of being stretched, and the vocal aligner now applies a clear finding by itself (0 undoes it). NetEase sheets bring word-level timing to the karaoke wipe.'],
+          ['◐', 'Loudness that ignores the volume slider', 'Loudness normalize measures the source at unity, so a track played at 50 % is no longer read as quiet and pushed back up. Parameter ramps start from the true current value, and the reverb tail now has a pre-delay, damped highs and no mud below 140 Hz.'],
           ['♫', 'The Audio tab in the same clothes', 'Five chips (EQ, Play, Tone, Level, Space) stay pinned while you scroll and follow where you are. Every pill, select and slider row matches the Tweaks tab; the Stats pills too, and they read on the light panel now.'],
           ['⚙', 'A cleaner Tweaks tab', 'Six groups (Shuffle, Look, Hide, Player, More, Data) behind a strip of chips that stays put while you scroll. Themes are cards you can read before you pick one, the search reaches every setting, and backup, restore and reset live under Data.'],
           ['⌥', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists, Enter plays, O opens, L likes. Tracks you already played carry a small ✓. Four more Chrome-wide commands (seek, mute, jump to the playing tab) wait for keys at chrome://extensions/shortcuts.'],
@@ -9065,8 +9141,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Calibrate sync (tap along)', () => startTapAlign(), 'A');
       mi('Reset sync & anchors', () => App.nudge(0), '0');
       // a clear vocal-alignment finding (≥ 200 ms, not declined) for this synced sheet, not yet applied
-      { const r = SyncAuto.last; if (r && !r.reason && r.confidence > 0 && Math.abs(r.lagSec) >= SyncAuto.MIN_SEC && !SyncAuto.ms && curLyr && curLyr.synced && SyncAuto.apply) {
-        const ms = -Math.round(r.lagSec * 1000);
+      { const r = SyncAuto.last; const lagR = r ? (r.lagAdj != null ? r.lagAdj : r.lagSec) : 0; if (r && !r.reason && r.confidence > 0 && Math.abs(lagR) >= SyncAuto.MIN_SEC && !SyncAuto.ms && curLyr && curLyr.synced && SyncAuto.apply) {
+        const ms = -Math.round(lagR * 1000);
         mi('Align to vocals: ' + (ms > 0 ? '+' : '') + (ms / 1000).toFixed(2) + 's (' + (r.confidence >= 0.5 ? 'clear' : r.confidence >= 0.2 ? 'likely' : 'weak') + ')', () => SyncAuto.apply());
       } }
       mi('Sync wizard: ' + (wizOn ? 'on' : 'off'), () => toggleWizard());
@@ -9820,7 +9896,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       if (!isSynced || !times.length || searchMode || tab !== 'lyrics' || tapOn) return;
       // configurable perceptual lead + per-track nudge + device-latency comp
-      const t = Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
+      const t = now + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;   // the one clock read of this frame
       const i = bisect(t);
       // TRUE karaoke wipe: every frame, fill the current line from its exact
       // playback position within the line — this is what makes sync read as
@@ -10552,7 +10628,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * the cache entry, shown as "auto" in the source line. '0' clears it like the other offsets; a manual nudge
      * sits on top of it. */
     let aligner = null, alignT = null, alignTries = 0;   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
-    const AUTO_ALIGN_AT_MS = [45000, 15000, 15000];   // first look at 45 s, then 60 s, 75 s
+    const AUTO_ALIGN_AT_MS = [30000, 15000, 15000, 30000];   // looks at 30 s, 45 s, 60 s and 90 s of playback
+    const ALIGN_BIAS_SEC = 0.12;    // on sheets that ARE right the estimator still reads +0.1..0.18 s: the sung energy rises after the instant people tap, so that much is not a sheet error
+    const ALIGN_AUTO_CONF = 0.5;    // a clear finding applies itself; weaker ones wait in the ⋯ menu
     function alignStop() { stopT(alignT); alignT = null; if (aligner) { try { aligner.dispose(); } catch (e) {} aligner = null; } }
     function alignStart() {
       alignStop(); alignTries = 0; SyncAuto.last = null;
@@ -10570,18 +10648,28 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function alignRun() {
       alignT = null;
       try {
-        if (!aligner || !lyr || !lyr.synced || lyr.instr) return;
+        if (!aligner) return;
+        const again = () => { if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]); };
+        if (!lyr || !lyr.synced || lyr.instr) { again(); return; }   // the sheet may still be on its way: look again later instead of giving up for this play
         const starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
-        const r = aligner.estimate(starts); SyncAuto.last = r;
-        if (r && !r.reason && r.confidence > 0 && Math.abs(r.lagSec) >= SyncAuto.MIN_SEC) return;   // a clear finding: the menu offers it
-        if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]);   // more audio, another look
+        // an unscaled sheet timed to a longer or shorter master: the extra (or missing) part is usually at the start, so
+        // the lag can be as large as the duration difference — search that far and prefer lags near 0 or ±that difference
+        const dd = (lyr.srcDur > 0 && meta && meta.dur > 0 && !lyr.scaled) ? Math.abs(meta.dur - lyr.srcDur) : 0;
+        const r = aligner.estimate(starts, dd > 2 ? { maxLagSec: Math.min(15, dd + 1.5), priorLags: [0, dd, -dd] } : null); SyncAuto.last = r;
+        if (r && !r.reason && r.confidence > 0) {
+          r.lagAdj = Math.round((r.lagSec - ALIGN_BIAS_SEC) * 1000) / 1000;
+          // a clear finding applies itself, once, while nothing manual is in place; the toast says how to undo it
+          if (r.confidence >= ALIGN_AUTO_CONF && Math.abs(r.lagAdj) >= 0.25 && !SyncAuto.ms && !off && !anch.length && SyncAuto.apply) { SyncAuto.apply(true); return; }
+          if (Math.abs(r.lagAdj) >= SyncAuto.MIN_SEC) return;   // a finding the menu can offer
+        }
+        again();   // more audio, another look
       } catch (e) {}
     }
     // the ⋯ menu's "Align to vocals": apply the latest estimate as the auto offset (a nudge on top stays possible)
-    SyncAuto.apply = () => {
+    SyncAuto.apply = (auto) => {
       try {
         const r = SyncAuto.last; if (!r || !lyr || !lyr.synced) return;
-        SyncAuto.ms = -Math.round(r.lagSec * 1000); SyncAuto.conf = r.confidence;
+        SyncAuto.ms = -Math.round((r.lagAdj != null ? r.lagAdj : r.lagSec) * 1000); SyncAuto.conf = r.confidence; SyncAuto.auto = !!auto;
         persistSync();
         try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
         UI.toast('Lyrics aligned to the vocals (' + (SyncAuto.ms > 0 ? '+' : '') + (SyncAuto.ms / 1000).toFixed(2) + ' s) · 0 undoes it');
@@ -10604,6 +10692,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       ['https://lrclib.net/api/search?q=a',
        'https://genius.com/robots.txt',
        'https://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=a&duration=&hash='].forEach((u) => gmFetchRaw(u, { timeout: 10000 }).catch(() => {}));
+      try { MXM.warm(); } catch (e) {}   // the Musixmatch token round trip happens now, not inside the first search
     }
 
     function readMeta() {
@@ -10749,7 +10838,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             title: nx.t || (lib && lib.title) || '',
             uploader: nx.a || (lib && lib.artist) || '',
             href: path,
-            dur: lib && lib.durMs > 0 ? Math.round(lib.durMs / 1000) : 0,
+            dur: lib && lib.durMs > 0 ? Math.round(lib.durMs / 1000) : (nx.d > 0 ? Math.round(nx.d / 1000) : 0),
           };
           if (!m.title) return false;
           m.key = trackKey(m);
@@ -10770,7 +10859,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           Inflight.set(m.key, p);
           return true;
         };
-        const nx = SUITE.nextUp('https://soundcloud.com' + meta.href);
+        let nx = SUITE.nextUp('https://soundcloud.com' + meta.href);
+        // no shuffle queue: SoundCloud autoplays the first related track, so that is the one to warm
+        if (!nx || !nx.u) nx = SUITE.relatedNext ? SUITE.relatedNext() : null;
         if (!nx || !nx.u) return;
         warmTrack(nx);
         // skip-skippers skip twice: warm the track AFTER next too, staggered
@@ -10798,11 +10889,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         if (!meta || !meta.title || !entry) return;
         const now = Date.now(); if (entry.rechk && now - entry.rechk < 7 * 864e5) return;
-        entry.rechk = now; Cache.set(key, entry);
-        const r = await lrcGet({ track: meta.title, artist: meta.uploader || '', dur: meta.dur > 0 ? meta.dur : 0 });
-        const it = r && r.songs && r.songs[0]; if (!it || !it.synced || myToken !== token) return;
+        const dur = meta.dur > 0 ? meta.dur : 0;
+        // the cached match already names the canonical artist and title (whoever found it); that pair plus the duration
+        // is what LRCLIB's exact endpoint answers to — the raw upload title with the uploader as artist almost never is
+        const c = cleanTitle(meta.title);
+        const tries = [];
+        if (entry.a && entry.t) tries.push([entry.t, entry.a]);
+        const hx = buildGuesses(meta).hints[0];
+        if (c.title && hx && hx.conf >= 0.5) tries.push([c.title, hx.a]);
+        const seen = new Set(); let it = null;
+        for (const [t, a] of tries) {
+          const k = normKey(t + '|' + a); if (seen.has(k)) continue; seen.add(k);
+          const r = await lrcGet({ track: t, artist: a, dur }); it = r && r.songs && r.songs[0];
+          if (it && it.synced) break; it = null;
+          if (myToken !== token) return;
+        }
+        entry.rechk = now; Cache.set(key, entry);   // stamped after the look, so a network failure does not lock a week out
+        if (!it || myToken !== token) return;
         it.score = 0.9;
-        const res = fromInline(it, meta.dur > 0 ? meta.dur : (it.dur || 0), {});
+        const res = fromInline(it, dur || (it.dur || 0), c.flags);
         if (!res || !res.synced || !res.lines || !res.lines.length) return;
         const e2 = toCache(res); e2.off = 0; e2.rechk = now; Cache.set(key, e2);
         off = 0; anch = []; apply(res, myToken);
@@ -10892,7 +10997,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             const e2 = toCache(fin);
             if (myToken !== token) e2.off = 0;   // finished after a track change: cache it, but not with the new track's offset
             Cache.set(key, e2);
-          } else Miss.add(key);
+          } else Miss.add(key, searchDegraded());
         }
         return fin;
       }, (err) => {
@@ -10932,8 +11037,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (SUITE.shuffleBusy && SUITE.shuffleBusy()) { prefetchT = Ticker.after(kick, 1200); return; }
         // duration is the engine's strongest right-version signal, but the
         // player DOM often exposes it a beat AFTER the title changes — wait
-        // for it (max ~500ms) instead of searching blind without it
-        if (!(meta.dur > 0) && kicks++ < 4) {
+        // for it (max ~1 s) instead of searching blind without it
+        if (!(meta.dur > 0) && kicks++ < 8) {
           const m2 = readMeta();
           if (m2 && m2.dur > 0 && m2.title === meta.title) meta.dur = m2.dur;
           if (!(meta.dur > 0)) { prefetchT = Ticker.after(kick, 120); return; }
@@ -11198,7 +11303,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
         } else {
           item.score = 1;
-          result = fromInline(item, wantDur);
+          result = fromInline(item, wantDur, (meta && meta.title) ? cleanTitle(meta.title).flags : {});
           if (result) { result.picked = true; result.low = false; }
         }
         if (!result) {
@@ -11546,6 +11651,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       App.watch();
       hotkeys();
       SUITE.lyricsOpen = () => UI.isOpen();
+      SUITE.lyricsAlign = () => { try { return { last: SyncAuto.last, ms: SyncAuto.ms, conf: SyncAuto.conf, auto: !!SyncAuto.auto }; } catch (e) { return null; } };
+      try { if (localStorage.getItem('scss:debug') === '1') window.__slxAlign = SUITE.lyricsAlign; } catch (e) {}
       // all-in-one: the ✦ enhancer button opens the hub on its Tweaks tab
       SUITE.openLyricsTweaks = () => { try { UI.setOpen(true); UI.setTab('tweaks'); } catch (e) {} };
       // the ✦ gear TOGGLES settings: already on Tweaks → close; otherwise open + show Tweaks
@@ -12365,8 +12472,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // the one AudioParam writer for everything audible: a short linear ramp so
   // toggles never click; linear ramps arrive exactly, so inert values are exact
   function ramp(p, v, t, s) {
-    try { p.cancelScheduledValues(t); p.setValueAtTime(p.value, t); p.linearRampToValueAtTime(v, t + (s || 0.03)); }
-    catch (e) { try { p.value = v; } catch (e2) {} }
+    try {
+      // cancelAndHold pins the value the param really has at t (AudioParam.value only refreshes per render quantum,
+      // so anchoring on it mid-ramp used to step back up to 128 samples); the older pair is the fallback
+      if (typeof p.cancelAndHoldAtTime === 'function') p.cancelAndHoldAtTime(t); else { p.cancelScheduledValues(t); p.setValueAtTime(p.value, t); }
+      p.linearRampToValueAtTime(v, t + (s || 0.03));
+    } catch (e) { try { p.value = v; } catch (e2) {} }
   }
   // what the chain adds on top of the device latency, in ms. Chromium's
   // DynamicsCompressor has a fixed pre-delay of floor(0.006·sr) frames (≈ 6 ms at
@@ -12940,11 +13051,27 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // reverb IR (WP10): 1.6 s of decorrelated noise (two independent channels), −60 dB at the end; built on first use.
   // Seeded (mulberry32) so every chain — and every session — gets the same room: a fresh random IR would give each
   // frequency a different response each time (a noise IR's gain at one frequency is Rayleigh-distributed).
+  // the reverb's impulse: 1.6 s of decorrelated noise under a −60 dB decay, as before, but with what a room does to it —
+  // 15 ms before the first reflection, highs that die faster than lows (a one-pole low-pass whose corner slides from
+  // 9 kHz to 1.8 kHz along the tail) and nothing below 140 Hz (a one-pole high-pass), so the tail neither hisses nor
+  // muddies the bass. Two channels from one seed stay decorrelated.
   function reverbIr(ctx) {
     const sr = ctx.sampleRate || 48000, n = Math.round(1.6 * sr), buf = ctx.createBuffer(2, n, sr);
     let seed = 0x9e3779b9;
     const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < n; i++) d[i] = (rnd() * 2 - 1) * Math.exp(-6.9 * i / n); }
+    const pre = Math.round(0.015 * sr), aHp = Math.exp(-2 * Math.PI * 140 / sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let lp = 0, hpX = 0, hpY = 0;
+      for (let i = pre; i < n; i++) {
+        const u = (i - pre) / (n - pre);
+        const x = (rnd() * 2 - 1) * Math.exp(-6.9 * u);
+        const fc = 1800 + 7200 * Math.exp(-u * 3.2), aLp = 1 - Math.exp(-2 * Math.PI * fc / sr);
+        lp += aLp * (x - lp);                       // damping: the corner slides down the tail
+        hpY = aHp * (hpY + lp - hpX); hpX = lp;     // one-pole high-pass at 140 Hz
+        d[i] = hpY;
+      }
+    }
     return buf;
   }
   function buildFxChain(ctx) {
@@ -13599,14 +13726,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!m || m.paused || !(m.readyState > 0)) return;
       if (isFinite(m.duration) && m.duration > 0) lnorm.dur = m.duration;
       if (!lnorm.measuring) return;   // a complete remembered value is applied — nothing to measure
+      // SoundCloud's own volume slider sits before the capture point (the source node hears the attenuated signal):
+      // measure the source at unity, or a track played at 50 % would read 6 dB quiet and be pushed 6 dB back up
+      const vol = m.muted ? 0 : +m.volume; if (!(vol >= 0.02)) return;
+      const volDb = 20 * Math.log10(vol);
       const c = e.chain, sr = e.ctx.sampleRate || 48000;
       // 400 ms (up to 81.9 kHz), capped at the tap size: an unguarded 38 400 at 96 k would index below 0
       const n = Math.max(1, Math.min(Math.round(0.4 * sr), c.bufKL.length));
       c.kL.getFloatTimeDomainData(c.bufKL); c.kR.getFloatTimeDomainData(c.bufKR);
       const ms = (b) => { let s = 0; for (let i = b.length - n; i < b.length; i++) s += b[i] * b[i]; return s / n; };
-      const pw = ms(c.bufKL) + ms(c.bufKR);
+      const pw = (ms(c.bufKL) + ms(c.bufKR)) / (vol * vol);
       // the source sample peak (peakTick just read the whole pL/pR buffers into meter.srcPeak, dBFS)
-      if (isFinite(meter.srcPeak) && meter.srcPeak > -119) lnorm.trackPeak = Math.max(lnorm.trackPeak, Math.pow(10, meter.srcPeak / 20));
+      if (isFinite(meter.srcPeak) && meter.srcPeak > -119) lnorm.trackPeak = Math.max(lnorm.trackPeak, Math.pow(10, (meter.srcPeak - volDb) / 20));
       if (!(pw >= 1e-12)) return;   // silence (or NaN): no block
       const Lb = -0.691 + 10 * Math.log10(pw);
       meter.m = Lb;
@@ -13642,8 +13773,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let map = GET('loud:bytrack', {}); if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
       const old = map[lnorm.href];
       // a partial re-measurement never replaces a longer one of the same upload
-      if (old && typeof old === 'object' && Math.abs((+old.d || 0) - d) <= 2 && s < (+old.s || 0)) return;
-      map[lnorm.href] = { l: Math.round(lnorm.lint * 10) / 10, p: Math.round(lnorm.trackPeak * 1000) / 1000, s: Math.round(s * 10) / 10, d: Math.round(d * 10) / 10, t: Date.now(), f: s >= Math.min(60, 0.5 * d) ? 1 : 0 };
+      if (old && typeof old === 'object' && old.v === 2 && Math.abs((+old.d || 0) - d) <= 2 && s < (+old.s || 0)) return;   // (a value measured before the volume correction is always replaced)
+      map[lnorm.href] = { v: 2, l: Math.round(lnorm.lint * 10) / 10, p: Math.round(lnorm.trackPeak * 1000) / 1000, s: Math.round(s * 10) / 10, d: Math.round(d * 10) / 10, t: Date.now(), f: s >= Math.min(60, 0.5 * d) ? 1 : 0 };
       const keys = Object.keys(map);
       if (keys.length > 1000) { keys.sort((a, b) => (+(map[a] && map[a].t) || 0) - (+(map[b] && map[b].t) || 0)); for (let i = 0; i < keys.length - 1000; i++) delete map[keys[i]]; }
       SET('loud:bytrack', map);
@@ -13677,7 +13808,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       lnorm.lint = +entry.l; lnorm.trackPeak = Math.max(lnorm.trackPeak, +entry.p || 0); meter.i = lnorm.lint;
       loudWrite(loudGainDb(lnorm.lint, lnorm.trackPeak), true);
       lnorm.src = 'remembered';
-      if (entry.f) lnorm.measuring = false;
+      if (entry.f && entry.v === 2) lnorm.measuring = false;   // a value measured before the volume correction is refined, not trusted whole
     } catch (e) {}
   }
   try { W.addEventListener('pagehide', () => { try { rememberLoud(true); } catch (e) {} }); } catch (e) {}

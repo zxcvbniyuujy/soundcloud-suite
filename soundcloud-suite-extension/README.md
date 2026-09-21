@@ -79,6 +79,17 @@ never plays.
   Translate without cookies, only while translation is on.
 - **Quiet synced upgrade** — a text-only lyric sheet is re-checked against
   LRCLIB's exact match once a week; a synced version replaces it quietly.
+- **Lyrics, faster and tighter** — LRCLIB’s exact duration-matched lookup runs
+  first on every track; bare “sped up” / “slowed + reverb” / “Official Video”
+  words are stripped from queries; a search ends within 14 s. A sheet timed to
+  a master a few seconds longer or shorter keeps its timestamps (no stretching)
+  and the vocal aligner applies a clear finding on its own, looking at 30, 45,
+  60 and 90 s of playback; pressing 0 undoes it. NetEase sheets carry word-level timing
+  for the karaoke wipe. The first related track is pre-warmed when no shuffle
+  queue is set.
+- **Loudness normalize measures the source at unity** — SoundCloud’s own
+  volume slider sits before the capture point; it is compensated now, so a
+  track played at 50 % is no longer read as quiet and pushed back up.
 - **Audio scenes** — the whole Audio tab under a name: save, recall (tab or
   palette), delete. Scenes ride in the backup.
 - **Quiet hours** — Night mode and the −18 LUFS target between two hours,
