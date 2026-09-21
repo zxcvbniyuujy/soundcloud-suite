@@ -817,6 +817,8 @@
             const dur = +(t.full_duration || t.duration || 0);
             if (rules.minMs && dur > 0 && dur < rules.minMs) { dropped++; continue; }
             if (rules.maxMs && dur > rules.maxMs) { dropped++; continue; }
+            if (rules.maxPlays && +t.playback_count > rules.maxPlays) { dropped++; continue; }   // fresh finds: the hits stay out
+            if (rules.maxAgeMs && t.created_at) { const age = Date.now() - Date.parse(t.created_at); if (isFinite(age) && age > rules.maxAgeMs) { dropped++; continue; } }
             if (words.length) {
                 const hay = ((t.title || '') + ' ' + ((t.user && t.user.username) || '') + ' ' + (t.tag_list || '') + ' ' + (t.genre || '')).toLowerCase();
                 if (words.some(w => hay.indexOf(w) !== -1)) { dropped++; continue; }
@@ -7927,7 +7929,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     /* ---------- paste-lyrics sheet ---------- */
     /* ---------- lyric share card: a few lines on the artwork, as an image ---------- */
-    let shareBar = null, shareSel = [], shareSelClick = null;
+    let shareBar = null, shareSel = [], shareSelClick = null, loopFromHub = false;
+    let offsetSrc = null;   // the app hands the hub its total sync offset (per-track + latency + auto) once it exists
+    function syncOffS() { try { return offsetSrc ? (offsetSrc() || 0) : 0; } catch (e) { return 0; } }
     function shareFont(px, w) { return (w || 700) + ' ' + px + 'px Inter, "SF Pro Display", "Segoe UI", system-ui, sans-serif'; }
     function shareWrap(ctx, text, maxW) {   // greedy word wrap on the canvas's own measure
       const words = String(text).split(/\s+/), out = []; let cur = '';
@@ -8153,6 +8157,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       toast('Pick the lines for your card');
     }
 
+    // loop the current line, or the lines picked in the share picker, on the player's A–B loop
+    function loopLines() {
+      if (!isSynced || !times.length) { toast('Needs synced lyrics'); return false; }
+      if (!SUITE.abLoop) { toast('Loop not available'); return false; }
+      const offS = syncOffS();
+      let i0 = activeI < 0 ? 0 : activeI, i1 = i0;
+      if (shareSel.length >= 2) { const sorted = shareSel.slice().sort((a, b) => a - b); i0 = sorted[0]; i1 = sorted[sorted.length - 1]; }
+      const a = Math.max(0, times[i0] - offS), b = (i1 + 1 < times.length ? times[i1 + 1] : times[i1] + 6) - offS;
+      if (!SUITE.abLoop(a, b - 0.05)) { toast('Could not set the loop'); return false; }
+      loopFromHub = true;
+      if (shareSel.length >= 2) shareClose();
+      Media.seek(a);
+      toast(i1 > i0 ? 'Looping ' + (i1 - i0 + 1) + ' lines · ⋯ menu or Esc to stop' : 'Looping this line · ⋯ menu or Esc to stop');
+      return true;
+    }
+    function loopOff() { if (SUITE.abOff) SUITE.abOff(); toast('Loop off'); }
     /* ---------- find a song by a lyric: search every cached sheet ---------- */
     function lyricSearchSheet() {
       const wrap = document.createElement('div');
@@ -8833,6 +8853,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Paste lyrics…', () => pasteSheet());
       sep();
       mi('Find in lyrics', () => openFind(), '/');
+      if (SUITE.abState && SUITE.abState().on) mi('Loop off', () => loopOff()); else mi(shareSel.length >= 2 ? 'Loop the picked lines' : 'Loop this line', () => loopLines());
       mi('Find a song by a lyric…', () => lyricSearchSheet());
       mi('Jump to chorus', () => jumpChorus(), 'C');
       mi('Focus mode: ' + (focusOn ? 'on' : 'off'), () => toggleFocus(), 'K');
@@ -9099,7 +9120,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (keysOn) { showKeys(false); return true; }
       if (menuOn) { setMenu(false); return true; }
       if (findWrap) { closeFind(); return true; }
-      if (shareBar) { shareClose(); return true; }   // the lyric-card picker sits under the menu and the sheets
+      if (shareBar) { shareClose(); return true; }
+      if (SUITE.abState && SUITE.abState().on && loopFromHub) { loopFromHub = false; loopOff(); return true; }   // the lyric-card picker sits under the menu and the sheets
       if (maxOn) { toggleMax(false); return true; }
       return false;
     }
@@ -10011,6 +10033,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       add('◆', 'Add cue point here', 'Chapters', () => addCueNow());
       add('⌕', 'Pick a different match', 'Lyrics', () => { setOpen(true); setTab('lyrics'); enterSearch(); });
+      if (SUITE.abState && SUITE.abState().on) add('↻', 'Loop off', 'Lyrics', () => loopOff()); else add('↻', 'Loop this line', 'Lyrics', () => { setOpen(true); setTab('lyrics'); loopLines(); });
       add('/', 'Find in lyrics', 'Lyrics', () => { setOpen(true); setTab('lyrics'); openFind(); });
       add('⤓', 'Jump to chorus', 'Lyrics', () => { setOpen(true); if (searchMode) exitSearch(); jumpChorus(); });
       add('◎', 'Calibrate sync (tap along)', 'Lyrics', () => { setOpen(true); if (searchMode) exitSearch(); startTapAlign(); });
@@ -10211,6 +10234,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
       openPalette, closePalette, paletteOpen, curTab: () => tab,
+      setOffsetSource: (fn) => { offsetSrc = typeof fn === 'function' ? fn : null; },
     };
   })();
 
@@ -11109,6 +11133,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       meta: () => meta,
       lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
       offsetMs: () => off,
+      syncOffS: () => ((off || 0) + (goff || 0) + (SyncAuto.ms || 0)) / 1000,
       autoAlignMs: () => SyncAuto.ms,
       latencyMs: () => goff,
       autoLatencyMs: () => { try { return (SUITE.audioLatency && SUITE.audioLatency()) || 0; } catch (e) { return 0; } },
@@ -11264,6 +11289,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function boot() {
     try {
       UI.mount();
+      try { UI.setOffsetSource(App.syncOffS); } catch (e) {}
       App.watch();
       hotkeys();
       SUITE.lyricsOpen = () => UI.isOpen();
@@ -11386,6 +11412,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     customTheme: { bg: '#16181c', card: '#1d2025', hov: '#23272e', tx: '#e7e7ec', sub: '#9a9aa2', bd: '#2b2f36' },
     autoDark: false,        // auto-switch to a dark theme at night, light by day (overrides `theme` while on)
     autoDarkTheme: 'dark',  // which dark theme to use after dark
+    autoDarkMode: 'clock',  // 'clock' = 7pm–7am · 'system' = the OS colour scheme (prefers-color-scheme)
     accent: 'default',      // default | red | pink | purple | blue | cyan | green | gold | custom
     customAccent: '#ff5500',// hex used when accent === 'custom'
     hideUpsell: true,       // Go+ / upgrade nags
@@ -11417,6 +11444,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     mediaKeys: true,        // title, artist, artwork and play / pause / seek in the OS now-playing panel
     pauseUnplug: true,      // an audio output that vanishes (headphones unplugged, Bluetooth dropped) pauses playback
     tempoLock: 0,           // BPM to play every track at (the speed follows the measured tempo); 0 = off
+    smartRewind: true,      // a long pause on a long track resumes a few seconds back
+    feedMaxPlays: '0',      // hide tracks with more plays than this (fresh finds); '0' = off
+    feedMaxAgeDays: '0',    // hide tracks older than this many days; '0' = off
     tsLinks: true,          // m:ss in descriptions and comments jumps there
     setRuntime: true,       // track count and total length under a playlist title
     bpmDetect: true,        // measure the tempo while the chain is routed
@@ -11609,7 +11639,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
     fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1], reverbAmt: [0, 100, 5],
-    resumePos: { one: ['ask', 'auto', 'off'] }, startPage: { one: ['', '/feed', '/you/library', '/you/likes', '/discover'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
+    resumePos: { one: ['ask', 'auto', 'off'] }, startPage: { one: ['', '/feed', '/you/library', '/you/likes', '/discover'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxPlays: { one: ['0', '1000', '10000', '100000', '1000000'] }, feedMaxAgeDays: { one: ['0', '7', '30', '365'] }, autoDarkMode: { one: ['clock', 'system'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
   };
   const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
   // one PEQ filter entry, re-validated field by field (data only)
@@ -11857,8 +11887,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   // night window for auto-dark: 19:00 → 07:00 local
   function nightNow() {
-    try { const h = new Date().getHours(); return h >= 19 || h < 7; } catch (e) { return false; }
+    try {
+      if (CFG.autoDarkMode === 'system' && W.matchMedia) return !!W.matchMedia('(prefers-color-scheme: dark)').matches;
+      const h = new Date().getHours(); return h >= 19 || h < 7;
+    } catch (e) { return false; }
   }
+  try { if (W.matchMedia) W.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { try { if (CFG.autoDark && CFG.autoDarkMode === 'system') applyAll(); } catch (e) {} }); } catch (e) {}   // the OS flips: the site follows at once
   // the theme that should actually render right now — auto-dark, when enabled,
   // takes over (dark theme at night, light by day); otherwise the chosen theme
   function effTheme() {
@@ -11981,8 +12015,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
       m.addEventListener('playing', () => { try { offerResume(m); applyPendingJump(m); } catch (e) {} setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // long tracks: offer to resume when one starts from the top; the session update stays off the play-start path
-      m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); tellState({ playing: false }); });
-      m.addEventListener('playing', () => tellState({ playing: true }));
+      m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); tellState({ playing: false }); rewindNote(m); });
+      m.addEventListener('playing', () => { tellState({ playing: true }); rewindApply(m); });
       m.addEventListener('seeked', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
       m.addEventListener('ended', () => { try { resumeForget(curTrackHref()); } catch (e) {} });
       // A–B (2.28): a seek, a rate change or a (re)start moves the wrap point — re-aim the timer
@@ -14106,6 +14140,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { W.postMessage({ scss: 'cmd-ack', id: d.id, handled }, location.origin); } catch (e2) {}
     });
   } catch (e) {}
+  /* ── smart rewind: a long pause on a long track loses the thread, so playback resumes a few seconds back
+   * (three minutes → 5 s, fifteen → 15 s); a seek during the pause, or a short track, leaves the position alone ── */
+  let rewindAt = 0, rewindPos = -1, rewindEl = null;
+  function rewindNote(m) { rewindAt = Date.now(); rewindPos = m.currentTime || 0; rewindEl = m; }
+  function rewindApply(m) {
+    try {
+      if (!CFG.smartRewind || m !== rewindEl || !rewindAt) return;
+      const gap = Date.now() - rewindAt; rewindAt = 0;
+      if (!(m.duration >= 300) || gap < 180000 || Math.abs((m.currentTime || 0) - rewindPos) > 2 || rewindPos < 20) return;
+      const back = gap >= 900000 ? 15 : 5;
+      __sceUserSeek = Date.now(); m.currentTime = Math.max(0, rewindPos - back);
+      toast('Back ' + back + ' s after the pause');
+    } catch (e) {}
+  }
   /* ── pause when an audio output goes away: unplug the headphones or lose the Bluetooth link and the site
    * carries on through the speakers. Device counts need no permission (labels do; we never ask). ── */
   let devOutN = -1, devTimer = 0, devCount = null;
@@ -14373,6 +14421,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (d.artwork_url) mkA('Artwork ↗', () => { try { W.open(String(d.artwork_url).replace('-large', '-original'), '_blank'); } catch (e) {} });
     mkA('Copy artist', () => uhref && clip(uhref, 'Artist link copied'));
     mkA('Copy link', () => clip(d.__url || d.permalink_url || '', 'Track link copied'));
+    mkA('Copy as “Artist – Title”', () => clip(((d.user && d.user.username) || '') + ' – ' + (d.title || ''), 'Copied as text'));
+    mkA('Copy as Markdown', () => clip('[' + ((d.user && d.user.username) || '') + ' – ' + (d.title || '') + '](' + (d.__url || d.permalink_url || '') + ')', 'Markdown link copied'));
     mkA('Copy embed', () => clip('<iframe width="100%" height="166" scrolling="no" frameborder="no" src="https://w.soundcloud.com/player/?url=' + encodeURIComponent(d.permalink_url || d.__url || '') + '"></iframe>', 'Embed code copied'));
     const fb = acts.querySelector('button'); if (fb) { try { fb.focus({ preventScroll: true }); } catch (e) {} }   // keyboard: Tab walks the actions, Escape closes
   }
@@ -15273,7 +15323,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (n) => { devCount = () => Promise.resolve(n); onDeviceChange(); }, devOut: () => devOutN, audioCmd: (n, a) => SUITE.audioCmd(n, a), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (n) => { devCount = () => Promise.resolve(n); onDeviceChange(); }, devOut: () => devOutN, rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15475,7 +15525,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const ROWS = [
     ['SEC', 'Appearance'],
     ['theme', 'select', 'Theme', 'Real dark themes + tints', [['none', 'Default (light)'], ['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED black'], ['midnight', '🌌 Midnight blue'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate'], ['dim', 'Dim (tint)'], ['dimmer', 'Dimmer (tint)'], ['warm', 'Night warm (tint)'], ['cool', 'Cool (tint)'], ['vivid', 'Vivid (tint)'], ['muted', 'Muted (tint)'], ['vintage', 'Vintage (tint)'], ['rose', 'Rosé (tint)'], ['sunset', 'Sunset (tint)'], ['forest', 'Forest (tint)'], ['neon', 'Neon (tint)'], ['noir', 'Noir (tint)'], ['cyber', 'Cyberpunk (tint)'], ['pastel', 'Pastel (tint)'], ['gray', 'Grayscale (tint)'], ['contrast', 'High contrast (tint)'], ['custom', '🎨 Custom…']]],
-    ['autoDark', 'toggle', 'Auto dark at night', 'Dark 7pm–7am, light by day — overrides the theme above while on'],
+    ['autoDark', 'toggle', 'Auto dark', 'A dark theme by night and light by day, or whatever the system says — overrides the theme above while on'],
+    ['autoDarkMode', 'select', 'Auto dark follows', 'The clock, or the OS colour scheme', [['clock', 'The clock (dark 7pm–7am)'], ['system', 'The system colour scheme']]],
     ['autoDarkTheme', 'select', 'After-dark theme', 'Which dark theme to use at night', [['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED'], ['midnight', '🌌 Midnight'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate']]],
     ['accent', 'select', 'Accent colour', 'Recolours buttons & links', [['default', 'SoundCloud orange'], ['red', 'Red'], ['pink', 'Pink'], ['purple', 'Purple'], ['blue', 'Blue'], ['cyan', 'Cyan'], ['green', 'Green'], ['gold', 'Gold'], ['custom', '🎨 Custom…']]],
     ['grayArt', 'toggle', 'Grayscale artwork', 'Colour returns on hover'],
@@ -15497,6 +15548,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['feedMaxMin', 'select', 'Hide tracks longer than', 'Keeps hour-long mixes out of a song feed', [['0', 'Off'], ['10', '10 minutes'], ['20', '20 minutes'], ['30', '30 minutes'], ['60', '1 hour']]],
     ['feedHideLiked', 'toggle', 'Hide tracks you already liked', 'In the feed, search and related · uses the shuffle library'],
     ['feedHidePlayed', 'toggle', 'Hide tracks you already played', 'Anything you played for 30 s or more in the last month'],
+    ['feedMaxPlays', 'select', 'Hide tracks with more plays than', 'Fresh finds: keep the big hits out of the feed and search', [['0', 'Off'], ['1000', '1,000'], ['10000', '10,000'], ['100000', '100,000'], ['1000000', '1,000,000']]],
+    ['feedMaxAgeDays', 'select', 'Hide tracks older than', 'Only the newest uploads', [['0', 'Off'], ['7', '1 week'], ['30', '1 month'], ['365', '1 year']]],
     ['hidePlaylistsFeed', 'toggle', 'Hide playlists in feed', 'Only tracks in the stream'],
     ['compactFeed', 'toggle', 'Compact feed', 'Tighter stream rows'],
     ['hideComments', 'toggle', 'Hide waveform comments', 'Cleaner player'],
@@ -15516,6 +15569,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
     ['pauseUnplug', 'toggle', 'Pause when headphones disconnect', 'An audio output that vanishes — unplugged, or Bluetooth dropped — pauses playback instead of switching to the speakers'],
+    ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'Podcasts and mixes: a pause of three minutes resumes 5 s back, of fifteen minutes 15 s back'],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
@@ -15949,6 +16003,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   try { SUITE.enhancerRender = enhancerRender; } catch (e) {}
   // whole-suite backup: the shuffle module's Export/Import bundles these in
+  try {   // the hub loops a lyric line or a picked section on the same A–B loop as the player bar
+    SUITE.abLoop = (a, b) => { try { if (!(+b > +a)) return false; abA = +a; abB = +b; abOn = true; abM = activeMedia(); armAb(); refreshBar(); return true; } catch (e) { return false; } };
+    SUITE.abOff = () => { try { if (abOn) abClear(true); } catch (e) {} };
+    SUITE.abState = () => ({ on: !!abOn, a: abA, b: abB });
+  } catch (e) {}
   try { SUITE.enhancerDump = () => { try { return Object.assign({}, CFG); } catch (e) { return null; } }; } catch (e) {}
   try {
     SUITE.memoryDump = () => { try { const o = { resume: GET(RESUME_KEY, null), bpm: GET(BPM_KEY, null), played: GET(PLAYED_KEY, null) }; return (o.resume || o.bpm || o.played) ? o : null; } catch (e) { return null; } };
@@ -16003,7 +16062,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const mute = String(CFG.feedMute || '').split(/[,\n]/).map((w) => w.trim()).filter((w) => w.length >= 2);
       const minMs = (parseInt(CFG.feedMinMin, 10) || 0) * 60000, maxMs = (parseInt(CFG.feedMaxMin, 10) || 0) * 60000;
       const hideReposts = !!CFG.hideReposts, hideLiked = !!CFG.feedHideLiked, hidePlayed = !!CFG.feedHidePlayed;
-      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked || hidePlayed), mute, minMs, maxMs, hideReposts, hideLiked, hidePlayed };
+      const maxPlays = parseInt(CFG.feedMaxPlays, 10) || 0, maxAgeMs = (parseInt(CFG.feedMaxAgeDays, 10) || 0) * 864e5;
+      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked || hidePlayed || maxPlays || maxAgeMs), mute, minMs, maxMs, hideReposts, hideLiked, hidePlayed, maxPlays, maxAgeMs };
     };
   } catch (e) {}
   /* ── audio commands for the palette: toggles, speeds and the tempo lock, with the live state for labels ── */
