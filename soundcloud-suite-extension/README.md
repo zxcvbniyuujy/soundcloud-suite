@@ -27,15 +27,44 @@ No Tampermonkey needed. Version: see `manifest.json`.
 
 Tweaks → Declutter: **Mute words** (title, artist, tags or genre), **Hide tracks
 shorter / longer than**, **Hide tracks you already liked**, **Hide tracks you
-already played** (30 seconds in counts, remembered for a month) and **Hide
-reposts** run on SoundCloud's own feed, search and related-tracks responses
-before the page renders them, so a hidden track never shows and never plays.
+already played** (30 seconds in counts, remembered for a month), **Hide
+tracks with more plays than** and **Hide tracks older than** (fresh finds) and
+**Hide reposts** run on SoundCloud's own feed, search and related-tracks
+responses before the page renders them, so a hidden track never shows and
+never plays.
 
 ## Player and system
 
 - **System media controls** — title, artist and artwork in the OS now-playing
   panel; play, pause and seek from media keys (SoundCloud itself registers
-  only next / previous).
+  only next / previous). Inside a mix with a tracklist the panel names the
+  chapter, with the mix as the album.
+- **Chrome-wide keyboard commands** — Alt+Shift+P play / pause, Alt+Shift+N
+  next, Alt+Shift+B previous, Alt+Shift+L like, from any tab; change them at
+  `chrome://extensions/shortcuts`. The command reaches the SoundCloud tab
+  that is playing, else the one last in front. No new permissions.
+- **Pause when headphones disconnect** — an audio output that vanishes pauses
+  playback instead of switching to the speakers (Tweaks → Player).
+- **Smart rewind** — a pause of three minutes on a track of five minutes or
+  more resumes 5 s back, fifteen minutes 15 s back (Tweaks → Player).
+- **Listen later** — a private, local shortlist that needs no account: save
+  from the ⋯ menu, the palette or the track-info popover, find it on the
+  Queue tab, one click opens and plays, and thirty seconds of playing a saved
+  track clears it (Tweaks → Player).
+- **Command palette arguments** — type `12:34`, `1:02:03`, `+30`, `-1:00` or
+  `40%` into Ctrl+K to jump, `1.5x` for the speed, `170 bpm` to lock the
+  tempo; audio switches (Night mode, Enhance, Loudness normalize, Equalizer,
+  Crossfeed, Mono) show their state; recent commands come first; a title or
+  artist from your likes opens and plays the track.
+- **Tempo lock** — once a track's tempo is measured the speed follows so every
+  track plays at the BPM you chose (0.5×–2×); a known tempo is never replaced
+  while the speed is off 1×.
+- **Loop a lyric line** — ⋯ menu → *Loop this line* (or the lines picked for a
+  card) on the player's A–B loop; Escape or *Loop off* stops it.
+- **Auto dark follows the system** — Tweaks → Look → *Auto dark follows*: the
+  clock, or the OS colour scheme, applied the moment it flips.
+- **Copy as…** — the track-info popover copies “Artist – Title” and a Markdown
+  link; Shift+C (with global hotkeys on) copies the link at the current time.
 - **Lyric share card** — ⋯ menu → *Share a lyric card*: pick up to six lines,
   get a 1080×1080 image on the clipboard or as a file.
 - **Listening card** — Stats → *Share card*: total time, a 24-hour listening

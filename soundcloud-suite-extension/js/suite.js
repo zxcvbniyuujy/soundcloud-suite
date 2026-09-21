@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.55.0
+// @version      4.56.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.55.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.56.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -8276,6 +8276,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⌨', 'Play SoundCloud from any tab', 'Alt+Shift+P plays or pauses, N and B skip, L likes — from any Chrome tab. Change the keys at chrome://extensions/shortcuts. Headphones unplugged? Playback pauses instead of switching to the speakers.'],
+          ['⌘', 'A palette that takes arguments', 'Ctrl+K: type 12:34, +30, -1:00 or 40% to jump, 1.5x for the speed, 170 bpm to lock the tempo of every track, or a title or artist from your likes to play it. Night mode, Enhance and the rest are switches in the list, and your recent commands come first.'],
+          ['☆', 'Listen later', 'A private shortlist, no account needed: save the playing track from the ⋯ menu, the palette or the track-info popover, find it on the Queue tab, and it clears itself once you have listened.'],
+          ['↻', 'Loop a lyric line, and more', 'Loop this line (or the lines you picked for a card) from the ⋯ menu. Fresh-finds feed rules hide the hits and the old uploads. A long pause on a mix resumes a few seconds back. Auto dark can follow the system colour scheme. The now-playing panel names the chapter of a mix. Shift+C copies the link at this moment.'],
           ['🕐', 'Your listening card', 'Stats → Share card: total time, a 24-hour listening clock, top artists and the last seven days as one 1080 × 1080 image, on the clipboard or as a file.'],
           ['⌕', 'Find a song by a lyric', 'Lyrics ⋯ menu → Find a song by a lyric: type the words you remember and every lyric sheet this browser has cached is searched, newest first. One click opens the track.'],
           ['♩', 'Tempo, measured', 'The BPM is measured from the audio itself, shown in the Audio tab and the track-info popover, corrected for the speed you play at and remembered per track.'],

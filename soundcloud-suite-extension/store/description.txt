@@ -13,6 +13,7 @@ Open the hub and the words are right there, line by line, moving with the vocals
 • A small floating line while the hub is closed
 • Share a lyric card: pick up to six lines, get an image for your story
 • Remember three words? Find the song across every lyric sheet you have seen
+• Loop one line until you have it
 
 
 Audio
@@ -23,7 +24,7 @@ Drag an equalizer curve on a live spectrum, or just switch on Enhance and hear t
 • A true-peak clip guard, so nothing distorts
 • Speed from 0.5× to 2×, pitch that follows or holds
 • Stereo width, crossfeed, headphone correction
-• The tempo, measured from the audio itself, in BPM
+• The tempo, measured from the audio itself, in BPM — and a lock that plays every track at the BPM you choose
 • Every control is an exact passthrough when off. Hold Compare to hear the original.
 
 
@@ -35,6 +36,7 @@ A two-hour set is no longer one flat waveform.
 • Your own cue points on any track
 • Long tracks remember where you stopped and offer to resume
 • A Continue listening shelf for the sets you left halfway
+• A long pause resumes a few seconds back, so you never lose the thread
 • Every 12:34 in a description or comment jumps there
 • Playlists show their track count, total length and when they would end
 
@@ -47,6 +49,7 @@ True random across every track you have ever liked, not the first page the site 
 • Block what you are tired of
 • Skip what you just heard
 • Listening stats, a one-file backup, a likes export
+• Listen later: a private shortlist that needs no account
 • A listening card: your hours, your peak hour, your week, as one image
 
 
@@ -58,9 +61,11 @@ Eleven dark themes. A light one. Zen mode for when you want nothing but the musi
 • Mute words, hide over-long mixes or tracks you already liked or played, straight from the feed
 • Open on the page you choose
 • Title, artwork and seek on your media keys and the system now-playing panel
+• Play, skip and like from any tab with Alt+Shift+P, N, B and L
+• Unplug your headphones and playback pauses
 • Speed, an A–B loop and a sleep timer in the player bar
 • Track info, timecodes, a waveform timeline
-• Ctrl+K opens a command palette for everything. Press ? for every shortcut.
+• Ctrl+K opens a command palette for everything: type 12:34 to jump, 1.5x for the speed, or a title from your likes to play it. Press ? for every shortcut.
 
 
 Privacy
