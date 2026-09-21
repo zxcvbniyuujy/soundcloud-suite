@@ -49,6 +49,31 @@ chrome.action.onClicked.addListener((tab) => {
   try { chrome.tabs.create({ url: 'https://soundcloud.com/' }); } catch (e) {}
 });
 
+/* Keyboard commands (chrome://extensions/shortcuts): the page cannot hear them, so the command goes to
+ * the SoundCloud tab that last reported playing, else the one last focused, else every tab in turn until
+ * one says it handled it (a hidden, silent tab declines a broadcast so four tabs never start at once). */
+const cmdTabs = { playing: null, focused: null };
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (!msg || msg.scss !== 'state' || !sender || !sender.tab || sender.tab.id == null || !SC_FRAME.test(String(sender.url || ''))) return;
+  if (msg.playing === true) cmdTabs.playing = sender.tab.id;
+  else if (msg.playing === false && cmdTabs.playing === sender.tab.id) cmdTabs.playing = null;
+  if (msg.focus) cmdTabs.focused = sender.tab.id;
+});
+try { chrome.tabs.onRemoved.addListener((id) => { if (cmdTabs.playing === id) cmdTabs.playing = null; if (cmdTabs.focused === id) cmdTabs.focused = null; }); } catch (e) {}
+function sendCommand(tabId, name, broadcast) {
+  return new Promise((resolve) => {
+    try { chrome.tabs.sendMessage(tabId, { scss: 'cmd', name, broadcast: !!broadcast }, (r) => { void chrome.runtime.lastError; resolve(r === true); }); } catch (e) { resolve(false); }
+  });
+}
+async function dispatchCommand(name) {
+  for (const id of [cmdTabs.playing, cmdTabs.focused]) { if (id != null && await sendCommand(id, name, false)) return id; }
+  let tabs = []; try { tabs = await chrome.tabs.query({}); } catch (e) {}
+  for (const t of tabs) { if (t && t.id != null && await sendCommand(t.id, name, true)) return t.id; }
+  return null;
+}
+try { chrome.commands.onCommand.addListener((name) => { dispatchCommand(name); }); } catch (e) {}
+if (typeof module !== 'undefined' && module.exports) module.exports = { dispatchCommand, cmdTabs, hostAllowed };   // the unit test
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.scss !== 'xhr' || !msg.req) return;
   if (!sender || !sender.tab || !SC_FRAME.test(String(sender.url || ''))) {

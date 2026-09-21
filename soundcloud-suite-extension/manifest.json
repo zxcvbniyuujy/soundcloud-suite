@@ -24,13 +24,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://soundcloud.com/*"],
-      "js": ["js/bridge.js"],
+      "matches": [
+        "https://soundcloud.com/*"
+      ],
+      "js": [
+        "js/bridge.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://soundcloud.com/*"],
-      "js": ["js/gm-shim.js", "js/suite.js"],
+      "matches": [
+        "https://soundcloud.com/*"
+      ],
+      "js": [
+        "js/gm-shim.js",
+        "js/suite.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }
@@ -55,5 +64,31 @@
     "https://music.163.com/*",
     "https://api.listenbrainz.org/*",
     "https://translate.googleapis.com/*"
-  ]
+  ],
+  "commands": {
+    "play-pause": {
+      "suggested_key": {
+        "default": "Alt+Shift+P"
+      },
+      "description": "Play / pause SoundCloud from any tab"
+    },
+    "next-track": {
+      "suggested_key": {
+        "default": "Alt+Shift+N"
+      },
+      "description": "Next track"
+    },
+    "prev-track": {
+      "suggested_key": {
+        "default": "Alt+Shift+B"
+      },
+      "description": "Previous track"
+    },
+    "like-track": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "Like the playing track"
+    }
+  }
 }

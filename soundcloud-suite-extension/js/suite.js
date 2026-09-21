@@ -9057,6 +9057,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
          ['Audio tab', 'A hold = compare · N night · , . speed (with Global hotkeys on)'],
          ['Click a line', 'Seek there'], ['2× click a line', 'On guessed timing: pin that line as an anchor'], ['Alt+click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
          ['2× click artwork', 'Immersive fullscreen'], ['Click title', 'Copy track link'], ['Click the clock', 'Time left ↔ elapsed'],
+         ['Alt+Shift+P / N / B / L', 'From any Chrome tab: play/pause · next · back · like (change at chrome://extensions/shortcuts)'],
          ['Esc', 'Back out (sheet → menu → find → fullscreen → search → close)'], ['?', 'This sheet']]
           .forEach(([k, d]) => {
             const r = document.createElement('div'); r.className = 'krow';
@@ -11891,7 +11892,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
       m.addEventListener('playing', () => { try { offerResume(m); applyPendingJump(m); } catch (e) {} setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // long tracks: offer to resume when one starts from the top; the session update stays off the play-start path
-      m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
+      m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); tellState({ playing: false }); });
+      m.addEventListener('playing', () => tellState({ playing: true }));
       m.addEventListener('seeked', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
       m.addEventListener('ended', () => { try { resumeForget(curTrackHref()); } catch (e) {} });
       // A–B (2.28): a seek, a rate change or a (re)start moves the wrap point — re-aim the timer
@@ -13982,6 +13984,25 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       paintSleep();
     } catch (e) {}
   }
+  /* ── Chrome-wide keyboard commands (manifest "commands", set at chrome://extensions/shortcuts): the
+   * background picks a tab and bridge.js posts the command in here; a broadcast (no tab was known to be
+   * playing or in front) is taken only by a tab that is visible or already playing, so it never starts
+   * every SoundCloud tab at once. The tab reports its own playing / paused state back for the router. ── */
+  function runCommand(name) {
+    if (name === 'play-pause') { const b = D.querySelector('.playControls__play'); if (!b) return false; b.click(); return true; }
+    if (name === 'next-track' || name === 'prev-track') { const b = D.querySelector(name === 'next-track' ? '.skipControl__next' : '.skipControl__previous'); if (!b || b.disabled) return false; b.click(); return true; }
+    if (name === 'like-track') { const b = D.querySelector('.playbackSoundBadge__actions .sc-button-like, .playbackSoundBadge__like, .playControls .sc-button-like'); if (!b) return false; likeCurrent(); return true; }
+    return false;
+  }
+  function tellState(state) { try { W.postMessage(Object.assign({ scss: 'state' }, state), location.origin); } catch (e) {} }
+  try {
+    W.addEventListener('message', (e) => {
+      const d = e.data; if (e.source !== W || !d || d.scss !== 'cmd' || typeof d.name !== 'string') return;
+      const m = activeMedia(), playing = !!(m && !m.paused);
+      const handled = (d.broadcast && D.hidden && !playing) ? false : runCommand(d.name);
+      try { W.postMessage({ scss: 'cmd-ack', id: d.id, handled }, location.origin); } catch (e2) {}
+    });
+  } catch (e) {}
   function likeCurrent() {
     // the player bar only, most specific first: a selector list returns the first match in DOCUMENT order, i.e. a stream item's button
     const b = ['.playbackSoundBadge__actions .sc-button-like', '.playbackSoundBadge__like', '.playControls__soundBadge .sc-button-like', '.playControls .sc-button-like'].map((s) => D.querySelector(s)).find(Boolean);
