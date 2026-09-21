@@ -1428,7 +1428,7 @@ const FIXTURE_SRC = `
     await play('A', { loop: true });
     await set('tiltDb', 2);   // Headphones leaves tilt alone
     await audioTab();
-    const order = await sectionOrder();
+    const order = (await sectionOrder()).filter((t) => !/^(No scenes saved|Scenes ·)/.test(t));   // the scenes row sits between the chips and Playback
     const iL = order.indexOf('Listening on');
     assert(iL > 0, 'Listening on section present');
     rowStarts(order, iL - 1, 'Remember EQ per '); eq(order[iL + 1], 'HeadphonesLaptop', 'the chip row'); eq(order[iL + 2], 'Playback', 'before Playback');
@@ -1794,7 +1794,7 @@ const FIXTURE_SRC = `
     // preservesPitch on the element and, while it is on, shows the semitone shift (12·log2(rate)) in its description
     await play('A', { loop: true });
     await audioTab();
-    const order = (await sectionOrder()).filter((t) => !/^(Tempo |Listening for th)/.test(t));   // the tempo line under the chips is its own row; the order below is about the controls
+    const order = (await sectionOrder()).filter((t) => !/^(Tempo |Listening for th|No scenes saved|Scenes ·)/.test(t));   // the tempo line and the scenes row are their own rows; the order below is about the controls
     const iP = order.indexOf('Playback');
     assert(iP > 0, 'Playback section present');
     rowStarts(order, iP - 1, 'HeadphonesLaptop'); rowStarts(order, iP + 1, 'Speed'); rowStarts(order, iP + 2, '0.5×0.75×1×1.25'); rowStarts(order, iP + 3, 'Pitch follows sp');
