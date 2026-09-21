@@ -8022,6 +8022,61 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       toast('Pick the lines for your card');
     }
 
+    /* ---------- find a song by a lyric: search every cached sheet ---------- */
+    function lyricSearchSheet() {
+      const wrap = document.createElement('div');
+      wrap.className = 'keys on';
+      wrap.style.cursor = 'default';
+      const h = document.createElement('h3');
+      h.textContent = 'Find a song by a lyric';
+      const inp = document.createElement('input');
+      inp.className = 'inp'; inp.placeholder = 'A few words you remember…'; inp.setAttribute('aria-label', 'Words from the lyric');
+      inp.style.cssText = 'width:100%;font-size:13px;padding:9px 12px;border-radius:10px;box-sizing:border-box';
+      const hint = document.createElement('div'); hint.style.cssText = 'font-size:11px;color:#8a8a92;margin:8px 0 6px';
+      const list = document.createElement('div'); list.style.cssText = 'flex:1;min-height:0;overflow:auto';
+      let keys = [];
+      try { keys = (GM_getValue('sl4:idx', []) || []).slice().reverse(); } catch (e) { keys = []; }
+      hint.textContent = keys.length ? 'Searches the ' + keys.length + (keys.length === 1 ? ' lyric sheet' : ' lyric sheets') + ' this browser has seen' : 'No lyrics cached yet — play a few tracks first';
+      let timer = 0;
+      const run = () => {
+        const q = inp.value.trim().toLowerCase();
+        list.replaceChildren();
+        if (q.length < 3) return;
+        const words = q.split(/\s+/).filter(Boolean);
+        let shown = 0;
+        for (const k of keys) {
+          if (shown >= 40) break;
+          let e = null; try { e = Cache.get(k); } catch (er) { e = null; }
+          if (!e || !e.lines || !e.lines.length || e.instr) continue;
+          const lines = e.synced ? e.lines.map((x) => x[1]) : e.lines;
+          let hit = '';
+          for (const ln of lines) { const l = String(ln || '').toLowerCase(); if (l && words.every((w) => l.indexOf(w) !== -1)) { hit = String(ln); break; } }
+          if (!hit) continue;
+          shown++;
+          const r = document.createElement('div'); r.className = 'qrow ch'; r.tabIndex = 0; r.setAttribute('role', 'button');
+          const tidy = (x) => String(x || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+          const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = (tidy(e.t) || 'Unknown title') + (tidy(e.a) ? ' — ' + tidy(e.a) : '');
+          const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = '“' + hit.slice(0, 60) + (hit.length > 60 ? '…' : '') + '”'; qa.style.maxWidth = '55%';
+          r.append(qt, qa);
+          const href = k.indexOf('p:') === 0 ? k.slice(2) : '';
+          const go = () => { wrap.remove(); if (href) { try { const a = document.createElement('a'); a.href = href; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (er) { try { location.assign(href); } catch (er2) {} } } else { try { window.open('https://soundcloud.com/search?q=' + encodeURIComponent(((e.a || '') + ' ' + (e.t || '')).trim()), '_blank'); } catch (er) {} } };
+          r.title = href ? 'Open this track' : 'Search SoundCloud for it';
+          r.addEventListener('click', go);
+          r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); go(); } });
+          list.appendChild(r);
+        }
+        if (!shown) { const none = document.createElement('div'); none.style.cssText = 'padding:14px;color:#8a8a92;font-size:12px'; none.textContent = 'Nothing in the cached lyrics has those words'; list.appendChild(none); }
+      };
+      inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 160); });
+      inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') { ev.preventDefault(); wrap.remove(); } if (ev.key === 'Enter') { const first = list.querySelector('.qrow'); if (first) first.click(); } });
+      const row = document.createElement('div'); row.className = 'row';
+      const close = document.createElement('button'); close.className = 'btn'; close.textContent = 'Close'; close.addEventListener('click', () => wrap.remove());
+      row.appendChild(close);
+      wrap.append(h, inp, hint, list, row);
+      panel.appendChild(wrap);
+      setTimeout(() => inp.focus(), 30);
+    }
+
     function pasteSheet() {
       const wrap = document.createElement('div');
       wrap.className = 'keys on';
@@ -8640,6 +8695,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Paste lyrics…', () => pasteSheet());
       sep();
       mi('Find in lyrics', () => openFind(), '/');
+      mi('Find a song by a lyric…', () => lyricSearchSheet());
       mi('Jump to chorus', () => jumpChorus(), 'C');
       mi('Focus mode: ' + (focusOn ? 'on' : 'off'), () => toggleFocus(), 'K');
       mi('Copy lyrics', () => App.copyLyrics());
@@ -9805,6 +9861,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // lyrics
       add('⟳', 'Re-search this track', 'Lyrics', () => { setOpen(true); setTab('lyrics'); App.retry(); });
       add('▣', 'Share a lyric card', 'Lyrics', () => { setOpen(true); shareSheet(); });
+      add('⌕', 'Find a song by a lyric', 'Lyrics', () => { setOpen(true); setTab('lyrics'); lyricSearchSheet(); });
       // chapters / cue points
       if (Chapters.list.length) {
         add('☰', 'Chapters (' + Chapters.list.length + ')', 'Chapters', () => { setOpen(true); setTab('queue'); });
