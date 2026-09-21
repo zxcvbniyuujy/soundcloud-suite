@@ -822,6 +822,7 @@
                 if (words.some(w => hay.indexOf(w) !== -1)) { dropped++; continue; }
             }
             if (rules.hideLiked && t.permalink_url && SUITE.libByUrl && SUITE.libByUrl(t.permalink_url)) { dropped++; continue; }
+            if (rules.hidePlayed && t.permalink_url && SUITE.playedPath) { let pth = ''; try { pth = new URL(t.permalink_url).pathname; } catch (e) { pth = ''; } if (pth && SUITE.playedPath(pth)) { dropped++; continue; } }
             keep.push(it);
         }
         if (!dropped) return { json, dropped: 0 };
@@ -8214,6 +8215,30 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // Tweaks is not rebuilt here: a track change would throw away focus, scroll, open groups and any unsaved edit
     }
 
+    function renderContinue() {   // long tracks with a saved position, other than the one playing
+      let list = [];
+      try { list = (SUITE.resumeList && SUITE.resumeList()) || []; } catch (e) { list = []; }
+      list = list.filter((e) => e.href !== Chapters.href && e.n);
+      if (!list.length) return false;
+      const head2 = document.createElement('div'); head2.className = 'qhead'; head2.textContent = 'Continue listening'; qbody.appendChild(head2);
+      const wrap = document.createElement('div');
+      for (const e of list) {
+        const r = document.createElement('div'); r.className = 'qrow ch cont'; r.tabIndex = 0; r.setAttribute('role', 'button');
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = Chapters.ts(e.pos);
+        const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = e.n;
+        const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = e.a || '';
+        const x = document.createElement('button'); x.className = 'chx'; x.textContent = '✕'; x.title = 'Forget this position'; x.setAttribute('aria-label', 'Forget the position in ' + e.n);
+        x.addEventListener('click', (ev) => { ev.stopPropagation(); try { SUITE.resumeForget(e.href); } catch (er) {} renderQueue(); });
+        r.append(n, qt, qa, x);
+        r.title = 'Open and pick up at ' + Chapters.ts(e.pos) + ' of ' + Chapters.ts(e.dur);
+        const go = () => { try { const a = document.createElement('a'); a.href = e.href; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (er) { try { location.assign(e.href); } catch (er2) {} } };
+        r.addEventListener('click', go);
+        r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); go(); } });
+        wrap.appendChild(r);
+      }
+      qbody.appendChild(wrap);
+      return true;
+    }
     function renderChapters() {   // the chapters block at the top of the Queue tab; true when anything was drawn
       const L = Chapters.list;
       if (!L.length) return false;
@@ -8285,7 +8310,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let prevCaret = null;
       try { if (prevInp && prevInp.getRootNode().activeElement === prevInp) prevCaret = prevInp.selectionStart; } catch (e) {}
       qbody.replaceChildren();
-      const hadCh = renderChapters();
+      const hadCont = renderContinue();
+      const hadCh = renderChapters() || hadCont;
       const list = SUITE.queueList && SUITE.queueList();
       if (!list) {
         if (!hadCh) qbody.appendChild(stateEl(ICONS.note, 'No shuffle queue', 'Run Shuffle Play and the full shuffled order shows up here.', [
@@ -11110,6 +11136,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     tsLinks: true,          // m:ss in descriptions and comments jumps there
     setRuntime: true,       // track count and total length under a playlist title
     bpmDetect: true,        // measure the tempo while the chain is routed
+    feedHidePlayed: false,  // hide tracks you played (30 s or more) in the last 30 days
+    startPage: '',          // where a cold load of soundcloud.com lands ('' = SoundCloud's own choice)
     hidePlaylistsFeed: false, // hide playlists in the stream
     compactFeed: false,     // tighter stream rows
     biggerWave: false,      // taller waveform
@@ -11297,7 +11325,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     speed: [50, 200, 5], eqPreamp: [-12, 12, 1], peqPreamp: [-15, 0, 0.1], bassDb: [0, 9, 0.5], bassHarm: [0, 100, 5], tiltDb: [-4, 4, 0.5], vocalAmt: [-100, 100, 5],
     loudCompAmt: [0, 9, 0.5], stereoWidth: [0, 200, 5], balance: [-100, 100, 5], boostAmt: [100, 300, 5], nightAmt: [0, 100, 5], enhanceAmt: [0, 100, 5],
     fadeIn: [0, 3, 0.1], fadeOut: [0, 8, 0.1], reverbAmt: [0, 100, 5],
-    resumePos: { one: ['ask', 'auto', 'off'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
+    resumePos: { one: ['ask', 'auto', 'off'] }, startPage: { one: ['', '/feed', '/you/library', '/you/likes', '/discover'] }, feedMute: { max: 400 }, feedMinMin: { one: ['0', '1', '2', '5'] }, feedMaxMin: { one: ['0', '10', '20', '30', '60'] }, peqName: { max: 40 }, listenOn: { one: ['', 'headphones', 'laptop', 'speakers'] }, crossfeedMode: { one: ['subtle', 'natural', 'strong'] }, loudTarget: { one: [-18, -14, -11] },
   };
   const clampNum = (v, lo, hi, st) => { let x = +v; if (!isFinite(x)) x = 0; x = Math.max(lo, Math.min(hi, x)); if (st) x = Math.round(x / st) * st; return Math.round(x * 1000) / 1000; };
   // one PEQ filter entry, re-validated field by field (data only)
@@ -13219,11 +13247,34 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (left < 30) { resumeForget(href); return; }   // finished: never offered again
     if (pos < 60) return;
     const map = resumeMap();
-    map[href] = { pos: Math.round(pos), dur: Math.round(m.duration), t: now };
+    let n = '', a = '';
+    try { const tl = D.querySelector('.playbackSoundBadge__titleLink'); n = ((tl && (tl.getAttribute('title') || tl.textContent)) || '').trim().slice(0, 120); const ul = D.querySelector('.playbackSoundBadge__lightLink'); a = ((ul && (ul.getAttribute('title') || ul.textContent)) || '').trim().slice(0, 80); } catch (e) {}
+    map[href] = { pos: Math.round(pos), dur: Math.round(m.duration), t: now, n, a };
     const keys = Object.keys(map);
     if (keys.length > RESUME_MAX) { keys.sort((a, b) => (map[a].t || 0) - (map[b].t || 0)); keys.slice(0, keys.length - RESUME_MAX).forEach((k) => { delete map[k]; }); }
     SET(RESUME_KEY, map);
   }
+  function resumeList() {   // the tracks worth going back to, newest first, for the hub's Continue listening shelf
+    const map = resumeMap(), now = Date.now();
+    return Object.keys(map).map((href) => Object.assign({ href }, map[href])).filter((e) => e.pos >= 60 && e.dur - e.pos >= 30 && now - (e.t || 0) < RESUME_TTL).sort((p, q) => (q.t || 0) - (p.t || 0)).slice(0, 8);
+  }
+  const PLAYED_KEY = 'enh:played', PLAYED_MAX = 500, PLAYED_TTL = 30 * 864e5;
+  let playedLast = '', playedCache = null, playedCacheAt = 0;
+  function recordPlayed(m) {   // 30 s into a track counts as played; the feed rule and the badges read this
+    if (!m || m.paused || !(m.currentTime >= 30)) return;
+    const href = curTrackHref(); if (!href || href === playedLast) return;
+    playedLast = href;
+    const map = (() => { const o = GET(PLAYED_KEY, null); return (o && typeof o === 'object') ? o : {}; })();
+    map[href] = Date.now();
+    const keys = Object.keys(map);
+    if (keys.length > PLAYED_MAX) { keys.sort((p, q) => (map[p] || 0) - (map[q] || 0)); keys.slice(0, keys.length - PLAYED_MAX).forEach((k) => { delete map[k]; }); }
+    SET(PLAYED_KEY, map); playedCache = map; playedCacheAt = Date.now();
+  }
+  function playedPath(path) {
+    if (!playedCache || Date.now() - playedCacheAt > 10000) { const o = GET(PLAYED_KEY, null); playedCache = (o && typeof o === 'object') ? o : {}; playedCacheAt = Date.now(); }
+    const t = playedCache[path]; return !!(t && Date.now() - t < PLAYED_TTL);
+  }
+  try { SUITE.resumeList = resumeList; SUITE.resumeForget = resumeForget; SUITE.playedPath = playedPath; } catch (e) {}
   function hideResumeChip() { clearTimeout(resumeChipT); if (resumeChip) { try { resumeChip.remove(); } catch (e) {} resumeChip = null; } }
   function showResumeChip(pos) {
     hideResumeChip();
@@ -13501,7 +13552,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const m = activeMedia();
       if (!m) { try { mediaSessionSync(null); } catch (e) {} return; }
       try { offerResume(m); recordResume(m); applyResume(m); applyPendingJump(m); mediaSessionSync(m); } catch (e) {}
-      try { bpmTick(m); } catch (e) {}
+      try { bpmTick(m); recordPlayed(m); } catch (e) {}
       // end-of-track silence trim (WP10): source peak < −60 dBFS for 2 s with under 30 s left → seek to the end.
       // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
       try {
@@ -13654,6 +13705,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (SUITE.lyricsOpen && SUITE.lyricsOpen()) return;   // lyrics panel owns keys when open
           if (CFG.keySeek) {
             if (e.key >= '0' && e.key <= '9') { seekPct((+e.key) / 10); return; }
+            if (e.key === '{' || (e.key === '[' && e.shiftKey)) { nudgeSeek(-60); return; }
+            if (e.key === '}' || (e.key === ']' && e.shiftKey)) { nudgeSeek(60); return; }
             if (e.key === '[') { nudgeSeek(-10); return; }
             if (e.key === ']') { nudgeSeek(10); return; }
           }
@@ -13968,6 +14021,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     mkA('⏱  Copy link at ' + fmtClock((activeMedia() && activeMedia().currentTime) || 0), () => copyTimeLink());
     if (dl) mkA('⤓  Download', () => downloadTrack(d), true, true);   // only when the artist allows downloads
     mkA('Open artist', () => { if (uhref) { try { W.open(uhref, '_blank'); } catch (e) {} } });
+    if (d.artwork_url) mkA('Artwork ↗', () => { try { W.open(String(d.artwork_url).replace('-large', '-original'), '_blank'); } catch (e) {} });
     mkA('Copy artist', () => uhref && clip(uhref, 'Artist link copied'));
     mkA('Copy link', () => clip(d.__url || d.permalink_url || '', 'Track link copied'));
     mkA('Copy embed', () => clip('<iframe width="100%" height="166" scrolling="no" frameborder="no" src="https://w.soundcloud.com/player/?url=' + encodeURIComponent(d.permalink_url || d.__url || '') + '"></iframe>', 'Embed code copied'));
@@ -15092,6 +15146,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['feedMinMin', 'select', 'Hide tracks shorter than', 'In the feed, search and related tracks', [['0', 'Off'], ['1', '1 minute'], ['2', '2 minutes'], ['5', '5 minutes']]],
     ['feedMaxMin', 'select', 'Hide tracks longer than', 'Keeps hour-long mixes out of a song feed', [['0', 'Off'], ['10', '10 minutes'], ['20', '20 minutes'], ['30', '30 minutes'], ['60', '1 hour']]],
     ['feedHideLiked', 'toggle', 'Hide tracks you already liked', 'In the feed, search and related · uses the shuffle library'],
+    ['feedHidePlayed', 'toggle', 'Hide tracks you already played', 'Anything you played for 30 s or more in the last month'],
     ['hidePlaylistsFeed', 'toggle', 'Hide playlists in feed', 'Only tracks in the stream'],
     ['compactFeed', 'toggle', 'Compact feed', 'Tighter stream rows'],
     ['hideComments', 'toggle', 'Hide waveform comments', 'Cleaner player'],
@@ -15106,13 +15161,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['loopTrack', 'toggle', 'Loop current track', ''],
     ['rememberVol', 'toggle', 'Remember volume', 'Restore it next time'],
     ['volScroll', 'toggle', 'Scroll = volume', 'Scroll over the player bar'],
-    ['keySeek', 'toggle', 'Number-key seeking', '0–9 jump · [ ] = ∓10s'],
+    ['keySeek', 'toggle', 'Number-key seeking', '0–9 jump · [ ] = ∓10 s · { } = ∓1 min'],
     ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
+    ['startPage', 'select', 'Start on', 'Where soundcloud.com opens when you come back to it', [['', 'SoundCloud’s choice'], ['/feed', 'Feed'], ['/you/library', 'Library'], ['/you/likes', 'Likes'], ['/discover', 'Discover']]],
     ['resumePos', 'select', 'Resume long tracks', 'Mixes and podcasts over 10 minutes remember where you stopped, for a month', [['ask', 'Offer to resume'], ['auto', 'Resume automatically'], ['off', 'Off']]],
     ['SEC', 'Artist / track'],
     ['tsLinks', 'toggle', 'Clickable timestamps', 'Any 12:34 in a description or comment jumps there'],
@@ -15568,8 +15624,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     SUITE.feedRules = () => {
       const mute = String(CFG.feedMute || '').split(/[,\n]/).map((w) => w.trim()).filter((w) => w.length >= 2);
       const minMs = (parseInt(CFG.feedMinMin, 10) || 0) * 60000, maxMs = (parseInt(CFG.feedMaxMin, 10) || 0) * 60000;
-      const hideReposts = !!CFG.hideReposts, hideLiked = !!CFG.feedHideLiked;
-      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked), mute, minMs, maxMs, hideReposts, hideLiked };
+      const hideReposts = !!CFG.hideReposts, hideLiked = !!CFG.feedHideLiked, hidePlayed = !!CFG.feedHidePlayed;
+      return { active: !!(mute.length || minMs || maxMs || hideReposts || hideLiked || hidePlayed), mute, minMs, maxMs, hideReposts, hideLiked, hidePlayed };
     };
   } catch (e) {}
 
@@ -15663,6 +15719,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       setupBehaviour();
       ensureBar();
       ensureTop();
+      try { const sp = CFG.startPage; if (sp && /^\/[\w/-]+$/.test(sp) && (location.pathname === '/' || location.pathname === '/discover') && location.pathname !== sp && !/^https:\/\/soundcloud\.com/.test(D.referrer || '')) location.replace(sp); } catch (e) {}   // a cold load only: in-app navigation keeps SoundCloud's own routing
       D.addEventListener('click', (e) => { const a = e.target && e.target.closest ? e.target.closest('a.sce-ts') : null; if (!a) return; e.preventDefault(); e.stopPropagation(); jumpToPageTime(+a.dataset.t || 0); }, true);
       try { const hm = /[#&]t=((?:\d{1,2}:)?\d{1,3}:\d{2})\b/.exec(location.hash || ''); if (hm) tsPending = { href: location.pathname.replace(/\/$/, ''), pos: tsSecs(hm[1]), t: Date.now() }; } catch (e) {}
       // first run → offer the recommended-vs-manual setup once (after the page settles)
