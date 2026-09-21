@@ -6,11 +6,11 @@ public listing.
 ## Build the public package
 
 ```sh
-./build.sh --public --zip 4.57.0
+./build.sh --public --zip 4.58.0
 ```
 
 `--public` refuses to build if any Genius token is present; `--zip` writes
-`../soundcloud-suite-4.57.0.zip` containing only `manifest.json`, `icons/` and `js/`.
+`../soundcloud-suite-4.58.0.zip` containing only `manifest.json`, `icons/` and `js/`.
 Upload it at https://chrome.google.com/webstore/devconsole
 
 ## MUST verify before upload

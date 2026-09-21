@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.57.0
+// @version      4.58.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.57.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.58.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -3046,42 +3046,38 @@
         if (!container) return;
         const D2 = document;
         container.replaceChildren();
-        const mkLabel = (label, desc) => {
-          const lab = D2.createElement('div'); lab.style.cssText = 'flex:1;min-width:0;font-size:12px;font-weight:500;color:#e8e8ec';
-          const ls = D2.createElement('span'); ls.textContent = label; lab.appendChild(ls);
-          if (desc) { const sm = D2.createElement('small'); sm.textContent = desc; sm.style.cssText = 'display:block;font-size:10px;color:#8a8a92;font-weight:400;margin-top:1px'; lab.appendChild(sm); }
-          return lab;
+        // the hub's Tweaks tab dresses these classes (tw-*): module 1 only draws the structure
+        const el2 = (tag, cls, txt) => { const n = D2.createElement(tag); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+        const mkRow = (label, desc) => {
+          const row = el2('div', 'tw-row'); const txt = el2('div', 'tw-txt');
+          txt.appendChild(el2('div', 'tw-lab', label)); if (desc) txt.appendChild(el2('small', 'tw-desc', desc));
+          row.appendChild(txt); container.appendChild(row); return row;
         };
-        const mkRow = () => { const row = D2.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid rgba(255,255,255,.05)'; return row; };
-        const subHead = (t) => { const s = D2.createElement('div'); s.textContent = t; s.style.cssText = 'font-size:9px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:#83838c;margin:12px 0 2px'; container.appendChild(s); };
+        const subHead = (t) => { container.appendChild(el2('div', 'tw-sec', t)); };
         const toggle = (key, label, desc) => {
-          const row = mkRow(); row.appendChild(mkLabel(label, desc));
-          const sw = D2.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', label);
-          sw.style.cssText = 'position:relative;width:34px;height:19px;border-radius:19px;border:0;cursor:pointer;flex:none;transition:background .18s';
-          const knob = D2.createElement('span'); knob.style.cssText = 'position:absolute;top:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:left .18s;box-shadow:0 1px 3px rgba(0,0,0,.4)'; sw.appendChild(knob);
-          const paint = () => { const on = !!CFG[key]; sw.style.background = on ? '#ff5500' : 'rgba(255,255,255,.18)'; knob.style.left = on ? '17px' : '2px'; sw.setAttribute('aria-checked', String(on)); };
-          paint(); sw.addEventListener('click', () => { CFG[key] = !CFG[key]; paint(); saveCfg(); }); row.appendChild(sw); container.appendChild(row); return row;
+          const row = mkRow(label, desc);
+          const sw = el2('button', 'tw-sw'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', label); sw.appendChild(el2('i'));
+          const paint = () => sw.setAttribute('aria-checked', String(!!CFG[key]));
+          paint(); sw.addEventListener('click', () => { CFG[key] = !CFG[key]; paint(); saveCfg(); }); row.appendChild(sw); return row;
         };
         const select = (key, label, desc, opts, onchange) => {
-          const row = mkRow(); row.appendChild(mkLabel(label, desc));
-          const sel = D2.createElement('select'); sel.setAttribute('aria-label', label);
-          sel.style.cssText = 'background:rgba(255,255,255,.08);border:0;border-radius:8px;color:#fff;font:inherit;font-size:11.5px;padding:5px 8px;cursor:pointer;max-width:165px';
-          for (const [v, t] of opts) { const o = D2.createElement('option'); o.value = v; o.textContent = t; o.style.color = '#111'; if (CFG[key] === v) o.selected = true; sel.appendChild(o); }
-          sel.addEventListener('change', () => { CFG[key] = sel.value; saveCfg(); if (onchange) onchange(); }); row.appendChild(sel); container.appendChild(row); return row;
+          const row = mkRow(label, desc);
+          const sel = el2('select', 'sxsel tw-sel'); sel.setAttribute('aria-label', label);
+          for (const [v, t] of opts) { const o = el2('option', null, t); o.value = v; o.style.color = '#111'; if (CFG[key] === v) o.selected = true; sel.appendChild(o); }
+          sel.addEventListener('change', () => { CFG[key] = sel.value; saveCfg(); if (onchange) onchange(); }); row.appendChild(sel); return row;
         };
         const number = (key, label, desc, min, max) => {
-          const row = mkRow(); row.appendChild(mkLabel(label, desc));
-          const inp = D2.createElement('input'); inp.type = 'number'; inp.min = min; inp.max = max; inp.value = CFG[key];
-          inp.style.cssText = 'width:66px;flex:none;background:rgba(255,255,255,.08);border:0;border-radius:8px;color:#fff;font:inherit;font-size:11.5px;padding:5px 8px;text-align:right;outline:none';
+          const row = mkRow(label, desc);
+          const inp = el2('input', 'tw-num'); inp.type = 'number'; inp.min = min; inp.max = max; inp.value = CFG[key]; inp.setAttribute('aria-label', label);
           inp.addEventListener('keydown', (e) => e.stopPropagation());
           inp.addEventListener('change', () => { let v = parseInt(inp.value, 10); if (isNaN(v)) v = min; v = Math.max(min, Math.min(max, v)); CFG[key] = v; inp.value = v; saveCfg(); });
-          row.appendChild(inp); container.appendChild(row); return row;
+          row.appendChild(inp); return row;
         };
         const btnRow = (label, desc, buttons) => {
-          const row = mkRow(); const lab = mkLabel(label, desc); row.appendChild(lab);
-          const grp = D2.createElement('div'); grp.style.cssText = 'display:flex;gap:5px;flex:none';
-          for (const [t, fn] of buttons) { const b = D2.createElement('button'); b.type = 'button'; b.textContent = t; b.style.cssText = 'background:rgba(255,255,255,.1);border:0;border-radius:7px;color:#eaeaee;font:600 10.5px inherit;padding:5px 9px;cursor:pointer'; b.addEventListener('click', () => { try { fn(lab, b); } catch (e) {} }); grp.appendChild(b); }
-          row.appendChild(grp); container.appendChild(row); return row;
+          const row = mkRow(label, desc); const lab = row.firstChild;
+          const grp = el2('div', 'tw-btns');
+          for (const [t, fn] of buttons) { const b = el2('button', 'tw-btn sm', t); b.type = 'button'; b.addEventListener('click', () => { try { fn(lab, b); } catch (e) {} }); grp.appendChild(b); }
+          row.appendChild(grp); return row;
         };
 
         subHead('Playback');
@@ -7120,6 +7116,84 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .sbtns { display: flex; gap: 6px; padding: 8px 14px; flex-wrap: wrap; }
 .sbtn { font-size: 10.5px; font-weight: 650; color: #dcdce2; background: rgba(255,255,255,0.07); border-radius: 99px; padding: 5px 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
 .sbtn:hover { background: rgba(255,255,255,0.13); }
+/* ── Tweaks tab: one quiet system for every setting row (the Shuffle group, the enhancer
+      rows and the data panel all wear it) · the theme cards are the one loud element ── */
+#ebody { padding: 0 14px 28px; }
+#ebody .tw-find { display: block; width: 100%; box-sizing: border-box; margin: 12px 0 8px; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12.5px; font-weight: 500; padding: 10px 12px 10px 34px; outline: 0; transition: background .14s, box-shadow .14s;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%237c7c84' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/></svg>"); background-repeat: no-repeat; background-position: 12px center; }
+#ebody .tw-find::placeholder { color: #7c7c84; }
+#ebody .tw-find:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); }
+#ebody .tw-nav { position: sticky; top: 0; z-index: 3; display: flex; gap: 4px; margin: 0 -14px 4px; padding: 6px 14px 8px; transition: background .18s; }
+#ebody .tw-nav.stuck { background: rgba(19,20,24,0.84); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+#ebody .tw-nav::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: rgba(255,255,255,0.06); opacity: 0; transition: opacity .18s; }
+#ebody .tw-nav.stuck::after { opacity: 1; }
+#ebody .tw-chip { flex: 1; min-width: 0; border: 0; border-radius: 99px; padding: 7px 2px; font: inherit; font-size: 11px; font-weight: 650; letter-spacing: .01em; color: #9a9aa2; background: rgba(255,255,255,0.05); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .14s, color .14s; }
+#ebody .tw-chip:hover { background: rgba(255,255,255,0.1); color: #e6e6ea; }
+#ebody .tw-chip.on { background: rgba(255,85,0,0.22); color: #ffb083; }
+#ebody .tw-chip.clear { flex: none; padding: 7px 12px; }
+#ebody .tw-seg[hidden] { display: none; }
+#ebody .tw-sec { display: flex; align-items: center; gap: 8px; font-size: 9.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #76767e; margin: 22px 2px 4px; }
+#ebody .tw-sec::before { content: ''; width: 10px; height: 2px; border-radius: 2px; flex: none; background: rgba(255,255,255,0.16); }
+#ebody .tw-seg > .tw-sec:first-child, #ebody .tw-shuf > .tw-sec:first-child { margin-top: 12px; }
+#ebody .tw-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+#ebody .tw-row.stack { display: block; }
+#ebody .tw-txt { flex: 1; min-width: 0; }
+#ebody .tw-lab { font-size: 12.5px; color: #e6e6ea; line-height: 1.3; }
+#ebody .tw-desc { display: block; font-size: 10.5px; color: #7c7c84; line-height: 1.4; margin-top: 2px; }
+#ebody .tw-sw { position: relative; width: 38px; height: 22px; border-radius: 22px; border: 0; padding: 0; flex: none; cursor: pointer; background: rgba(255,255,255,0.16); transition: background .2s ease; }
+#ebody .tw-sw i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.35); transition: transform .2s cubic-bezier(.3,1.5,.5,1); }
+#ebody .tw-sw[aria-checked="true"] { background: #ff5500; }
+#ebody .tw-sw[aria-checked="true"] i { transform: translateX(16px); }
+#ebody .tw-sel { flex: none; max-width: 168px; background-color: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; cursor: pointer; text-overflow: ellipsis; }
+#ebody .tw-num, #ebody .tw-in { background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; outline: 0; transition: background .14s, box-shadow .14s; }
+#ebody .tw-num { flex: none; width: 66px; text-align: right; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+#ebody .tw-num::-webkit-outer-spin-button, #ebody .tw-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+#ebody .tw-in { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; }
+#ebody .tw-in::placeholder, #ebody .tw-ta::placeholder { color: #6a6a72; }
+#ebody .tw-num:focus, #ebody .tw-in:focus, #ebody .tw-sel:focus, #ebody .tw-ta:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); outline: 0; }
+#ebody .tw-ta { display: block; width: 100%; box-sizing: border-box; min-height: 88px; margin-top: 8px; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace; padding: 10px 12px; resize: vertical; outline: 0; }
+#ebody .tw-rng { flex: 1; min-width: 60px; max-width: 130px; }
+#ebody .tw-val { flex: none; width: 40px; text-align: right; font-size: 11.5px; color: #86868e; font-variant-numeric: tabular-nums; }
+#ebody .tw-btn { flex: none; border: 0; border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; background: rgba(255,255,255,0.06); color: #c4c4ca; transition: background .14s, color .14s; white-space: nowrap; }
+#ebody .tw-btn:hover { background: rgba(255,255,255,0.11); color: #e6e6ea; }
+#ebody .tw-btn:disabled { opacity: .38; cursor: default; }
+#ebody .tw-btn.sm { padding: 6px 10px; font-size: 11px; border-radius: 8px; }
+#ebody .tw-btn.warn { color: #ffb083; }
+#ebody .tw-btns { display: flex; gap: 5px; flex: none; }
+#ebody .tw-color { width: 30px; height: 24px; border: 0; border-radius: 7px; background: none; padding: 0; cursor: pointer; flex: none; }
+#ebody .tw-color::-webkit-color-swatch-wrapper { padding: 0; }
+#ebody .tw-color::-webkit-color-swatch { border: 1px solid rgba(255,255,255,0.14); border-radius: 7px; }
+/* theme cards: the theme's own background and text, so the grid is a preview, not a legend */
+#ebody .tw-themes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 4px 0 12px; }
+#ebody .tw-card { display: block; border: 0; padding: 0; background: none; cursor: pointer; font: inherit; color: #9a9aa2; text-align: center; min-width: 0; }
+#ebody .tw-card i { display: flex; align-items: center; justify-content: center; height: 40px; border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); font: 700 14px/1 Georgia, 'Times New Roman', serif; letter-spacing: -.02em; transition: transform .16s ease, box-shadow .16s ease; }
+#ebody .tw-card b { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: .01em; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ebody .tw-card:hover i { transform: translateY(-1px); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2); }
+#ebody .tw-card.on { color: #e6e6ea; }
+#ebody .tw-card.on i { box-shadow: 0 0 0 2px #ff5500; }
+#ebody .tw-card.wide { grid-column: 1 / -1; }
+#ebody .tw-card.wide i { justify-content: flex-start; padding: 0 12px; gap: 5px; font: inherit; font-size: 12px; font-weight: 600; }
+#ebody .tw-card.wide i em { flex: 1; font-style: normal; text-align: left; }
+#ebody .tw-card.wide i span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18); }
+#ebody .tw-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 0 0 8px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 12px; }
+#ebody .tw-custom label { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #c4c4cc; cursor: pointer; }
+#ebody .tw-presets { display: flex; gap: 6px; margin: 0 0 12px; }
+#ebody .tw-presets .tw-btn { flex: 1; }
+#ebody .tw-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+#ebody .tw-chips button { flex: 1 0 auto; min-width: 40px; white-space: nowrap; border: 0; border-radius: 8px; color: #c4c4ca; background: rgba(255,255,255,0.06); font: inherit; font-size: 11px; font-weight: 650; padding: 7px 6px; cursor: pointer; transition: background .14s, color .14s; }
+#ebody .tw-status { display: flex; align-items: center; gap: 9px; padding: 9px 11px; margin: 10px 0 2px; border-radius: 10px; background: rgba(255,255,255,0.04); font-size: 11px; color: #bdbdc6; }
+#ebody .tw-status i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+#ebody .tw-status span { flex: 1; min-width: 0; }
+#ebody .tw-dline { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: #e6e6ea; padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+#ebody .tw-dline:first-child { border-top: 0; }
+#ebody .tw-dline .n { flex: 1; min-width: 0; }
+#ebody .tw-dline .z { font-variant-numeric: tabular-nums; color: #86868e; min-width: 58px; text-align: right; font-size: 11px; }
+#ebody .tw-bar { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); margin: 12px 0 6px; overflow: hidden; }
+#ebody .tw-bar i { display: block; height: 100%; border-radius: 4px; background: #ff5500; }
+#ebody .tw-note { font-size: 10.5px; color: #7c7c84; line-height: 1.45; }
+#ebody .tw-empty { text-align: center; color: #7c7c84; font-size: 12px; padding: 34px 0 10px; }
+#ebody .tw-chip:focus-visible, #ebody .tw-sw:focus-visible, #ebody .tw-btn:focus-visible, #ebody .tw-card:focus-visible, #ebody .tw-chips button:focus-visible, #ebody .tw-color:focus-visible { outline: 2px solid var(--acc, #ff5500); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { #ebody .tw-sw, #ebody .tw-sw i, #ebody .tw-card i, #ebody .tw-chip, #ebody .tw-btn { transition: none !important; } }
 
 /* ── mini lyric bar: the current line floats above the player even with
       the panel closed; click it to open the full panel ── */
@@ -8309,6 +8383,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⚙', 'A cleaner Tweaks tab', 'Six groups (Shuffle, Look, Hide, Player, More, Data) behind a strip of chips that stays put while you scroll. Themes are cards you can read before you pick one, the search reaches every setting, and backup, restore and reset live under Data.'],
           ['⌥', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists, Enter plays, O opens, L likes. Tracks you already played carry a small ✓. Four more Chrome-wide commands (seek, mute, jump to the playing tab) wait for keys at chrome://extensions/shortcuts.'],
           ['文', 'Lyrics in your language, pronounced', 'Lyrics ⋯ menu → Translation language & romanization: twenty languages to pick from, and a romanized line under Japanese, Korean, Chinese, Cyrillic, Arabic, Greek, Hebrew, Thai or Hindi lyrics. Text-only sheets are quietly re-checked for a synced version once a week.'],
           ['◈', 'Audio scenes, quiet hours', 'Save the whole Audio tab under a name and recall it from the tab or the palette. Quiet hours switch Night mode and the −18 LUFS target on between two hours and back off after (Tweaks → Player).'],
@@ -11427,6 +11502,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (e.key === 'l' || e.key === 'L') { own(); App.seekBy(10); return; }
       if (e.key === 'ArrowUp') { if (UI.seekLine(-1)) own(); return; }
       if (e.key === 'ArrowDown') { if (UI.seekLine(1)) own(); return; }
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && rt && rt.closest && rt.closest('.tw-nav')) return;   // the Tweaks chip strip walks with the arrows
       if (e.key === 'ArrowLeft') { own(); App.seekBy(-5); return; }
       if (e.key === 'ArrowRight') { own(); App.seekBy(5); return; }
       if (e.key === 'r' || e.key === 'R') { own(); UI.replayLine(); return; }
@@ -14384,8 +14460,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       sleepEls.chips.forEach((c) => {
         const on = sleepChipMin !== 0 && (+c.dataset.min === sleepChipMin);
-        c.style.background = on ? 'linear-gradient(135deg,#f50,#ff8a3d)' : 'rgba(255,255,255,.07)';
-        c.style.color = on ? '#fff' : '#dcdce2';
+        c.style.background = on ? 'linear-gradient(135deg,#f50,#ff8a3d)' : 'rgba(255,255,255,.06)';
+        c.style.color = on ? '#fff' : '#c4c4ca';
       });
       sleepEls.label.textContent = !S ? 'Sleep timer unavailable' : armed ? 'Pausing after this track' : rem ? ('Pausing playback in ~' + Math.max(1, Math.ceil(rem / 60000)) + ' min') : 'Pause playback automatically';
     } catch (e) {}
@@ -15938,7 +16014,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // feature rows for the panel — declarative so it stays clean & extensible
   // Tweaks → Your data: every store with its size and a Clear; used by both the hub's Tweaks tab and the standalone panel
   function buildDataPanel(row) {
-      const box = D.createElement('div'); box.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:4px';
+      // inline styles on purpose: the hub's Tweaks tab and module 3's own panel both draw this
+      const box = D.createElement('div'); box.style.cssText = 'margin-top:6px';
       const STORES = [
         ['Settings', ['scssgm:enh:cfg', 'scssgm:sl:'], 'Every switch and slider (the shuffle keeps its own)'],
         ['Lyrics cache', ['scssgm:sl4:'], 'Lyric sheets this browser has seen'],
@@ -15952,22 +16029,28 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         ['Shuffle: library', ['bh_sc_lib'], 'A copy of your likes for the shuffle and the palette'],
         ['Shuffle: history & stats', ['bh_sc_history', 'bh_sc_daily', 'bh_sc_alltime', 'bh_sc_plays', 'bh_sc_hours', 'bh_sc_broken'], ''],
       ];
+      const QUOTA = 5 * 1048576;   // what Chrome gives one origin's localStorage, near enough
       const keysOf = (pfx) => { const out = []; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && pfx.some((px) => (px.endsWith(':') || px.endsWith('_')) ? k.indexOf(px) === 0 : k === px)) out.push(k); } } catch (e) {} return out; };
       const size = (keys) => { let n = 0; try { for (const k of keys) n += (k.length + (localStorage.getItem(k) || '').length) * 2; } catch (e) {} return n; };
       const fmtB = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(2) + ' MB';
       const paint = () => {
         box.replaceChildren(); let total = 0;
-        for (const [name, pfx, note] of STORES) {
+        STORES.forEach(([name, pfx, note], i) => {
           const keys = keysOf(pfx).filter((k) => !(name === 'Settings' && k.indexOf('scssgm:sl4:') === 0)); const b = size(keys); total += b;
-          const line = D.createElement('div'); line.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:11.5px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)';
+          const line = D.createElement('div'); line.style.cssText = 'display:flex;align-items:center;gap:10px;font-size:11.5px;color:#e6e6ea;padding:7px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.05)' : '0');
           const nm = D.createElement('span'); nm.style.cssText = 'flex:1;min-width:0'; nm.textContent = name; if (note) nm.title = note;
-          const sz = D.createElement('span'); sz.style.cssText = 'font-variant-numeric:tabular-nums;color:#8a8a92;min-width:64px;text-align:right'; sz.textContent = keys.length ? fmtB(b) : '—';
-          const clr = D.createElement('button'); clr.type = 'button'; clr.textContent = 'Clear'; clr.className = 'sw'; clr.style.cssText = 'width:auto;height:auto;border-radius:8px;padding:4px 9px;font-size:10.5px;background:rgba(255,255,255,.08);color:#dcdce2'; clr.disabled = !keys.length; clr.style.opacity = keys.length ? '1' : '.4';
+          const sz = D.createElement('span'); sz.style.cssText = 'font-variant-numeric:tabular-nums;color:#86868e;min-width:58px;text-align:right;font-size:11px'; sz.textContent = keys.length ? fmtB(b) : '—';
+          const clr = D.createElement('button'); clr.type = 'button'; clr.textContent = 'Clear'; clr.disabled = !keys.length;
+          clr.style.cssText = 'flex:none;border:0;border-radius:8px;padding:6px 10px;font:600 10.5px inherit;background:rgba(255,255,255,.06);color:#c4c4ca;cursor:' + (keys.length ? 'pointer' : 'default') + ';opacity:' + (keys.length ? '1' : '.38');
           clr.setAttribute('aria-label', 'Clear ' + name);
           clr.addEventListener('click', () => { let ok = true; try { ok = W.confirm('Clear ' + name + ' (' + fmtB(b) + ')? This cannot be undone.'); } catch (e) {} if (!ok) return; try { for (const k of keys) localStorage.removeItem(k); } catch (e) {} if (name === 'Lyrics cache') { try { localStorage.removeItem('scssgm:sl4:idx'); } catch (e) {} } toast(name + ' cleared'); paint(); });
           line.append(nm, sz, clr); box.appendChild(line);
-        }
-        const tot = D.createElement('div'); tot.style.cssText = 'font-size:11px;color:#8a8a92;margin-top:6px'; tot.textContent = 'Total ' + fmtB(total) + ' of about 5 MB the browser allows this site · a backup keeps all of it (Back up everything, in the palette)';
+        });
+        // how much of the site's allowance the suite is using
+        const bar = D.createElement('div'); bar.style.cssText = 'height:4px;border-radius:4px;background:rgba(255,255,255,.08);margin:12px 0 6px;overflow:hidden';
+        const fill = D.createElement('i'); fill.style.cssText = 'display:block;height:100%;border-radius:4px;background:#ff5500;width:' + Math.min(100, Math.max(total ? 1 : 0, total / QUOTA * 100)).toFixed(1) + '%';
+        bar.appendChild(fill); box.appendChild(bar);
+        const tot = D.createElement('div'); tot.style.cssText = 'font-size:10.5px;color:#85858d;line-height:1.45'; tot.textContent = fmtB(total) + ' of about ' + fmtB(QUOTA) + ' the browser allows this site · a backup keeps all of it';
         box.appendChild(tot);
       };
       paint(); row.appendChild(box);
@@ -16215,223 +16298,230 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * classes → can't collide with the lyrics hub's own styles) into any
    * container — used to host all the SoundCloud tweaks inside the lyrics
    * hub's "Tweaks" tab, so everything lives in one place. */
+  // the Tweaks tab: six segments behind a sticky chip strip, the enhancer's sections mapped onto them by title
+  const TW_SEGS = [['shuffle', 'Shuffle'], ['look', 'Look'], ['hide', 'Hide'], ['player', 'Player'], ['more', 'More'], ['data', 'Data']];
+  const TW_SEC_SEG = { Appearance: 'look', Layout: 'look', Declutter: 'hide', 'Hide more': 'hide', Player: 'player', 'Artist / track': 'more', 'Toolbar buttons': 'more', Reading: 'more', Delight: 'more', Advanced: 'data', 'Your data': 'data' };
+  let twSeg = 'shuffle';   // the segment the user was on: kept across rebuilds and hub reopenings
   function enhancerRender(container) {
     try {
       if (!container) return;
-      // a rebuild (theme swatch, preset, reset…) keeps what the user had open, typed and scrolled to
-      const prevQ = (container.querySelector('input[aria-label="Search settings"]') || {}).value || '';
-      const prevOpen = Array.from(container.querySelectorAll('[data-sec][data-open="1"]')).map((h) => h.getAttribute('data-sec'));
+      // a rebuild (theme card, preset, reset…) keeps the segment, the query and the scroll the user had
+      const prevQ = (container.querySelector('.tw-find') || {}).value || '';
       const prevTop = container.scrollTop, hadPrev = !!container.firstChild;
       container.replaceChildren();
-      container.style.padding = '8px 14px 26px';
+      container.style.padding = '';   // #ebody's own padding
       container.style.webkitMaskImage = 'none'; container.style.maskImage = 'none';   // no edge fade on settings
       const ACC = '#ff5500';
-      const find = D.createElement('input');
-      find.type = 'text'; find.placeholder = 'Search settings…'; find.setAttribute('aria-label', 'Search settings');
-      find.style.cssText = 'width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:#fff;font:inherit;font-size:12px;padding:7px 11px;outline:none;margin:6px 0 4px';
-      find.addEventListener('keydown', (e) => e.stopPropagation());
+      const el = (tag, cls, txt) => { const n = D.createElement(tag); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+      const twBtn = (txt, fn) => { const b = el('button', 'tw-btn sm', txt); b.type = 'button'; if (fn) b.addEventListener('click', fn); return b; };
+      const find = el('input', 'tw-find'); find.type = 'text'; find.placeholder = 'Search settings…'; find.setAttribute('aria-label', 'Search settings');
+      find.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape' && find.value) { find.value = ''; filter(); } });
+      find.addEventListener('input', () => filter());
       container.appendChild(find);
-      const meta = [];
-      const sections = [];
-      let curSec = null, curGrp = null;
-      const setSecOpen = (sec, open) => { sec.open = open; sec.el.setAttribute('data-open', open ? '1' : '0'); sec.grp.style.display = open ? '' : 'none'; sec.chev.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)'; sec.dot.style.background = open ? ACC : 'rgba(255,255,255,.22)'; sec.el.style.background = open ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.04)'; };
-      // each category is a collapsible accordion group, so the whole panel reads
-      // as a short tidy list of headers instead of one endless scroll
-      const addSection = (title) => {
-        const head = D.createElement('button'); head.type = 'button'; head.setAttribute('data-sec', title);
-        head.style.cssText = 'width:100%;display:flex;align-items:center;gap:9px;margin:7px 0 2px;padding:10px 11px;background:rgba(255,255,255,.04);border:0;border-radius:11px;cursor:pointer;font:800 10px/1 inherit;letter-spacing:.13em;text-transform:uppercase;color:#c2c2ca;transition:background .14s ease';
-        const dot = D.createElement('span'); dot.style.cssText = 'width:10px;height:2px;border-radius:2px;flex:none;background:rgba(255,255,255,.22);transition:background .16s ease';
-        const tt = D.createElement('span'); tt.textContent = title; tt.style.cssText = 'flex:1;text-align:left';
-        const chev = D.createElement('span'); chev.textContent = '▸'; chev.style.cssText = 'color:#8a8a92;font-size:10px;transition:transform .18s ease;flex:none';
-        head.append(dot, tt, chev);
-        head.addEventListener('mouseenter', () => { head.style.background = 'rgba(255,255,255,.08)'; });
-        head.addEventListener('mouseleave', () => { head.style.background = sec.open ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.04)'; });
-        const grp = D.createElement('div');
-        grp.style.cssText = 'margin:3px 1px 8px;padding:2px 12px;background:rgba(255,255,255,0.035);border-radius:13px;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.05)';
-        container.append(head, grp);
-        const sec = { el: head, grp, chev, dot, open: false };
-        sections.push(sec);
-        head.addEventListener('click', () => setSecOpen(sec, !sec.open));
-        curSec = sec; curGrp = grp;
-        return sec;
-      };
-      // fold the SHUFFLE settings in as the first collapsible group (all-in-one)
-      if (SUITE.shuffleRender) {
-        addSection('Shuffle');
-        try { SUITE.shuffleRender(curGrp); } catch (e) {}
-        meta.push({ el: curGrp, text: 'shuffle queue likes order genres blocklist sleep stats library listenbrainz spread fresh picks', sec: curSec });
+      // the sticky strip: one chip per segment; while a search is typed it shows the match count instead
+      const nav = el('div', 'tw-nav'); nav.setAttribute('role', 'tablist'); nav.setAttribute('aria-label', 'Setting groups');
+      const chips = {}, segs = {};
+      for (const [id, name] of TW_SEGS) {
+        const c = el('button', 'tw-chip', name); c.type = 'button'; c.setAttribute('role', 'tab'); c.dataset.seg = id;
+        c.addEventListener('click', () => { if (find.value) { find.value = ''; filter(); } showSeg(id); container.scrollTop = 0; });
+        nav.appendChild(c); chips[id] = c;
+        const s = el('div', 'tw-seg'); s.dataset.seg = id; s.setAttribute('role', 'tabpanel'); s.hidden = true; segs[id] = s;
       }
+      const clearChip = el('button', 'tw-chip clear'); clearChip.type = 'button'; clearChip.hidden = true;
+      clearChip.addEventListener('click', () => { find.value = ''; filter(); find.focus(); });
+      nav.appendChild(clearChip);
+      nav.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const ids = TW_SEGS.map((s) => s[0]).filter((k) => chips[k].dataset.gone !== '1');
+        const i = (Math.max(0, ids.indexOf(twSeg)) + (e.key === 'ArrowRight' ? 1 : ids.length - 1)) % ids.length;
+        showSeg(ids[i]); chips[ids[i]].focus(); e.preventDefault();
+      });
+      container.appendChild(nav);
+      // the strip earns its backdrop only once the scroll has pinned it (one listener per container, reading the live strip)
+      if (!container.twStuck) { container.twStuck = true; container.addEventListener('scroll', () => { try { const n = container.querySelector('.tw-nav'), f = container.querySelector('.tw-find'); if (n && f) n.classList.toggle('stuck', container.scrollTop >= f.offsetTop + f.offsetHeight + 7); } catch (e) {} }, { passive: true }); }
+      for (const [id] of TW_SEGS) container.appendChild(segs[id]);
+      const empty = el('div', 'tw-empty', 'Nothing matches'); empty.hidden = true; container.appendChild(empty);
+      const meta = [], secs = [];   // every row: { el, text, sec } · every eyebrow: { el }
+      let curSec = null, curSeg = segs.more;
+      const addSec = (title, seg) => { curSeg = seg || curSeg; const h = el('div', 'tw-sec', title); curSeg.appendChild(h); curSec = { el: h }; secs.push(curSec); return h; };
+      const addRow = (label, desc, stack) => {
+        const row = el('div', 'tw-row' + (stack ? ' stack' : ''));
+        const txt = el('div', 'tw-txt'); txt.appendChild(el('div', 'tw-lab', label));
+        if (desc) txt.appendChild(el('small', 'tw-desc', desc));
+        row.appendChild(txt); curSeg.appendChild(row);
+        meta.push({ el: row, text: (label + ' ' + (desc || '')).toLowerCase(), sec: curSec });
+        return row;
+      };
+      const mkSwitch = (get, set, name) => {
+        const sw = el('button', 'tw-sw'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', name); sw.appendChild(el('i'));
+        const paint = () => sw.setAttribute('aria-checked', String(!!get()));
+        paint(); sw.addEventListener('click', () => { set(); paint(); }); return sw;
+      };
+      // ── Shuffle: module 1 draws its rows in the same classes; index them for the search ──
+      if (SUITE.shuffleRender) {
+        const wrap = el('div', 'tw-shuf'); segs.shuffle.appendChild(wrap);
+        try { SUITE.shuffleRender(wrap); } catch (e) {}
+        let sec = null;
+        for (const c of wrap.children) {
+          if (c.classList.contains('tw-sec')) { sec = { el: c }; secs.push(sec); }
+          else if (c.classList.contains('tw-row')) meta.push({ el: c, text: c.textContent.toLowerCase(), sec });
+        }
+      }
+      if (!segs.shuffle.querySelector('.tw-row')) { chips.shuffle.dataset.gone = '1'; chips.shuffle.hidden = true; }
+      // ── Data: backup, restore and reset first, then what the rows below list ──
+      addSec('Backup & reset', segs.data);
+      {
+        const row = addRow('Back up everything', 'Shuffle, lyrics and enhancer settings in one file');
+        const g = el('div', 'tw-btns');
+        g.append(twBtn('Back up', () => { if (SUITE.backupAll) SUITE.backupAll(); else toast('Backup unavailable'); }), twBtn('Restore', restoreFile));
+        row.appendChild(g); meta[meta.length - 1].text += ' export import json';
+      }
+      {
+        const row = addRow('Reset the enhancer', 'Every switch and slider back to its default · the shuffle and the lyrics keep theirs');
+        let arm = 0;
+        const b = twBtn('Reset', () => {
+          if (!arm) { b.textContent = 'Really reset?'; b.classList.add('warn'); arm = setTimeout(() => { arm = 0; b.textContent = 'Reset'; b.classList.remove('warn'); }, 4000); return; }   // one more click confirms
+          clearTimeout(arm); arm = 0;
+          CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); applyAll(); enhancerRender(container); toast('Enhancer reset');
+        });
+        row.appendChild(b); meta[meta.length - 1].text += ' defaults';
+      }
+      {
+        const row = addRow('Debug log', 'Audio status, flags and recent errors, for a bug report');
+        row.appendChild(twBtn('Copy', () => { try { clip(debugDump(), 'Debug log copied'); } catch (e) {} }));
+        meta[meta.length - 1].text += ' support diagnostics';
+      }
+      // ── the enhancer's rows ──
       for (const r of ROWS) {
-        if (r[0] === 'SEC') { addSection(r[1]); continue; }
+        if (r[0] === 'SEC') { addSec(r[1], segs[TW_SEC_SEG[r[1]] || 'more']); continue; }
         const [key, type, label, desc] = r;
-        const row = D.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid rgba(255,255,255,.05)';
-        const lab = D.createElement('div'); lab.style.cssText = 'flex:1;min-width:0;font-size:12px;font-weight:500';
-        const ls = D.createElement('span'); ls.textContent = label; lab.appendChild(ls);
-        if (desc) { const sm = D.createElement('small'); sm.textContent = desc; sm.style.cssText = 'display:block;font-size:10px;color:#888;font-weight:400;margin-top:1px'; lab.appendChild(sm); }
-        row.appendChild(lab);
         if (type === 'toggle') {
-          const sw = D.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', label);
-          sw.style.cssText = 'position:relative;width:34px;height:19px;border-radius:19px;border:0;cursor:pointer;flex:none;transition:background .18s';
-          const knob = D.createElement('span'); knob.style.cssText = 'position:absolute;top:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:left .18s;box-shadow:0 1px 3px rgba(0,0,0,.4)';
-          sw.appendChild(knob);
-          const paint = () => { const on = !!CFG[key]; sw.style.background = on ? '#ff5500' : 'rgba(255,255,255,.18)'; knob.style.left = on ? '17px' : '2px'; sw.setAttribute('aria-checked', String(on)); };
-          paint();
-          sw.addEventListener('click', () => { CFG[key] = !CFG[key]; paint(); save(); applyAll(); });
-          row.appendChild(sw);
+          addRow(label, desc).appendChild(mkSwitch(() => CFG[key], () => { CFG[key] = !CFG[key]; save(); applyAll(); }, label));
         } else if (type === 'select') {
-          const sel = D.createElement('select'); sel.setAttribute('aria-label', label);
-          sel.style.cssText = 'background:rgba(255,255,255,.08);border:0;border-radius:8px;color:#fff;font:inherit;font-size:11.5px;padding:5px 8px;cursor:pointer;max-width:150px';
-          for (const [v, t] of r[4]) { const o = D.createElement('option'); o.value = v; o.textContent = t; o.style.color = '#111'; if (CFG[key] === v) o.selected = true; sel.appendChild(o); }
-          sel.addEventListener('change', () => { CFG[key] = sel.value; if (key === 'theme') CFG.autoDark = false; save(); applyAll(); if (key === 'accent' || key === 'theme') enhancerRender(container); });   // theme → custom palette editor / swatches follow
-          row.appendChild(sel);
-        } else if (type === 'range') {
-          const rng = D.createElement('input'); rng.type = 'range'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
-          rng.style.cssText = 'flex:none;width:108px;accent-color:' + ACC;
-          const val = D.createElement('span'); val.textContent = CFG[key] + (r[3] || ''); val.style.cssText = 'flex:none;font-size:11px;color:#aaa;width:38px;text-align:right';
-          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); val.textContent = CFG[key] + (r[3] || ''); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
-          row.appendChild(rng); row.appendChild(val);
+          const sel = el('select', 'sxsel tw-sel'); sel.setAttribute('aria-label', label);
+          for (const [v, t] of r[4]) { const o = el('option', null, t); o.value = v; o.style.color = '#111'; if (CFG[key] === v) o.selected = true; sel.appendChild(o); }
+          sel.addEventListener('change', () => { CFG[key] = sel.value; if (key === 'theme') CFG.autoDark = false; save(); applyAll(); if (key === 'accent' || key === 'theme') enhancerRender(container); });   // theme → cards / custom editor follow
+          addRow(label, desc).appendChild(sel);
+        } else if (type === 'range') {   // r[3] is the unit, not a description
+          const rng = el('input', 'sxr tw-rng'); rng.type = 'range'; rng.min = r[4]; rng.max = r[5]; rng.step = key === 'speed' ? 5 : 1; rng.value = CFG[key]; rng.setAttribute('aria-label', label);
+          const val = el('span', 'tw-val');
+          const paint = () => { const pct = (+rng.value - r[4]) / (r[5] - r[4]) * 100; rng.style.background = 'linear-gradient(90deg,' + ACC + ' ' + pct + '%,rgba(255,255,255,.12) ' + pct + '%)'; val.textContent = CFG[key] + (r[3] || ''); rng.setAttribute('aria-valuetext', val.textContent); };
+          paint();
+          rng.addEventListener('input', () => { CFG[key] = parseInt(rng.value, 10); paint(); saveSoon(); if (key === 'speed') rememberSpeed(); applyAll(); refreshBar(); });
+          addRow(label, '').append(rng, val);
+        } else if (type === 'text') {
+          const inp = el('input', 'tw-in'); inp.type = 'text'; inp.value = CFG[key] || ''; inp.spellcheck = false; inp.setAttribute('aria-label', label);
+          inp.placeholder = key === 'feedMute' ? 'type beat, sped up, nightcore' : '';
+          inp.addEventListener('keydown', (e) => e.stopPropagation());
+          let dT = 0;
+          inp.addEventListener('input', () => { clearTimeout(dT); dT = setTimeout(() => { CFG[key] = inp.value.slice(0, 400); save(); }, 400); });
+          addRow(label, desc, true).appendChild(inp);
         } else if (type === 'data') {
-          row.style.display = 'block'; buildDataPanel(row);
+          buildDataPanel(addRow(label, desc, true));
         } else if (type === 'textarea') {
-          row.style.display = 'block';
-          const ta = D.createElement('textarea'); ta.value = CFG[key] || ''; ta.spellcheck = false; ta.setAttribute('aria-label', label);
-          ta.placeholder = '.playControls { background:#111 }';
-          ta.style.cssText = 'width:100%;min-height:70px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:#eee;font:11px/1.4 ui-monospace,Menlo,monospace;padding:8px;resize:vertical;outline:none;margin-top:6px';
+          const ta = el('textarea', 'tw-ta'); ta.value = CFG[key] || ''; ta.spellcheck = false; ta.setAttribute('aria-label', label); ta.placeholder = '.playControls { background:#111 }';
           ta.addEventListener('keydown', (e) => e.stopPropagation());
           let dT = 0;
           ta.addEventListener('input', () => { clearTimeout(dT); dT = setTimeout(() => { CFG[key] = ta.value; save(); applyCss(); }, 400); });
-          row.appendChild(ta);
+          addRow(label, desc, true).appendChild(ta);
         }
-        (curGrp || container).appendChild(row);
-        meta.push({ el: row, text: (label + ' ' + (desc || '')).toLowerCase(), sec: curSec });
-        // ── visual swatch picker + custom theme builder, right under the Theme dropdown ──
-        if (key === 'theme') {
-          const wrap = D.createElement('div');
-          wrap.style.cssText = 'padding:4px 0 8px;border-bottom:1px solid rgba(255,255,255,.05)';
-          const grid = D.createElement('div');
-          grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:7px;padding:2px 0';
-          // [id, label, bg, accent-dot]
-          const SW = [['none', 'Light', '#f3f3f5', '#ff5500']];
-          const TNAME = { dark: 'Dark', amoled: 'AMOLED black', midnight: 'Midnight', dracula: 'Dracula', nord: 'Nord', ocean: 'Ocean', gruvbox: 'Gruvbox', rosepine: 'Rosé Pine', solar: 'Solarized', coffee: 'Coffee', slate: 'Slate' };
-          for (const id of Object.keys(DARK_THEMES)) { const t = DARK_THEMES[id]; SW.push([id, TNAME[id] || id, t.bg, t.tx]); }
-          SW.push(['custom', 'Custom', (CFG.customTheme && CFG.customTheme.bg) || '#16181c', (CFG.customTheme && CFG.customTheme.tx) || '#e7e7ec']);
-          const paintSel = () => { for (const c of grid.children) c.style.borderColor = (c.getAttribute('data-t') === CFG.theme) ? ACC : 'rgba(255,255,255,.14)'; };
-          for (const [id, tname, bg, dot] of SW) {
-            const sw = D.createElement('button'); sw.type = 'button'; sw.title = tname; sw.setAttribute('data-t', id); sw.setAttribute('aria-label', 'Theme: ' + tname);
-            sw.style.cssText = 'width:30px;height:30px;border-radius:8px;border:2px solid rgba(255,255,255,.14);background:' + bg + ';cursor:pointer;position:relative;flex:none;padding:0';
-            const d2 = D.createElement('span'); d2.style.cssText = 'position:absolute;bottom:3px;right:3px;width:8px;height:8px;border-radius:50%;background:' + dot + ';box-shadow:0 0 0 1px rgba(0,0,0,.25)';
-            sw.appendChild(d2);
-            sw.addEventListener('click', () => { CFG.theme = id; CFG.autoDark = false; save(); applyAll(); enhancerRender(container); });
-            grid.appendChild(sw);
-          }
-          wrap.appendChild(grid);
-          paintSel();
-          // custom palette editor — only when Custom is the active theme
-          if (CFG.theme === 'custom') {
-            if (!CFG.customTheme || typeof CFG.customTheme !== 'object') CFG.customTheme = Object.assign({}, DEFAULTS.customTheme);
-            const ed = D.createElement('div');
-            ed.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:9px;padding:9px;background:rgba(255,255,255,.04);border-radius:10px';
-            const FIELDS = [['bg', 'Background'], ['card', 'Surface'], ['hov', 'Hover'], ['tx', 'Text'], ['sub', 'Subtext'], ['bd', 'Border']];
-            for (const [ck, clabel] of FIELDS) {
-              const cell = D.createElement('label'); cell.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:11px;color:#cfcfd6;cursor:pointer';
-              const ci = D.createElement('input'); ci.type = 'color'; ci.value = (CFG.customTheme[ck] || DEFAULTS.customTheme[ck]);
-              ci.style.cssText = 'width:24px;height:22px;border:0;border-radius:6px;background:none;cursor:pointer;flex:none;padding:0';
-              ci.setAttribute('aria-label', clabel + ' colour');
-              let cT = 0;
-              ci.addEventListener('input', () => { if (CFG.customTheme === DEFAULTS.customTheme) CFG.customTheme = Object.assign({}, CFG.customTheme); CFG.customTheme[ck] = ci.value; clearTimeout(cT); cT = setTimeout(() => { save(); applyAll(); }, 120); });   // never edit DEFAULTS' own object
-              cell.appendChild(ci); cell.appendChild(D.createTextNode(clabel));
-              ed.appendChild(cell);
-            }
-            wrap.appendChild(ed);
-            const presetRow = D.createElement('div'); presetRow.style.cssText = 'display:flex;gap:6px;margin-top:8px';
-            const mkP = (txt, src) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.style.cssText = 'flex:1;background:rgba(255,255,255,.06);border:0;border-radius:8px;color:#dcdce2;font:600 10.5px inherit;padding:6px;cursor:pointer'; b.addEventListener('click', () => { CFG.customTheme = Object.assign({}, src); save(); applyAll(); enhancerRender(container); }); presetRow.appendChild(b); };
-            mkP('Start from Dark', DARK_THEMES.dark);
-            mkP('Start from Nord', DARK_THEMES.nord);
-            mkP('Start from Dracula', DARK_THEMES.dracula);
-            wrap.appendChild(presetRow);
-          }
-          (curGrp || container).appendChild(wrap);
-          meta.push({ el: wrap, text: 'theme appearance colour color swatch custom palette dark', sec: curSec });
-        }
-        // ── sleep-timer chips, tucked under the Player section ──
-        if (key === 'pauseOnHide') {
-          const wrap = D.createElement('div');
-          wrap.style.cssText = 'padding:9px 2px 11px;border-bottom:1px solid rgba(255,255,255,.05)';
-          const lab = D.createElement('div'); lab.style.cssText = 'flex:1;min-width:0;font-size:12px;font-weight:500;margin-bottom:8px';
-          const ls = D.createElement('span'); ls.textContent = '💤 Sleep timer'; lab.appendChild(ls);
-          const sm = D.createElement('small'); sm.style.cssText = 'display:block;font-size:10px;color:#888;font-weight:400;margin-top:1px';
-          lab.appendChild(sm); wrap.appendChild(lab);
-          const chipRow = D.createElement('div'); chipRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
-          const chips = [];
-          const mkChip = (min, txt) => {
-            const b = D.createElement('button'); b.type = 'button'; b.dataset.min = String(min); b.textContent = txt;
-            b.style.cssText = 'flex:1 0 auto;min-width:40px;white-space:nowrap;background:rgba(255,255,255,.07);border:0;border-radius:8px;color:#dcdce2;font:700 11px inherit;padding:7px 4px;cursor:pointer;transition:background .14s,color .14s';
-            b.addEventListener('click', () => sleepChip(min));
-            chipRow.appendChild(b); chips.push(b);
-          };
-          mkChip(15, '15m'); mkChip(30, '30m'); mkChip(45, '45m'); mkChip(60, '1h'); mkChip(90, '1.5h'); mkChip(-1, 'Track end'); mkChip(0, 'Off');
-          wrap.appendChild(chipRow);
-          sleepEls = { wrap, chips, label: sm };
-          paintSleep(true);
-          (curGrp || container).appendChild(wrap);
-          meta.push({ el: wrap, text: 'sleep timer pause auto stop bedtime night playback', sec: curSec });
-        }
-        // ── custom accent colour picker, shown when "Custom…" is selected ──
-        if (key === 'accent' && CFG.accent === 'custom') {
-          const wrap2 = D.createElement('div');
-          wrap2.style.cssText = 'display:flex;align-items:center;gap:9px;padding:8px 2px;border-bottom:1px solid rgba(255,255,255,.05)';
-          const cl = D.createElement('label'); cl.style.cssText = 'flex:1;font-size:11.5px;color:#cfcfd6'; cl.textContent = 'Custom accent colour';
-          const ci = D.createElement('input'); ci.type = 'color'; ci.value = /^#[0-9a-f]{6}$/i.test(CFG.customAccent || '') ? CFG.customAccent : '#ff5500';
-          ci.style.cssText = 'width:30px;height:24px;border:0;border-radius:7px;background:none;cursor:pointer;flex:none;padding:0'; ci.setAttribute('aria-label', 'Custom accent colour');
-          let aT = 0;
-          ci.addEventListener('input', () => { CFG.customAccent = ci.value; clearTimeout(aT); aT = setTimeout(() => { save(); applyAll(); }, 120); });
-          cl.setAttribute('for', ''); wrap2.append(cl, ci);
-          (curGrp || container).appendChild(wrap2);
-          meta.push({ el: wrap2, text: 'accent custom colour color hex picker', sec: curSec });
-        }
-        // ── audio-engine status, right under the speed slider ──
-        if (key === 'speed') {
-          const box = D.createElement('div');
-          box.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 9px;margin:2px 0 4px;border-radius:9px;background:rgba(255,255,255,.04);font-size:11px';
-          const dot = D.createElement('span'); dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex:none';
-          const txt = D.createElement('span'); txt.style.cssText = 'flex:1;color:#bdbdc6';
-          const btn = D.createElement('button'); btn.type = 'button'; btn.textContent = 'Re-check'; btn.style.cssText = 'background:rgba(255,255,255,.08);border:0;border-radius:7px;color:#dcdce2;font:600 10px inherit;padding:5px 9px;cursor:pointer;flex:none';
-          const paint = () => { const s = audioStatus(); const ok = s.ok || s.cap > 0; const n = s.cap || s.dom; dot.style.background = ok ? '#23c552' : '#ffb400'; txt.textContent = ok ? ('Audio engine connected · driving ' + n + ' source' + (n === 1 ? '' : 's')) : 'Not captured yet — play a track, then Re-check'; };
-          paint(); btn.addEventListener('click', paint);
-          box.append(dot, txt, btn);
-          (curGrp || container).appendChild(box);
-          meta.push({ el: box, text: 'audio engine status speed capture web audio diagnostics controllable', sec: curSec });
-        }
-        // ── discoverable shortcuts entry, next to the hotkeys toggle ──
-        if (key === 'hotkeys') {
-          const row2 = D.createElement('div');
-          row2.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid rgba(255,255,255,.05)';
-          const lab2 = D.createElement('div'); lab2.style.cssText = 'flex:1;min-width:0;font-size:12px;font-weight:500';
-          const ls2 = D.createElement('span'); ls2.textContent = 'Keyboard shortcuts'; lab2.appendChild(ls2);
-          const sub = D.createElement('small'); sub.style.cssText = 'display:block;font-size:10px;color:#888;font-weight:400;margin-top:1px'; sub.textContent = 'See every global key'; lab2.appendChild(sub);
-          const vb = D.createElement('button'); vb.type = 'button'; vb.textContent = 'View ⌨'; vb.style.cssText = 'background:rgba(255,255,255,.08);border:0;border-radius:8px;color:#eaeaee;font:600 10.5px inherit;padding:6px 11px;cursor:pointer;flex:none';
-          vb.addEventListener('click', () => { try { showShortcuts(); } catch (e) {} });
-          row2.append(lab2, vb);
-          (curGrp || container).appendChild(row2);
-          meta.push({ el: row2, text: 'keyboard shortcuts hotkeys cheat sheet keys help question mark', sec: curSec });
-        }
+        if (key === 'theme') themeCards();
+        if (key === 'accent' && CFG.accent === 'custom') accentRow();
+        if (key === 'speed') statusRow();
+        if (key === 'hotkeys') shortcutsRow();
+        if (key === 'pauseOnHide') sleepRow();
       }
-      if (hadPrev) {
-        for (const sec of sections) setSecOpen(sec, prevOpen.indexOf(sec.el.getAttribute('data-sec')) !== -1);
-      } else if (sections.length) setSecOpen(sections[0], true);   // first group open as a hint they expand
-      // footer actions
-      const foot = D.createElement('div'); foot.style.cssText = 'display:flex;gap:7px;margin-top:14px';
-      const mkF = (txt, fn) => { const b = D.createElement('button'); b.textContent = txt; b.style.cssText = 'flex:1;background:rgba(255,255,255,.07);border:0;border-radius:9px;color:#eaeaee;font:600 11px inherit;padding:8px;cursor:pointer'; b.addEventListener('click', fn); foot.appendChild(b); return b; };
-      let resetArm = 0, resetB = null;
-      resetB = mkF('Reset enhancer', () => {
-        if (!resetArm) { resetB.textContent = 'Really reset?'; resetArm = setTimeout(() => { resetArm = 0; resetB.textContent = 'Reset enhancer'; }, 4000); return; }   // one more click confirms
-        clearTimeout(resetArm); resetArm = 0;
-        CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); applyAll(); enhancerRender(container); toast('Enhancer reset');
-      });
-      // whole-suite backup (shuffle + lyrics + enhancer in one file)
-      mkF('Back up everything', () => { if (SUITE.backupAll) SUITE.backupAll(); else toast('Backup unavailable'); });
-      mkF('Restore', () => {
+      showSeg(twSeg);
+      if (hadPrev && prevQ) { find.value = prevQ; filter(); }   // the filter the user had typed
+      if (hadPrev && prevTop) { try { container.scrollTop = prevTop; container.dispatchEvent(new Event('scroll')); } catch (e) {} }
+
+      // ── the pieces above, as declarations so the rows can call them before this point ──
+      function showSeg(id) {
+        if (!segs[id] || chips[id].dataset.gone === '1') id = (TW_SEGS.find((s) => chips[s[0]].dataset.gone !== '1') || TW_SEGS[1])[0];
+        twSeg = id;
+        const q = find.value.trim();
+        for (const [k] of TW_SEGS) { const on = k === id; chips[k].classList.toggle('on', on); chips[k].setAttribute('aria-selected', String(on)); chips[k].tabIndex = on ? 0 : -1; if (!q) segs[k].hidden = !on; }
+      }
+      function filter() {
+        const q = find.value.trim().toLowerCase();
+        let n = 0;
+        for (const m of meta) { const ok = !q || m.text.indexOf(q) !== -1; m.el.style.display = ok ? '' : 'none'; if (ok) n++; }
+        for (const s of secs) s.el.style.display = (!q || meta.some((m) => m.sec === s && m.el.style.display !== 'none')) ? '' : 'none';
+        for (const [k] of TW_SEGS) {
+          chips[k].hidden = !!q || chips[k].dataset.gone === '1';
+          segs[k].hidden = q ? !meta.some((m) => m.el.style.display !== 'none' && segs[k].contains(m.el)) : k !== twSeg;
+        }
+        clearChip.hidden = !q; clearChip.textContent = q ? (n + (n === 1 ? ' match' : ' matches') + ' · Clear') : '';
+        empty.hidden = !q || n > 0;
+      }
+      // the theme cards: each one painted in its own background and text, so the grid previews rather than lists
+      function themeCards() {
+        const grid = el('div', 'tw-themes'); grid.setAttribute('role', 'group'); grid.setAttribute('aria-label', 'Theme');
+        const TNAME = { dark: 'Dark', amoled: 'AMOLED', midnight: 'Midnight', dracula: 'Dracula', nord: 'Nord', ocean: 'Ocean', gruvbox: 'Gruvbox', rosepine: 'Rosé Pine', solar: 'Solarized', coffee: 'Coffee', slate: 'Slate' };
+        const cards = [['none', 'Light', '#f3f3f5', '#1b1b1f']];
+        for (const id of Object.keys(DARK_THEMES)) { const t = DARK_THEMES[id]; cards.push([id, TNAME[id] || id, t.bg, t.tx]); }
+        const ct = (CFG.customTheme && typeof CFG.customTheme === 'object') ? CFG.customTheme : DEFAULTS.customTheme;
+        cards.push(['custom', 'Custom', ct.bg || DEFAULTS.customTheme.bg, ct.tx || DEFAULTS.customTheme.tx, ct]);
+        for (const [id, name, bg, tx, cust] of cards) {
+          const on = CFG.theme === id;
+          const c = el('button', 'tw-card' + (cust ? ' wide' : '') + (on ? ' on' : '')); c.type = 'button'; c.dataset.t = id;
+          c.setAttribute('aria-label', 'Theme: ' + name); c.setAttribute('aria-pressed', String(on));
+          const tile = el('i', null, cust ? null : 'Aa'); tile.style.background = bg; tile.style.color = tx;
+          if (cust) { tile.appendChild(el('em', null, 'Custom')); for (const k of ['bg', 'card', 'hov', 'tx', 'sub', 'bd']) { const d = el('span'); d.style.background = cust[k] || DEFAULTS.customTheme[k]; tile.appendChild(d); } }
+          c.appendChild(tile); if (!cust) c.appendChild(el('b', null, name));
+          c.addEventListener('click', () => { CFG.theme = id; CFG.autoDark = false; save(); applyAll(); enhancerRender(container); });
+          grid.appendChild(c);
+        }
+        curSeg.appendChild(grid);
+        meta.push({ el: grid, text: 'theme appearance colour color swatch palette dark light ' + cards.map((c) => c[1]).join(' ').toLowerCase(), sec: curSec });
+        if (CFG.theme !== 'custom') return;
+        // the custom palette editor, only while Custom is the theme
+        if (!CFG.customTheme || typeof CFG.customTheme !== 'object') CFG.customTheme = Object.assign({}, DEFAULTS.customTheme);
+        const ed = el('div', 'tw-custom');
+        for (const [ck, clabel] of [['bg', 'Background'], ['card', 'Surface'], ['hov', 'Hover'], ['tx', 'Text'], ['sub', 'Subtext'], ['bd', 'Border']]) {
+          const cell = el('label'); const ci = el('input', 'tw-color'); ci.type = 'color'; ci.value = CFG.customTheme[ck] || DEFAULTS.customTheme[ck]; ci.setAttribute('aria-label', clabel + ' colour');
+          let cT = 0;
+          ci.addEventListener('input', () => { if (CFG.customTheme === DEFAULTS.customTheme) CFG.customTheme = Object.assign({}, CFG.customTheme); CFG.customTheme[ck] = ci.value; clearTimeout(cT); cT = setTimeout(() => { save(); applyAll(); }, 120); });   // never edit DEFAULTS' own object
+          cell.append(ci, D.createTextNode(clabel)); ed.appendChild(cell);
+        }
+        curSeg.appendChild(ed);
+        const pr = el('div', 'tw-presets');
+        for (const [txt, src] of [['Start from Dark', DARK_THEMES.dark], ['Start from Nord', DARK_THEMES.nord], ['Start from Dracula', DARK_THEMES.dracula]]) pr.appendChild(twBtn(txt, () => { CFG.customTheme = Object.assign({}, src); save(); applyAll(); enhancerRender(container); }));
+        curSeg.appendChild(pr);
+        meta.push({ el: ed, text: 'custom theme palette background surface hover text subtext border colour', sec: curSec }, { el: pr, text: 'custom theme start from dark nord dracula preset', sec: curSec });
+      }
+      function accentRow() {
+        const row = addRow('Custom accent colour', 'Buttons and links take this colour');
+        const ci = el('input', 'tw-color'); ci.type = 'color'; ci.value = /^#[0-9a-f]{6}$/i.test(CFG.customAccent || '') ? CFG.customAccent : ACC; ci.setAttribute('aria-label', 'Custom accent colour');
+        let aT = 0;
+        ci.addEventListener('input', () => { CFG.customAccent = ci.value; clearTimeout(aT); aT = setTimeout(() => { save(); applyAll(); }, 120); });
+        row.appendChild(ci); meta[meta.length - 1].text += ' hex picker';
+      }
+      function statusRow() {   // the audio engine, right under the speed slider
+        const box = el('div', 'tw-status'); const dot = el('i'); const txt = el('span');
+        const paint = () => { const s = audioStatus(); const ok = s.ok || s.cap > 0; const n = s.cap || s.dom; dot.style.background = ok ? '#23c552' : '#ffb400'; txt.textContent = ok ? ('Audio engine connected · driving ' + n + ' source' + (n === 1 ? '' : 's')) : 'Not captured yet — play a track, then Re-check'; };
+        paint();
+        box.append(dot, txt, twBtn('Re-check', paint));
+        curSeg.appendChild(box);
+        meta.push({ el: box, text: 'audio engine status speed capture web audio diagnostics controllable', sec: curSec });
+      }
+      function shortcutsRow() {
+        const row = addRow('Keyboard shortcuts', 'Every global key on one sheet');
+        row.appendChild(twBtn('View', () => { try { showShortcuts(); } catch (e) {} }));
+        meta[meta.length - 1].text += ' hotkeys cheat sheet keys help question mark';
+      }
+      function sleepRow() {   // the chips drive module 1's one timer; paintSleep keeps them and the label current
+        const row = addRow('Sleep timer', 'Pause playback automatically', true);
+        const chipRow = el('div', 'tw-chips'); const list = [];
+        for (const [min, txt] of [[15, '15m'], [30, '30m'], [45, '45m'], [60, '1h'], [90, '1.5h'], [-1, 'Track end'], [0, 'Off']]) {
+          const b = el('button', null, txt); b.type = 'button'; b.dataset.min = String(min); b.addEventListener('click', () => sleepChip(min)); chipRow.appendChild(b); list.push(b);
+        }
+        row.appendChild(chipRow);
+        sleepEls = { wrap: row, chips: list, label: row.querySelector('.tw-desc') };
+        paintSleep(true);
+        meta[meta.length - 1].text += ' sleep timer pause auto stop bedtime night playback';
+      }
+      function restoreFile() {
         try {
           const inp = D.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json'; inp.style.display = 'none';
           inp.addEventListener('change', () => {
@@ -16442,28 +16532,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           });
           (D.body || D.documentElement).appendChild(inp); inp.click();
         } catch (e) { toast('Restore failed'); }
-      });
-      container.appendChild(foot);
-      if (hadPrev && prevTop) { try { container.scrollTop = prevTop; } catch (e) {} }
-      // copyable debug snapshot (audio status + flags + recent errors) for support
-      const dbg = D.createElement('button'); dbg.type = 'button'; dbg.textContent = 'Copy debug log';
-      dbg.style.cssText = 'display:block;margin:9px auto 0;background:none;border:0;color:#7a7a82;font:600 10.5px inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px';
-      dbg.addEventListener('click', () => { try { clip(debugDump(), 'Debug log copied'); } catch (e) {} });
-      container.appendChild(dbg);
-      // live search filter — also auto-expands the groups that have matches and
-      // collapses everything back when the query clears
-      find.addEventListener('input', () => {
-        const q = find.value.trim().toLowerCase();
-        const secHas = new Map();
-        for (const m of meta) { if (!m.el) continue; const ok = !q || (m.text || '').indexOf(q) !== -1; m.el.style.display = ok ? '' : 'none'; if (ok && m.sec) secHas.set(m.sec, true); }
-        for (const sec of sections) {
-          const has = !!secHas.get(sec);
-          sec.el.style.display = (q && !has) ? 'none' : '';
-          if (q) setSecOpen(sec, has);
-        }
-        if (!q) sections.forEach((s, i) => setSecOpen(s, i === 0));
-      });
-      if (hadPrev && prevQ) { find.value = prevQ; find.dispatchEvent(new Event('input')); }   // the filter the user had typed
+      }
     } catch (e) { try { console.warn('[SC Enhancer] render error:', e); } catch (e2) {} }
   }
   try { SUITE.enhancerRender = enhancerRender; } catch (e) {}
