@@ -89,7 +89,7 @@ never plays.
   click opens and plays, *Export history CSV*.
 - **Playlist tools** — under the runtime chip on any set: *Copy links* (every
   track, one per line) and *Export CSV* (title, artist, length, link).
-- **Your data** — Tweaks → Your data lists every store with its size and a
+- **Your data** — Tweaks → Data → Your data lists every store with its size and a
   Clear for each; the total against the browser's allowance.
 - **Comment noise filter** — Tweaks → Declutter: emoji-only, promo and
   duplicate comments stay out of the comment list (an API-layer rule).

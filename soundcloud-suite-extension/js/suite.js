@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.58.0
+// @version      4.59.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.58.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.59.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -7114,86 +7114,103 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .scell .v { font-size: 21px; font-weight: 650; letter-spacing: -.02em; color: #edeef1; font-variant-numeric: tabular-nums; }
 .scell .l { font-size: 9.5px; color: #82828a; margin-top: 3px; letter-spacing: .05em; }
 .sbtns { display: flex; gap: 6px; padding: 8px 14px; flex-wrap: wrap; }
-.sbtn { font-size: 10.5px; font-weight: 650; color: #dcdce2; background: rgba(255,255,255,0.07); border-radius: 99px; padding: 5px 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
-.sbtn:hover { background: rgba(255,255,255,0.13); }
-/* ── Tweaks tab: one quiet system for every setting row (the Shuffle group, the enhancer
-      rows and the data panel all wear it) · the theme cards are the one loud element ── */
+.sbtn { font-size: 11px; font-weight: 600; color: #c4c4ca; background: rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; transition: background .14s, color .14s; }
+.sbtn:hover { background: rgba(255,255,255,0.11); color: #e6e6ea; }
+.panel.lite .sbtn { color: #2c2c33; background: rgba(0,0,0,0.05); }
+.panel.lite .sbtn:hover { background: rgba(0,0,0,0.09); color: #111; }
+/* ── the tw-* system: one quiet set of clothes for the Tweaks and Audio tabs (rows, switches,
+      sliders, pills, eyebrows, the pinned chip strip) · the theme cards are the one loud element ── */
 #ebody { padding: 0 14px 28px; }
-#ebody .tw-find { display: block; width: 100%; box-sizing: border-box; margin: 12px 0 8px; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12.5px; font-weight: 500; padding: 10px 12px 10px 34px; outline: 0; transition: background .14s, box-shadow .14s;
+#abody { padding: 0 14px 28px; }
+.panel .tw-find { display: block; width: 100%; box-sizing: border-box; margin: 12px 0 8px; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12.5px; font-weight: 500; padding: 10px 12px 10px 34px; outline: 0; transition: background .14s, box-shadow .14s;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%237c7c84' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/></svg>"); background-repeat: no-repeat; background-position: 12px center; }
-#ebody .tw-find::placeholder { color: #7c7c84; }
-#ebody .tw-find:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); }
-#ebody .tw-nav { position: sticky; top: 0; z-index: 3; display: flex; gap: 4px; margin: 0 -14px 4px; padding: 6px 14px 8px; transition: background .18s; }
-#ebody .tw-nav.stuck { background: rgba(19,20,24,0.84); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
-#ebody .tw-nav::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: rgba(255,255,255,0.06); opacity: 0; transition: opacity .18s; }
-#ebody .tw-nav.stuck::after { opacity: 1; }
-#ebody .tw-chip { flex: 1; min-width: 0; border: 0; border-radius: 99px; padding: 7px 2px; font: inherit; font-size: 11px; font-weight: 650; letter-spacing: .01em; color: #9a9aa2; background: rgba(255,255,255,0.05); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .14s, color .14s; }
-#ebody .tw-chip:hover { background: rgba(255,255,255,0.1); color: #e6e6ea; }
-#ebody .tw-chip.on { background: rgba(255,85,0,0.22); color: #ffb083; }
-#ebody .tw-chip.clear { flex: none; padding: 7px 12px; }
-#ebody .tw-seg[hidden] { display: none; }
-#ebody .tw-sec { display: flex; align-items: center; gap: 8px; font-size: 9.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #76767e; margin: 22px 2px 4px; }
-#ebody .tw-sec::before { content: ''; width: 10px; height: 2px; border-radius: 2px; flex: none; background: rgba(255,255,255,0.16); }
-#ebody .tw-seg > .tw-sec:first-child, #ebody .tw-shuf > .tw-sec:first-child { margin-top: 12px; }
-#ebody .tw-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid rgba(255,255,255,0.05); }
-#ebody .tw-row.stack { display: block; }
-#ebody .tw-txt { flex: 1; min-width: 0; }
-#ebody .tw-lab { font-size: 12.5px; color: #e6e6ea; line-height: 1.3; }
-#ebody .tw-desc { display: block; font-size: 10.5px; color: #7c7c84; line-height: 1.4; margin-top: 2px; }
-#ebody .tw-sw { position: relative; width: 38px; height: 22px; border-radius: 22px; border: 0; padding: 0; flex: none; cursor: pointer; background: rgba(255,255,255,0.16); transition: background .2s ease; }
-#ebody .tw-sw i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.35); transition: transform .2s cubic-bezier(.3,1.5,.5,1); }
-#ebody .tw-sw[aria-checked="true"] { background: #ff5500; }
-#ebody .tw-sw[aria-checked="true"] i { transform: translateX(16px); }
-#ebody .tw-sel { flex: none; max-width: 168px; background-color: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; cursor: pointer; text-overflow: ellipsis; }
-#ebody .tw-num, #ebody .tw-in { background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; outline: 0; transition: background .14s, box-shadow .14s; }
-#ebody .tw-num { flex: none; width: 66px; text-align: right; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
-#ebody .tw-num::-webkit-outer-spin-button, #ebody .tw-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-#ebody .tw-in { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; }
-#ebody .tw-in::placeholder, #ebody .tw-ta::placeholder { color: #6a6a72; }
-#ebody .tw-num:focus, #ebody .tw-in:focus, #ebody .tw-sel:focus, #ebody .tw-ta:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); outline: 0; }
-#ebody .tw-ta { display: block; width: 100%; box-sizing: border-box; min-height: 88px; margin-top: 8px; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace; padding: 10px 12px; resize: vertical; outline: 0; }
-#ebody .tw-rng { flex: 1; min-width: 60px; max-width: 130px; }
-#ebody .tw-val { flex: none; width: 40px; text-align: right; font-size: 11.5px; color: #86868e; font-variant-numeric: tabular-nums; }
-#ebody .tw-btn { flex: none; border: 0; border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; background: rgba(255,255,255,0.06); color: #c4c4ca; transition: background .14s, color .14s; white-space: nowrap; }
-#ebody .tw-btn:hover { background: rgba(255,255,255,0.11); color: #e6e6ea; }
-#ebody .tw-btn:disabled { opacity: .38; cursor: default; }
-#ebody .tw-btn.sm { padding: 6px 10px; font-size: 11px; border-radius: 8px; }
-#ebody .tw-btn.warn { color: #ffb083; }
-#ebody .tw-btns { display: flex; gap: 5px; flex: none; }
-#ebody .tw-color { width: 30px; height: 24px; border: 0; border-radius: 7px; background: none; padding: 0; cursor: pointer; flex: none; }
-#ebody .tw-color::-webkit-color-swatch-wrapper { padding: 0; }
-#ebody .tw-color::-webkit-color-swatch { border: 1px solid rgba(255,255,255,0.14); border-radius: 7px; }
+.panel .tw-find::placeholder { color: #7c7c84; }
+.panel .tw-find:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); }
+.panel .tw-nav { position: sticky; top: 0; z-index: 3; display: flex; gap: 4px; margin: 0 -14px 4px; padding: 6px 14px 8px; transition: background .18s; }
+.panel .tw-nav.stuck { background: rgba(19,20,24,0.84); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.panel .tw-nav::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: rgba(255,255,255,0.06); opacity: 0; transition: opacity .18s; }
+.panel .tw-nav.stuck::after { opacity: 1; }
+.panel .tw-chip { flex: 1; min-width: 0; border: 0; border-radius: 99px; padding: 7px 2px; font: inherit; font-size: 11px; font-weight: 650; letter-spacing: .01em; color: #9a9aa2; background: rgba(255,255,255,0.05); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .14s, color .14s; }
+.panel .tw-chip:hover { background: rgba(255,255,255,0.1); color: #e6e6ea; }
+.panel .tw-chip.on { background: rgba(255,85,0,0.22); color: #ffb083; }
+.panel .tw-chip.clear { flex: none; padding: 7px 12px; }
+.panel .tw-seg[hidden] { display: none; }
+.panel .tw-sec { display: flex; align-items: center; gap: 8px; font-size: 9.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #76767e; margin: 22px 2px 4px; }
+.panel .tw-sec::before { content: ''; width: 10px; height: 2px; border-radius: 2px; flex: none; background: rgba(255,255,255,0.16); }
+.panel .tw-seg > .tw-sec:first-child, .panel .tw-shuf > .tw-sec:first-child { margin-top: 12px; }
+.panel .tw-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+.panel .tw-row.stack { display: block; }
+.panel .tw-txt { flex: 1; min-width: 0; }
+.panel .tw-lab { font-size: 12.5px; color: #e6e6ea; line-height: 1.3; }
+.panel .tw-desc { display: block; font-size: 10.5px; color: #85858d; line-height: 1.4; margin-top: 2px; }
+.panel .tw-sw { position: relative; width: 38px; height: 22px; border-radius: 22px; border: 0; padding: 0; flex: none; cursor: pointer; background: rgba(255,255,255,0.16); transition: background .2s ease; }
+.panel .tw-sw i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.35); transition: transform .2s cubic-bezier(.3,1.5,.5,1); }
+.panel .tw-sw[aria-checked="true"] { background: #ff5500; }
+.panel .tw-sw[aria-checked="true"] i { transform: translateX(16px); }
+.panel .tw-sel { flex: none; max-width: 168px; background-color: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; cursor: pointer; text-overflow: ellipsis; }
+.panel .tw-num, .panel .tw-in { background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; outline: 0; transition: background .14s, box-shadow .14s; }
+.panel .tw-num { flex: none; width: 66px; text-align: right; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+.panel .tw-num::-webkit-outer-spin-button, .panel .tw-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.panel .tw-in { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; }
+.panel .tw-in::placeholder, .panel .tw-ta::placeholder { color: #6a6a72; }
+.panel .tw-num:focus, .panel .tw-in:focus, .panel .tw-sel:focus, .panel .tw-ta:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); outline: 0; }
+.panel .tw-ta { display: block; width: 100%; box-sizing: border-box; min-height: 88px; margin-top: 8px; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace; padding: 10px 12px; resize: vertical; outline: 0; }
+.panel .tw-rng { flex: 1; min-width: 60px; max-width: 130px; }
+.panel .tw-val { flex: none; width: 40px; text-align: right; font-size: 11.5px; color: #86868e; font-variant-numeric: tabular-nums; }
+.panel .tw-btn { flex: none; border: 0; border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; background: rgba(255,255,255,0.06); color: #c4c4ca; transition: background .14s, color .14s; white-space: nowrap; }
+.panel .tw-btn:hover { background: rgba(255,255,255,0.11); color: #e6e6ea; }
+.panel .tw-btn:disabled { opacity: .38; cursor: default; }
+.panel .tw-btn.sm { padding: 6px 10px; font-size: 11px; border-radius: 8px; }
+.panel .tw-btn.warn { color: #ffb083; }
+.panel .tw-btns { display: flex; gap: 5px; flex: none; }
+.panel .tw-color { width: 30px; height: 24px; border: 0; border-radius: 7px; background: none; padding: 0; cursor: pointer; flex: none; }
+.panel .tw-color::-webkit-color-swatch-wrapper { padding: 0; }
+.panel .tw-color::-webkit-color-swatch { border: 1px solid rgba(255,255,255,0.14); border-radius: 7px; }
 /* theme cards: the theme's own background and text, so the grid is a preview, not a legend */
-#ebody .tw-themes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 4px 0 12px; }
-#ebody .tw-card { display: block; border: 0; padding: 0; background: none; cursor: pointer; font: inherit; color: #9a9aa2; text-align: center; min-width: 0; }
-#ebody .tw-card i { display: flex; align-items: center; justify-content: center; height: 40px; border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); font: 700 14px/1 Georgia, 'Times New Roman', serif; letter-spacing: -.02em; transition: transform .16s ease, box-shadow .16s ease; }
-#ebody .tw-card b { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: .01em; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ebody .tw-card:hover i { transform: translateY(-1px); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2); }
-#ebody .tw-card.on { color: #e6e6ea; }
-#ebody .tw-card.on i { box-shadow: 0 0 0 2px #ff5500; }
-#ebody .tw-card.wide { grid-column: 1 / -1; }
-#ebody .tw-card.wide i { justify-content: flex-start; padding: 0 12px; gap: 5px; font: inherit; font-size: 12px; font-weight: 600; }
-#ebody .tw-card.wide i em { flex: 1; font-style: normal; text-align: left; }
-#ebody .tw-card.wide i span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18); }
-#ebody .tw-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 0 0 8px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 12px; }
-#ebody .tw-custom label { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #c4c4cc; cursor: pointer; }
-#ebody .tw-presets { display: flex; gap: 6px; margin: 0 0 12px; }
-#ebody .tw-presets .tw-btn { flex: 1; }
-#ebody .tw-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
-#ebody .tw-chips button { flex: 1 0 auto; min-width: 40px; white-space: nowrap; border: 0; border-radius: 8px; color: #c4c4ca; background: rgba(255,255,255,0.06); font: inherit; font-size: 11px; font-weight: 650; padding: 7px 6px; cursor: pointer; transition: background .14s, color .14s; }
-#ebody .tw-status { display: flex; align-items: center; gap: 9px; padding: 9px 11px; margin: 10px 0 2px; border-radius: 10px; background: rgba(255,255,255,0.04); font-size: 11px; color: #bdbdc6; }
-#ebody .tw-status i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-#ebody .tw-status span { flex: 1; min-width: 0; }
-#ebody .tw-dline { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: #e6e6ea; padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.05); }
-#ebody .tw-dline:first-child { border-top: 0; }
-#ebody .tw-dline .n { flex: 1; min-width: 0; }
-#ebody .tw-dline .z { font-variant-numeric: tabular-nums; color: #86868e; min-width: 58px; text-align: right; font-size: 11px; }
-#ebody .tw-bar { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); margin: 12px 0 6px; overflow: hidden; }
-#ebody .tw-bar i { display: block; height: 100%; border-radius: 4px; background: #ff5500; }
-#ebody .tw-note { font-size: 10.5px; color: #7c7c84; line-height: 1.45; }
-#ebody .tw-empty { text-align: center; color: #7c7c84; font-size: 12px; padding: 34px 0 10px; }
-#ebody .tw-chip:focus-visible, #ebody .tw-sw:focus-visible, #ebody .tw-btn:focus-visible, #ebody .tw-card:focus-visible, #ebody .tw-chips button:focus-visible, #ebody .tw-color:focus-visible { outline: 2px solid var(--acc, #ff5500); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { #ebody .tw-sw, #ebody .tw-sw i, #ebody .tw-card i, #ebody .tw-chip, #ebody .tw-btn { transition: none !important; } }
+.panel .tw-themes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 4px 0 12px; }
+.panel .tw-card { display: block; border: 0; padding: 0; background: none; cursor: pointer; font: inherit; color: #9a9aa2; text-align: center; min-width: 0; }
+.panel .tw-card i { display: flex; align-items: center; justify-content: center; height: 40px; border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); font: 700 14px/1 Georgia, 'Times New Roman', serif; letter-spacing: -.02em; transition: transform .16s ease, box-shadow .16s ease; }
+.panel .tw-card b { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: .01em; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel .tw-card:hover i { transform: translateY(-1px); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2); }
+.panel .tw-card.on { color: #e6e6ea; }
+.panel .tw-card.on i { box-shadow: 0 0 0 2px #ff5500; }
+.panel .tw-card.wide { grid-column: 1 / -1; }
+.panel .tw-card.wide i { justify-content: flex-start; padding: 0 12px; gap: 5px; font: inherit; font-size: 12px; font-weight: 600; }
+.panel .tw-card.wide i em { flex: 1; font-style: normal; text-align: left; }
+.panel .tw-card.wide i span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18); }
+.panel .tw-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 0 0 8px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 12px; }
+.panel .tw-custom label { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #c4c4cc; cursor: pointer; }
+.panel .tw-presets { display: flex; gap: 6px; margin: 0 0 12px; }
+.panel .tw-presets .tw-btn { flex: 1; }
+.panel .tw-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+.panel .tw-chips button { flex: 1 0 auto; min-width: 40px; white-space: nowrap; border: 0; border-radius: 8px; color: #c4c4ca; background: rgba(255,255,255,0.06); font: inherit; font-size: 11px; font-weight: 650; padding: 7px 6px; cursor: pointer; transition: background .14s, color .14s; }
+.panel .tw-status { display: flex; align-items: center; gap: 9px; padding: 9px 11px; margin: 10px 0 2px; border-radius: 10px; background: rgba(255,255,255,0.04); font-size: 11px; color: #bdbdc6; }
+.panel .tw-status i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.panel .tw-status span { flex: 1; min-width: 0; }
+.panel .tw-dline { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: #e6e6ea; padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+.panel .tw-dline:first-child { border-top: 0; }
+.panel .tw-dline .n { flex: 1; min-width: 0; }
+.panel .tw-dline .z { font-variant-numeric: tabular-nums; color: #86868e; min-width: 58px; text-align: right; font-size: 11px; }
+.panel .tw-bar { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); margin: 12px 0 6px; overflow: hidden; }
+.panel .tw-bar i { display: block; height: 100%; border-radius: 4px; background: #ff5500; }
+.panel .tw-note { font-size: 10.5px; color: #85858d; line-height: 1.5; }
+.panel .tw-empty { text-align: center; color: #7c7c84; font-size: 12px; padding: 34px 0 10px; }
+.panel .tw-chip:focus-visible, .panel .tw-sw:focus-visible, .panel .tw-btn:focus-visible, .panel .tw-card:focus-visible, .panel .tw-chips button:focus-visible, .panel .tw-color:focus-visible { outline: 2px solid var(--acc, #ff5500); outline-offset: 2px; }
+.panel .tw-head { display: flex; align-items: center; gap: 10px; margin: 6px 0 12px; }
+.panel .tw-htx { flex: 1; min-width: 0; }
+.panel .tw-title { font-size: 17px; font-weight: 700; letter-spacing: -.4px; color: #fff; }
+.panel .tw-subline { font-size: 11px; color: #85858d; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel .tw-stage { position: relative; border-radius: 14px; background: rgba(255,255,255,0.035); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); overflow: hidden; }
+.panel .tw-srow { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
+.panel .tw-srow .sxr { flex: 1; min-width: 0; }
+.panel .tw-slab { flex: 0 0 96px; min-width: 0; font-size: 12.5px; color: #c4c4cc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel .tw-sval { flex: none; width: 46px; text-align: right; font-size: 11.5px; color: #86868e; font-variant-numeric: tabular-nums; }
+.panel .tw-line { display: flex; gap: 8px; align-items: center; }
+.panel .tw-sel.grow { flex: 1; max-width: none; }
+.panel .tw-field { flex: 1; min-width: 0; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; outline: 0; }
+.panel .tw-field:focus { background: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); }
+.panel .tw-foot { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+@media (prefers-reduced-motion: reduce) { .panel .tw-sw, .panel .tw-sw i, .panel .tw-card i, .panel .tw-chip, .panel .tw-btn { transition: none !important; } }
 
 /* ── mini lyric bar: the current line floats above the player even with
       the panel closed; click it to open the full panel ── */
@@ -8383,6 +8400,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['♫', 'The Audio tab in the same clothes', 'Five chips (EQ, Play, Tone, Level, Space) stay pinned while you scroll and follow where you are. Every pill, select and slider row matches the Tweaks tab; the Stats pills too, and they read on the light panel now.'],
           ['⚙', 'A cleaner Tweaks tab', 'Six groups (Shuffle, Look, Hide, Player, More, Data) behind a strip of chips that stays put while you scroll. Themes are cards you can read before you pick one, the search reaches every setting, and backup, restore and reset live under Data.'],
           ['⌥', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists, Enter plays, O opens, L likes. Tracks you already played carry a small ✓. Four more Chrome-wide commands (seek, mute, jump to the playing tab) wait for keys at chrome://extensions/shortcuts.'],
           ['文', 'Lyrics in your language, pronounced', 'Lyrics ⋯ menu → Translation language & romanization: twenty languages to pick from, and a romanized line under Japanese, Korean, Chinese, Cyrillic, Arabic, Greek, Hebrew, Thai or Hindi lyrics. Text-only sheets are quietly re-checked for a synced version once a week.'],
@@ -15123,45 +15141,48 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     toast('Audio reset · track loudness memory cleared');
   }
 
+  // the pinned chip strip (Tweaks, Audio) earns its backdrop only once the scroll has pinned it: one
+  // listener per tab body, reading whatever strip the body holds now
+  function twPinWatch(container) {
+    if (container.twPinned) return; container.twPinned = true;
+    container.addEventListener('scroll', () => { try { const n = container.querySelector('.tw-nav'); if (!n) return; n.classList.toggle('stuck', container.scrollTop > 0 && n.getBoundingClientRect().top <= container.getBoundingClientRect().top + (parseFloat(getComputedStyle(container).paddingTop) || 0) + 0.5); } catch (e) {} }, { passive: true });
+  }
   function audioRender(host) {
     try {
       if (!host) return;
       audioHost = host;
       ensureEqBands();
       host.replaceChildren();
-      host.style.padding = '16px 18px 26px';
+      host.style.padding = '';   // #abody's own padding
+      host.style.webkitMaskImage = 'none'; host.style.maskImage = 'none';   // no edge fade under a pinned strip
       const ACC = '#ff5500';
       const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
       // one clean switch style, shared by EQ / Enhance / Loudness / Fade
       const makeSwitch = (get, toggle, name) => {
-        const sw = D.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch');
+        const sw = D.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.className = 'tw-sw';
         if (name) sw.setAttribute('aria-label', name);
-        sw.style.cssText = 'position:relative;width:38px;height:22px;border-radius:22px;border:0;cursor:pointer;flex:none;padding:0;transition:background .2s ease';
-        const kn = D.createElement('span'); kn.style.cssText = 'position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s cubic-bezier(.3,1.5,.5,1);box-shadow:0 1px 2px rgba(0,0,0,.35)';
-        sw.appendChild(kn);
-        const paint = () => { const on = !!get(); sw.style.background = on ? ACC : 'rgba(255,255,255,.16)'; kn.style.transform = on ? 'translateX(16px)' : 'none'; sw.setAttribute('aria-checked', String(on)); };
+        sw.appendChild(D.createElement('i'));
+        const paint = () => sw.setAttribute('aria-checked', String(!!get()));
         paint(); sw.addEventListener('click', () => { toggle(); paint(); }); sw._paint = paint; return sw;
       };
       // one clean slider row: label · track · value
       const sliderRow = (label, mn, mx, st, get, set, fmt, resetTo) => {
-        const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0';
-        const l = D.createElement('span'); l.textContent = label; l.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
-        const r = D.createElement('input'); r.type = 'range'; r.min = mn; r.max = mx; r.step = st; r.value = get(); r.className = 'sxr'; r.style.cssText = 'flex:1'; r.setAttribute('aria-label', label);
-        const v = D.createElement('span'); v.style.cssText = 'flex:none;width:46px;text-align:right;font-size:11.5px;color:#86868e;font-variant-numeric:tabular-nums';
+        const row = D.createElement('div'); row.className = 'tw-srow';
+        const l = D.createElement('span'); l.textContent = label; l.className = 'tw-slab';
+        const r = D.createElement('input'); r.type = 'range'; r.min = mn; r.max = mx; r.step = st; r.value = get(); r.className = 'sxr'; r.setAttribute('aria-label', label);
+        const v = D.createElement('span'); v.className = 'tw-sval';
         const paint = () => { const cur = +r.value; const pct = (cur - mn) / (mx - mn) * 100; r.style.background = 'linear-gradient(90deg,' + ACC + ' ' + pct + '%,rgba(255,255,255,.12) ' + pct + '%)'; v.textContent = fmt(cur); r.setAttribute('aria-valuetext', v.textContent); };
         paint(); r.addEventListener('input', () => { set(+r.value); paint(); }); r._paint = paint;
         if (resetTo != null) { l.title = label + ' · double-click resets'; l.style.cursor = 'default'; l.addEventListener('dblclick', () => { try { r.value = resetTo; set(+r.value); paint(); } catch (e) {} }); }
         row.append(l, r, v); return { row, input: r, paint };
       };
-      const sectionLabel = (txt) => { const s = D.createElement('div'); s.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#76767e;margin:22px 2px 6px'; const d = D.createElement('span'); d.style.cssText = 'width:10px;height:2px;border-radius:2px;flex:none;background:rgba(255,255,255,.16)'; const t = D.createElement('span'); t.textContent = txt; s.append(d, t); return s; };
-      // the preset select's clothes, shared by every select, the preset-name input and the paste boxes
-      const SEL_CSS = 'flex:1;min-width:0;background-color:rgba(255,255,255,.05);border:0;border-radius:10px;color:#e6e6ea;font:500 12.5px inherit;padding:10px 12px;cursor:pointer';
+      const sectionLabel = (txt) => { const s = D.createElement('div'); s.className = 'tw-sec'; s.textContent = txt; return s; };
       // a small select: opts = [[value, label], …]; set() receives the chosen value string
-      const mkSel = (opts, get, set) => { const s = D.createElement('select'); s.className = 'sxsel'; s.style.cssText = SEL_CSS; for (const o of opts) { const op = new Option(o[1], String(o[0])); op.style.color = '#111'; s.add(op); } s.value = String(get()); s.addEventListener('change', () => { try { set(s.value); } catch (e) {} }); return s; };
+      const mkSel = (opts, get, set) => { const s = D.createElement('select'); s.className = 'sxsel tw-sel grow'; for (const o of opts) { const op = new Option(o[1], String(o[0])); op.style.color = '#111'; s.add(op); } s.value = String(get()); s.addEventListener('change', () => { try { set(s.value); } catch (e) {} }); return s; };
       // a paste area (AutoEQ text, settings JSON), hidden until its button opens it
-      const pasteBox = (ph) => { const t = D.createElement('textarea'); t.placeholder = ph || ''; t.spellcheck = false; t.style.cssText = SEL_CSS + ';height:96px;resize:vertical;cursor:text;display:none;width:100%;box-sizing:border-box;margin-top:8px;font-family:inherit;outline:0'; return t; };
+      const pasteBox = (ph) => { const t = D.createElement('textarea'); t.className = 'tw-ta'; t.placeholder = ph || ''; t.spellcheck = false; t.style.cssText = 'display:none;height:96px;resize:vertical;margin-top:8px'; return t; };
 
-      const mkBtn = (txt) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.style.cssText = 'flex:none;border:0;border-radius:10px;padding:10px 14px;font:600 11.5px inherit;cursor:pointer;background:rgba(255,255,255,.06);color:#c4c4ca;transition:background .14s'; b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.11)'; }); b.addEventListener('mouseleave', () => { b.style.background = 'rgba(255,255,255,.06)'; }); return b; };
+      const mkBtn = (txt) => { const b = D.createElement('button'); b.type = 'button'; b.textContent = txt; b.className = 'tw-btn'; return b; };
       // everything after the canvas lives in one body div, dimmed while comparing (2.3)
       const bodyEl = D.createElement('div'); bodyEl.style.cssText = 'transition:opacity .15s';
       // rows that mirror CFG (the chips, the tone / stereo sliders and switches) re-sync on
@@ -15170,10 +15191,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const syncSlider = (r, get) => () => { const v = get(); if (String(r.input.value) !== String(v)) r.input.value = v; r.paint(); };
       const num = (k, lo, hi) => { const v = +CFG[k]; return isFinite(v) ? cl(v, lo, hi) : 0; };
       const toggleRow = (label, desc, key, guard) => {   // guard() === false keeps the switch where it is
-        const row = D.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.05)';
-        const tx = D.createElement('div'); tx.style.cssText = 'flex:1';
-        const t1 = D.createElement('div'); t1.style.cssText = 'font-size:12.5px;color:#e6e6ea'; t1.textContent = label;
-        const t2 = D.createElement('div'); t2.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:2px'; t2.textContent = desc;
+        const row = D.createElement('div'); row.className = 'tw-row';
+        const tx = D.createElement('div'); tx.className = 'tw-txt';
+        const t1 = D.createElement('div'); t1.className = 'tw-lab'; t1.textContent = label;
+        const t2 = D.createElement('div'); t2.className = 'tw-desc'; t2.textContent = desc;
         tx.append(t1, t2);
         const sw = makeSwitch(() => CFG[key], () => { if (guard && guard() === false) return; CFG[key] = !CFG[key]; save(); applyFx(); }, label);
         row.append(tx, sw); bodyEl.appendChild(row); return { row, sw, desc: t2 };
@@ -15181,9 +15202,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       // ── header: title + the live meter line (2.6), Compare (2.3), the EQ switch ──
       const HINT = '10-band · drag the curve · double-click resets';
-      const hd = D.createElement('div'); hd.style.cssText = 'display:flex;align-items:center;margin-bottom:14px';
-      const htx = D.createElement('div'); htx.style.cssText = 'flex:1;min-width:0';
-      htx.innerHTML = '<div style="font-size:17px;font-weight:700;letter-spacing:-.4px;color:#fff">Equalizer</div><div style="font-size:11px;color:#7c7c84;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>';
+      const hd = D.createElement('div'); hd.className = 'tw-head';
+      const htx = D.createElement('div'); htx.className = 'tw-htx';
+      htx.innerHTML = '<div class="tw-title">Equalizer</div><div class="tw-subline"></div>';
       const subEl = htx.children[1];
       // the sub-line: the Compare state while comparing; the meter segments while loudness,
       // boost or the clip guard is in play (LUFS / applied only with loudness on, boost only
@@ -15206,12 +15227,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const paintSub = () => { const t = subText(); if (t !== lastSub) { lastSub = t; subEl.textContent = t; } };
       // Compare: hold to hear the original, a quick click keeps comparing until the next
       // click (or the tab closes). Tint + body dim make it obvious the switches do not apply.
-      const cmp = mkBtn('Compare'); cmp.style.padding = '7px 11px'; cmp.style.marginRight = '10px'; cmp.style.userSelect = 'none'; cmp.style.touchAction = 'none';
+      const cmp = mkBtn('Compare'); cmp.style.userSelect = 'none'; cmp.style.touchAction = 'none';
       cmp.title = 'Hold to hear the original · click to keep comparing';
-      const tintCmp = (v) => { cmp.style.background = v ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; cmp.style.color = v ? '#ffb083' : '#c4c4ca'; cmp.setAttribute('aria-pressed', String(!!v)); };
-      // mkBtn's own hover handlers run first; these keep the tint while comparing
-      cmp.addEventListener('mouseenter', () => { if (fxBypass) tintCmp(true); });
-      cmp.addEventListener('mouseleave', () => { if (fxBypass) tintCmp(true); });
+      const tintCmp = (v) => { cmp.style.background = v ? 'rgba(255,85,0,.22)' : ''; cmp.style.color = v ? '#ffb083' : ''; cmp.setAttribute('aria-pressed', String(!!v)); };   // un-tinted, the class dresses it (and its hover works)
       let cmpDown = 0;
       cmp.addEventListener('pointerdown', (ev) => { if (ev.button) return; cmpDown = Date.now(); setBypass(true); });
       const cmpUp = () => {
@@ -15227,7 +15245,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       hd.append(htx, cmp, eqSw); host.appendChild(hd);
 
       // ── EQ curve stage (flat, calm) ──
-      const stage = D.createElement('div'); stage.style.cssText = 'position:relative;border-radius:14px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);overflow:hidden';
+      const stage = D.createElement('div'); stage.className = 'tw-stage';
       const canvas = D.createElement('canvas'); canvas.width = 880; canvas.height = 380; canvas.style.cssText = 'display:block;width:100%;height:188px;touch-action:none;cursor:pointer';
       stage.appendChild(canvas); host.appendChild(stage);
       host.appendChild(bodyEl);
@@ -15241,11 +15259,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       // ── presets (2.27): the select mirrors the curve (blank once it is edited), Save is an inline row ──
       bodyEl.appendChild(sectionLabel('Preset'));
-      const pRow = D.createElement('div'); pRow.style.cssText = 'display:flex;gap:8px;align-items:center';
-      const sel = D.createElement('select'); sel.className = 'sxsel'; sel.style.cssText = SEL_CSS;
+      const pRow = D.createElement('div'); pRow.className = 'tw-line';
+      const sel = D.createElement('select'); sel.className = 'sxsel tw-sel grow';
       const fillSel = () => { sel.replaceChildren(); sel.add(new Option('Choose a preset…', '')); const og1 = D.createElement('optgroup'); og1.label = 'Built-in'; for (const k of Object.keys(EQ_PRESETS)) { const o = new Option(k, 'b:' + k); o.style.color = '#111'; og1.appendChild(o); } sel.add(og1); const keys = Object.keys(customPresets()).filter(eqPresetNameOk); if (keys.length) { const og2 = D.createElement('optgroup'); og2.label = 'My presets'; for (const k of keys) { const o = new Option(k, 'c:' + k); o.style.color = '#111'; og2.appendChild(o); } sel.add(og2); } sel.value = ''; };
       fillSel();
-      const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '10px 0'; delBtn.style.width = '36px'; delBtn.title = 'Delete preset';
+      const delBtn = mkBtn('✕'); delBtn.style.display = 'none'; delBtn.style.padding = '8px 0'; delBtn.style.width = '34px'; delBtn.title = 'Delete preset';
       // dirty state: the select shows the preset the curve equals, or nothing once a band or the pre-amp moved
       const syncSel = () => { try { const v = matchEqPreset(); if (sel.value !== v) sel.value = v; delBtn.style.display = (v && v.charAt(0) === 'c') ? '' : 'none'; } catch (e) {} };
       const repaintAll = () => { eqSw._paint(); try { pre.input.value = CFG.eqPreamp | 0; } catch (e) {} pre.paint(); syncSel(); for (const f of liveSync) { try { f(); } catch (e) {} } };
@@ -15256,7 +15274,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       delBtn.addEventListener('click', () => { const v = sel.value; if (!v || v.charAt(0) !== 'c') return; const name = v.slice(2); const cu = Object.assign({}, customPresets()); delete cu[name]; setCustom(cu); toast('Removed “' + name + '”'); });
       // inline Save: a hidden name row under the preset row (no window.prompt); Enter = OK, Escape = Cancel
       const nRow = D.createElement('div'); nRow.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:8px';
-      const nIn = D.createElement('input'); nIn.type = 'text'; nIn.maxLength = 24; nIn.placeholder = 'Preset name'; nIn.spellcheck = false; nIn.style.cssText = SEL_CSS + ';cursor:text;font-family:inherit;outline:0';
+      const nIn = D.createElement('input'); nIn.type = 'text'; nIn.maxLength = 24; nIn.placeholder = 'Preset name'; nIn.spellcheck = false; nIn.className = 'tw-field';
       const okBtn = mkBtn('OK'), noBtn = mkBtn('Cancel');
       const showName = (on) => { nRow.style.display = on ? 'flex' : 'none'; if (on) { nIn.value = ''; try { nIn.focus(); } catch (e) {} } };
       const commitName = () => {
@@ -15278,23 +15296,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ── listening on (2.13): three chips, one tap applies a bundle; the lit one is only a
       //    memory of which bundle was tapped, cleared by any edit of what it set ──
       bodyEl.appendChild(sectionLabel('Listening on'));
-      const chipRow = D.createElement('div'); chipRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+      const chipRow = D.createElement('div'); chipRow.className = 'tw-line';
       const chips = [['headphones', 'Headphones'], ['laptop', 'Laptop'], ['speakers', 'Speakers']].map((c) => {
         const b = mkBtn(c[1]); b.style.flex = '1'; b.style.padding = '8px 0';
-        const tint = () => { const lit = CFG.listenOn === c[0]; b.style.background = lit ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; b.style.color = lit ? '#ffb083' : '#c4c4ca'; };
-        // mkBtn's own hover handlers run first; these keep the tint on the lit chip
-        b.addEventListener('mouseenter', () => { if (CFG.listenOn === c[0]) tint(); });
-        b.addEventListener('mouseleave', () => { if (CFG.listenOn === c[0]) tint(); });
+        const tint = () => { const lit = CFG.listenOn === c[0]; b.style.background = lit ? 'rgba(255,85,0,.22)' : ''; b.style.color = lit ? '#ffb083' : ''; };   // un-lit: the class, so hover works
         b.addEventListener('click', () => { applyListenOn(c[0]); repaintAll(); });
         b._paint = tint; tint(); chipRow.appendChild(b); return b;
       });
       bodyEl.appendChild(chipRow);
       liveSync.push(() => chips.forEach((b) => b._paint()));
       // ── scenes: the whole tab under a name ──
-      const scRow = D.createElement('div'); scRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px';
-      const scSel = D.createElement('select'); scSel.className = 'sel'; scSel.setAttribute('aria-label', 'Audio scenes'); scSel.style.cssText = 'flex:1;min-width:0;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:inherit;font:inherit;font-size:11.5px;padding:7px 8px';
-      const scSave = mkBtn('Save scene…'); scSave.style.padding = '8px 12px'; scSave.title = 'Save every Audio setting under a name';
-      const scDel = mkBtn('Delete…'); scDel.style.padding = '8px 12px'; scDel.title = 'Delete a saved scene';
+      const scRow = D.createElement('div'); scRow.className = 'tw-line'; scRow.style.marginTop = '8px';
+      const scSel = D.createElement('select'); scSel.className = 'sxsel tw-sel grow'; scSel.setAttribute('aria-label', 'Audio scenes');
+      const scSave = mkBtn('Save scene…'); scSave.title = 'Save every Audio setting under a name';
+      const scDel = mkBtn('Delete…'); scDel.title = 'Delete a saved scene';
       const scPaint = () => { const names = sceneNames(); scSel.replaceChildren(); const o0 = D.createElement('option'); o0.value = ''; o0.textContent = names.length ? 'Scenes · pick one to recall' : 'No scenes saved yet'; scSel.appendChild(o0); for (const n of names) { const o = D.createElement('option'); o.value = n; o.textContent = n; scSel.appendChild(o); } scDel.style.display = names.length ? '' : 'none'; };
       scSel.addEventListener('change', () => { if (scSel.value) { sceneLoad(scSel.value); scSel.value = ''; repaintAll(); } });
       scSave.addEventListener('click', () => { let n = ''; try { n = W.prompt('Name this scene (every Audio setting is saved):', ''); } catch (e) { n = ''; } if (n && sceneSave(n)) scPaint(); });
@@ -15310,13 +15325,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       spdR.row.firstChild.title = 'Playback speed · 0.5× – 2× · double-click resets';
       bodyEl.appendChild(spdR.row);
       // tempo chips: the same six stops the player-bar pill cycles through; the lit one is the current speed
-      const tempoRow = D.createElement('div'); tempoRow.style.cssText = 'display:flex;gap:6px';
+      const tempoRow = D.createElement('div'); tempoRow.style.cssText = 'display:flex;gap:6px;margin-top:2px';
       const tempoChips = [50, 75, 100, 125, 150, 200].map((v) => {
         const b = mkBtn((v / 100) + '×'); b.style.flex = '1'; b.style.padding = '8px 0';
-        const tint = () => { const lit = (CFG.speed | 0) === v; b.style.background = lit ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; b.style.color = lit ? '#ffb083' : '#c4c4ca'; };
-        // mkBtn's own hover handlers run first; these keep the tint on the lit chip
-        b.addEventListener('mouseenter', () => { if ((CFG.speed | 0) === v) tint(); });
-        b.addEventListener('mouseleave', () => { if ((CFG.speed | 0) === v) tint(); });
+        const tint = () => { const lit = (CFG.speed | 0) === v; b.style.background = lit ? 'rgba(255,85,0,.22)' : ''; b.style.color = lit ? '#ffb083' : ''; };
         b.addEventListener('click', () => { setSpeed(v); try { spdR.input.value = v; } catch (e) {} spdR.paint(); paintSpeed(); });
         b._paint = tint; tint(); tempoRow.appendChild(b); return b;
       });
@@ -15330,17 +15342,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // reverb (WP10) + the "Slowed + reverb" chip: speed 85 · pitch follows speed · reverb 25, lit while all three hold; a second tap undoes it
       const rvR = sliderRow('Reverb', 0, 100, 5, () => num('reverbAmt', 0, 100), (x) => { CFG.reverbAmt = cl(x | 0, 0, 100); saveSoon(); applyFx(); }, (x) => ((x | 0) ? (x | 0) + '%' : 'Off'), 0);
       rvR.row.firstChild.title = 'A little room around the track · double-click resets'; bodyEl.appendChild(rvR.row);
-      const slowRow = D.createElement('div'); slowRow.style.cssText = 'display:flex;gap:6px';
-      const slowChip = mkBtn('Slowed + reverb'); slowChip.style.padding = '8px 14px';
+      const slowRow = D.createElement('div'); slowRow.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+      const slowChip = mkBtn('Slowed + reverb');
       const slowOn = () => (CFG.speed | 0) === 85 && !!CFG.vinylMode && (CFG.reverbAmt | 0) === 25;
-      const tintSlow = () => { const lit = slowOn(); slowChip.style.background = lit ? 'rgba(255,85,0,.22)' : 'rgba(255,255,255,.06)'; slowChip.style.color = lit ? '#ffb083' : '#c4c4ca'; };
-      slowChip.addEventListener('mouseenter', () => { if (slowOn()) tintSlow(); }); slowChip.addEventListener('mouseleave', () => { if (slowOn()) tintSlow(); });
+      const tintSlow = () => { const lit = slowOn(); slowChip.style.background = lit ? 'rgba(255,85,0,.22)' : ''; slowChip.style.color = lit ? '#ffb083' : ''; };
       slowChip.addEventListener('click', () => {
         const lit = slowOn(); CFG.vinylMode = !lit; CFG.reverbAmt = lit ? 0 : 25; setSpeed(lit ? 100 : 85); save(); applyFx();
         try { spdR.input.value = CFG.speed; } catch (e) {} spdR.paint(); paintSpeed(); toast(lit ? 'Slowed + reverb off' : 'Slowed + reverb · 0.85×, pitch follows, a little room');
       });
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
-      const bpmLine = D.createElement('div'); bpmLine.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:8px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px'; bodyEl.appendChild(bpmLine);
+      const bpmLine = D.createElement('div'); bpmLine.className = 'tw-note'; bpmLine.style.cssText = 'margin-top:8px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px'; bodyEl.appendChild(bpmLine);
       const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); bpmLine.append(bpmTxt, bpmUnlock);
       const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); if (bpmTxt.textContent !== t) bpmTxt.textContent = t; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; };
       paintBpm(); liveSync.push(paintBpm);
@@ -15389,9 +15400,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       // ── enhance ──
       bodyEl.appendChild(sectionLabel('Enhance'));
-      const enhHead = D.createElement('div'); enhHead.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)';
-      const enhTx = D.createElement('div'); enhTx.style.cssText = 'flex:1';
-      enhTx.innerHTML = '<div style="font-size:12.5px;color:#e6e6ea">Enhance audio</div><div style="font-size:10.5px;color:#7c7c84;margin-top:2px">Clarity, warmth &amp; punch — level-matched, no loudness trick</div>';
+      const enhHead = D.createElement('div'); enhHead.className = 'tw-row';
+      const enhTx = D.createElement('div'); enhTx.className = 'tw-txt';
+      enhTx.innerHTML = '<div class="tw-lab">Enhance audio</div><div class="tw-desc">Clarity, warmth &amp; punch — level-matched, no loudness trick</div>';
       const intR = sliderRow('Intensity', 0, 100, 5, () => CFG.enhanceAmt | 0, (x) => { CFG.enhanceAmt = x | 0; if (!CFG.enhanceOn) { CFG.enhanceOn = true; enhSw._paint(); intR.row.style.opacity = '1'; } saveSoon(); applyFx(); }, (x) => (x | 0) + '%', 50);
       const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; }, 'Enhance audio');
       enhHead.append(enhTx, enhSw); bodyEl.appendChild(enhHead);
@@ -15403,8 +15414,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // remembered); the Target select re-applies the gain at once and, like Intensity, wakes the switch
       const LOUD_DESC = 'Even out quiet & loud tracks';
       const loudRow = toggleRow('Loudness normalize', LOUD_DESC, 'loudnessOn');
-      const tgRow = D.createElement('div'); tgRow.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0;transition:opacity .15s';
-      const tgL = D.createElement('span'); tgL.textContent = 'Target'; tgL.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
+      const tgRow = D.createElement('div'); tgRow.className = 'tw-srow'; tgRow.style.transition = 'opacity .15s';
+      const tgL = D.createElement('span'); tgL.textContent = 'Target'; tgL.className = 'tw-slab';
       tgL.title = 'Quiet −18 · Normal −14 · Loud −11 LUFS';
       const paintTg = () => { tgRow.style.opacity = CFG.loudnessOn ? '1' : '.45'; };
       const tgSel = mkSel([['-18', 'Quiet'], ['-14', 'Normal'], ['-11', 'Loud']], () => ([-18, -14, -11].indexOf(CFG.loudTarget | 0) >= 0 ? CFG.loudTarget | 0 : -14),
@@ -15444,8 +15455,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       wR.row.lastChild.style.cssText += VAL_WIDE; bodyEl.appendChild(wR.row);
       // crossfeed (2.16) + its Mode select: like the loudness Target, choosing a mode wakes the switch
       const cfRow = toggleRow('Crossfeed', 'Headphones sound like speakers in a room · less ping-pong fatigue', 'crossfeedOn');
-      const mdRow = D.createElement('div'); mdRow.style.cssText = 'display:flex;align-items:center;gap:14px;padding:10px 0;transition:opacity .15s';
-      const mdL = D.createElement('span'); mdL.textContent = 'Mode'; mdL.style.cssText = 'flex:none;width:86px;font-size:12.5px;color:#c4c4cc';
+      const mdRow = D.createElement('div'); mdRow.className = 'tw-srow'; mdRow.style.transition = 'opacity .15s';
+      const mdL = D.createElement('span'); mdL.textContent = 'Mode'; mdL.className = 'tw-slab';
       mdL.title = 'How much of each side reaches the other ear · Subtle 9.5 · Natural 6 · Strong 4.5 dB below direct';
       const CF_MODES = ['subtle', 'natural', 'strong'];
       const cfMode = () => (CF_MODES.indexOf(CFG.crossfeedMode) >= 0 ? CFG.crossfeedMode : 'natural');
@@ -15498,10 +15509,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       paintPeq(); liveSync.push(paintPeq);
 
       // ── footer (2.22): Copy / Paste / Reset all audio, then the engine footnote (2.24) ──
-      const ft = D.createElement('div'); ft.style.cssText = 'display:flex;gap:8px;margin-top:18px';
+      const ft = D.createElement('div'); ft.className = 'tw-foot';
       const cpB = mkBtn('Copy settings'), psB = mkBtn('Paste settings'), rsB = mkBtn('Reset all audio');
       cpB.title = 'Every audio setting + the per-track loudness memory, as JSON'; psB.title = 'The JSON from Copy settings, or an AutoEQ profile'; rsB.title = 'Every audio setting back to its default · saved presets stay';
-      for (const b of [cpB, psB, rsB]) { b.style.flex = '1 1 0'; b.style.minWidth = '0'; b.style.padding = '10px 6px'; b.style.whiteSpace = 'nowrap'; }   // three across the ~396 px body
+      for (const b of [cpB, psB, rsB]) { b.style.flex = '1 1 auto'; b.style.minWidth = '0'; b.style.whiteSpace = 'nowrap'; }   // three across when they fit, the last one wraps otherwise
       ft.append(cpB, psB, rsB); bodyEl.appendChild(ft);
       const psUi = pasteUi('Paste the JSON from Copy settings here (an AutoEQ profile works too)', (t) => importAudioText(t));
       cpB.addEventListener('click', () => { try { clip(JSON.stringify(exportAudio()), 'Audio settings copied'); } catch (e) {} });
@@ -15518,10 +15529,34 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try { out = Math.max(0, ((SUITE.audioLatency ? SUITE.audioLatency() : sceLatMs) | 0) - fx); } catch (e) { out = sceLatMs | 0; }
         return Math.round(sr / 1000) + ' kHz · ' + (out + fx) + ' ms delay (' + out + ' ms output + ' + fx + ' ms effects) · ' + NOTE_TAIL;
       };
-      const note = D.createElement('div'); note.style.cssText = 'margin-top:20px;font-size:10px;color:#67676f;line-height:1.5';
+      const note = D.createElement('div'); note.className = 'tw-note'; note.style.marginTop = '16px';
       let lastNote = '';
       const paintNote = () => { const t = noteText(); if (t !== lastNote) { lastNote = t; note.textContent = t; } };
       paintNote(); bodyEl.appendChild(note);
+
+      // ── the jump strip: five chips above the header that scroll to a section and follow the scroll ──
+      const nav = D.createElement('nav'); nav.className = 'tw-nav'; nav.setAttribute('aria-label', 'Audio sections');
+      const secEl = (t) => [...bodyEl.querySelectorAll('.tw-sec')].find((s) => s.textContent === t);
+      const jumps = [['EQ', hd], ['Play', secEl('Playback')], ['Tone', secEl('Tone')], ['Level', secEl('Loudness & dynamics')], ['Space', secEl('Stereo')]].filter((j) => j[1]);
+      const jumpBtns = jumps.map(([name, target]) => {
+        const b = D.createElement('button'); b.type = 'button'; b.className = 'tw-chip'; b.textContent = name;
+        b.addEventListener('click', () => {
+          let smooth = true; try { smooth = !W.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+          const top = target === hd ? 0 : target.offsetTop - nav.offsetHeight - 8;
+          try { host.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' }); } catch (e) { host.scrollTop = Math.max(0, top); }
+        });
+        nav.appendChild(b); return b;
+      });
+      const paintJump = () => {
+        const y = host.scrollTop + nav.offsetHeight + 40; let cur = 0;
+        jumps.forEach((j, i) => { if (j[1] !== hd && j[1].offsetTop <= y) cur = i; });
+        if (host.scrollTop + host.clientHeight >= host.scrollHeight - 2) cur = jumps.length - 1;   // at the very bottom the last section is the one on screen
+        jumpBtns.forEach((b, i) => { b.classList.toggle('on', i === cur); if (i === cur) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); });
+      };
+      host.insertBefore(nav, hd); paintJump();
+      if (host.twJump) { try { host.removeEventListener('scroll', host.twJump); } catch (e) {} }   // one follower per body, not one per render
+      host.twJump = paintJump; host.addEventListener('scroll', paintJump, { passive: true });
+      twPinWatch(host);
 
       // ── the live numbers: output-tap reads at 10 Hz while loudness is off (the loudness
       //    loop reads them itself otherwise); sub-line + guard suffix repainted at ~5 Hz ──
@@ -16337,8 +16372,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         showSeg(ids[i]); chips[ids[i]].focus(); e.preventDefault();
       });
       container.appendChild(nav);
-      // the strip earns its backdrop only once the scroll has pinned it (one listener per container, reading the live strip)
-      if (!container.twStuck) { container.twStuck = true; container.addEventListener('scroll', () => { try { const n = container.querySelector('.tw-nav'), f = container.querySelector('.tw-find'); if (n && f) n.classList.toggle('stuck', container.scrollTop >= f.offsetTop + f.offsetHeight + 7); } catch (e) {} }, { passive: true }); }
+      twPinWatch(container);
       for (const [id] of TW_SEGS) container.appendChild(segs[id]);
       const empty = el('div', 'tw-empty', 'Nothing matches'); empty.hidden = true; container.appendChild(empty);
       const meta = [], secs = [];   // every row: { el, text, sec } · every eyebrow: { el }

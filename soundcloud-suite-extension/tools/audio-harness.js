@@ -662,14 +662,14 @@ const FIXTURE_SRC = `
   });
 
   /* ── WP2 helpers: the header sub-line, the Compare button, a toggle row's description, a slider row by its max ── */
-  const subLine = () => abody(`return a.firstElementChild.firstElementChild.children[1].textContent;`);
+  const subLine = () => abody(`return a.children[1].firstElementChild.children[1].textContent;`);
   const cmpBtn = () => abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Compare'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, title: b.title, bg: b.style.background, color: b.style.color, w: r.width, h: r.height };`);
-  const bodyOpacity = () => abody(`return a.children[2] ? (a.children[2].style.opacity || '1') : null;`);
+  const bodyOpacity = () => abody(`return a.children[3] ? (a.children[3].style.opacity || '1') : null;`);
   const toggleDesc = (label) => abody(`const b = [...a.querySelectorAll('button[role=switch]')].find((x) => x.previousElementSibling && x.previousElementSibling.firstChild && x.previousElementSibling.firstChild.textContent === ${JSON.stringify(label)}); return b ? b.previousElementSibling.children[1].textContent : null;`);
   const sliderByMax = (max) => abody(`const r = [...a.querySelectorAll('input[type=range]')].find((x) => x.max === ${JSON.stringify(String(max))}); if (!r) return null; const row = r.parentElement; return { min: r.min, max: r.max, step: r.step, value: r.value, label: row.firstChild.textContent, val: row.lastChild.textContent, color: row.lastChild.style.color, title: row.firstChild.title };`);
   const sliderInput = (max, v) => abody(`const r = [...a.querySelectorAll('input[type=range]')].find((x) => x.max === ${JSON.stringify(String(max))}); r.value = ${+v}; r.dispatchEvent(new Event('input', { bubbles: true }));`);
   const sliderDbl = (max) => abody(`const r = [...a.querySelectorAll('input[type=range]')].find((x) => x.max === ${JSON.stringify(String(max))}); r.parentElement.firstChild.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));`);
-  const TINT = { bg: 'rgba(255, 85, 0, 0.22)', color: 'rgb(255, 176, 131)' }, PLAIN = { bg: 'rgba(255, 255, 255, 0.06)', color: 'rgb(196, 196, 202)' };
+  const TINT = { bg: 'rgba(255, 85, 0, 0.22)', color: 'rgb(255, 176, 131)' }, PLAIN = { bg: '', color: '' };   // un-lit: no inline colour, the tw-btn class dresses it
   // n meter reads `every` ms apart (each read = a fresh 683 ms tap buffer)
   const meterReads = async (n, every) => { const out = []; for (let i = 0; i < n; i++) { out.push(await dbg(`return d.meterTick();`)); await sleep(every); } return out; };
   const powerAvg = (dbs) => 10 * Math.log10(dbs.reduce((acc, v) => acc + Math.pow(10, v / 10), 0) / dbs.length);
@@ -878,9 +878,9 @@ const FIXTURE_SRC = `
     await audioTab();
     const info = await abody(`
       const txt = (el) => (el ? el.textContent.trim() : null);
-      const hd = a.firstElementChild, htx = hd && hd.firstElementChild;
+      const hd = a.children[1], htx = hd && hd.firstElementChild;
       const title = htx && htx.children[0];
-      const sections = [...a.querySelectorAll('div')].filter((d) => /uppercase/.test(d.style.cssText)).map((d) => d.textContent.trim());
+      const sections = [...a.querySelectorAll('.tw-sec')].map((d) => d.textContent.trim());
       const sliders = [...a.querySelectorAll('input[type=range]')].map((r) => r.parentElement.firstChild.textContent);
       const switches = a.querySelectorAll('button[role=switch]').length;
       const toggles = [...a.querySelectorAll('button[role=switch]')].map((b) => { const tx = b.previousElementSibling; return tx && tx.tagName === 'DIV' && tx.firstChild ? tx.firstChild.textContent : (tx ? tx.textContent : ''); });
@@ -892,13 +892,13 @@ const FIXTURE_SRC = `
     eq(info.sub, '10-band · drag the curve · double-click resets', 'header sub-line');
     eq(JSON.stringify(info.hdKids), JSON.stringify(['DIV', 'BUTTON:Compare', 'BUTTON:switch']), 'header: title block, Compare, EQ switch');
     eq(info.canvas, true, 'EQ canvas');
-    eq(info.body, 3, 'header, canvas stage, one body div');
+    eq(info.body, 4, 'the jump strip, header, canvas stage, one body div');
     eq(JSON.stringify(info.sections), JSON.stringify(['Preset', 'Listening on', 'Playback', 'Tone', 'Enhance', 'Loudness & dynamics', 'Stereo', 'Headphone correction']), 'section labels in the section 4 order');
     eq(JSON.stringify(info.sliders), JSON.stringify(['Pre-amp', 'Speed', 'Reverb', 'Fade in', 'Fade out', 'Bass', 'Harmonic bass', 'Vocals', 'Tilt', 'Intensity', 'Strength', 'Volume boost', 'Stereo width', 'Balance']), 'slider rows');
     eq(info.switches, 15, 'fifteen switches (EQ, Auto-headroom, Remember EQ, Pitch follows speed, Fade, Skip silence, Loudness contour, Enhance, Loudness, Night mode, Clip guard, Crossfeed, Mono, Swap, Headphone correction)');
     eq(JSON.stringify(info.toggles.slice(1)), JSON.stringify(['Auto-headroom', 'Remember EQ per track', 'Pitch follows speed', 'Fade in / out', 'Skip silent endings', 'Loudness contour', 'Enhance audio', 'Loudness normalize', 'Night mode', 'Clip guard', 'Crossfeed', 'Mono', 'Swap left / right', 'Headphone correction']), 'toggle rows');
     eq(await abody(`return [...a.querySelectorAll('textarea')].map((t) => t.style.display).join(',');`), 'none,none', 'both paste boxes hidden at render');
-    eq(info.selects, 3, 'preset select + loudness Target select + crossfeed Mode select');
+    eq(info.selects, 4, 'preset select + scenes select + loudness Target select + crossfeed Mode select');
     eq(await abody(`return a.querySelector('input[type=text]').parentElement.style.display;`), 'none', 'preset-name row hidden at render');
     eq(await abody(`return a.querySelector('select.sxsel').value;`), 'b:Flat', 'a flat curve reads as the Flat preset');
     assert(/These shape SoundCloud/.test(info.note), 'footnote present');
@@ -909,7 +909,7 @@ const FIXTURE_SRC = `
     await abody(`a.lastElementChild.scrollIntoView({ block: 'end' });`); await sleep(300);
     await page.screenshot({ path: path.join(SHOTS, SHOT + '-lower.png') });
     console.log('  shot →', path.join(SHOTS, SHOT + '-lower.png'));
-    await abody(`a.firstElementChild.scrollIntoView({ block: 'start' });`);
+    await abody(`a.children[1].scrollIntoView({ block: 'start' });`);
     await closeHub();
     await stopPlay();
   });
@@ -942,7 +942,7 @@ const FIXTURE_SRC = `
     await play('A', { loop: true });
     await audioTab();
     eq(await preVal(), '0 dB', 'plain value with nothing boosting');
-    const order = await abody(`return [...a.children[2].children].map((el) => el.textContent.trim().slice(0, 13));`);
+    const order = await abody(`return [...a.children[3].children].map((el) => el.textContent.trim().slice(0, 13));`);
     const iPre = order.indexOf('Preset');
     assert(iPre >= 0 && order[iPre + 1].indexOf('Choose a pres') === 0 && order[iPre + 2] === 'OKCancel' && order[iPre + 3] === 'Auto-headroom', 'Preset label → select row → hidden name row → Auto-headroom (got ' + JSON.stringify(order.slice(0, 8)) + ')');
     await set('eqOn', true); await set('eqBands', [6, 0, 0, 0, 0, 0, 0, 0, 0, 0]); await sleep(200);   // the draw loop repaints the value on the next version
@@ -1125,7 +1125,7 @@ const FIXTURE_SRC = `
   const loudState = () => dbg(`return d.loud();`);
   const loudMem = () => dbg(`return d.loudMem();`);
   const TG_SEL = `[...a.querySelectorAll('select.sxsel')].find((x) => x.options.length === 3 && x.options[0].text === 'Quiet')`;
-  const targetSel = () => abody(`const s = ${TG_SEL}; if (!s) return null; const row = s.parentElement; const prev = row.previousElementSibling; return { value: s.value, opts: [...s.options].map((o) => [o.value, o.text]), label: row.firstChild.textContent, labelW: row.firstChild.style.width, opacity: row.style.opacity, flex: s.style.flexGrow, afterLoudness: !!(prev && prev.firstChild && prev.firstChild.firstChild && prev.firstChild.firstChild.textContent === 'Loudness normalize') };`);
+  const targetSel = () => abody(`const s = ${TG_SEL}; if (!s) return null; const row = s.parentElement; const prev = row.previousElementSibling; return { value: s.value, opts: [...s.options].map((o) => [o.value, o.text]), label: row.firstChild.textContent, labelW: getComputedStyle(row.firstChild).width, opacity: row.style.opacity, flex: getComputedStyle(s).flexGrow, afterLoudness: !!(prev && prev.firstChild && prev.firstChild.firstChild && prev.firstChild.firstChild.textContent === 'Loudness normalize') };`);
   const targetChoose = (v) => abody(`const s = ${TG_SEL}; s.value = ${JSON.stringify(String(v))}; s.dispatchEvent(new Event('change', { bubbles: true }));`);
   const loudSwitch = () => abody(`const b = [...a.querySelectorAll('button[role=switch]')].find((x) => x.previousElementSibling && x.previousElementSibling.firstChild && x.previousElementSibling.firstChild.textContent === 'Loudness normalize'); return b.getAttribute('aria-checked');`);
   const SUB_RX = /^−?\d+\.\d LUFS · peak −?\d+\.\d dB · [+−]\d+\.\d dB applied$/;
@@ -1164,7 +1164,7 @@ const FIXTURE_SRC = `
     assert(/^Even out quiet & loud tracks · \+9\.\d dB applied$/.test(desc), 'row description carries the applied gain (got ' + desc + ')');
     let tg = await targetSel();
     assert(tg, 'Target select present');
-    eq(tg.label, 'Target', 'label'); eq(tg.labelW, '86px', 'label width like sliderRow'); eq(tg.flex, '1', 'select flex 1');
+    eq(tg.label, 'Target', 'label'); eq(tg.labelW, '96px', 'label width like sliderRow'); eq(tg.flex, '1', 'select flex 1');
     eq(JSON.stringify(tg.opts), JSON.stringify([['-18', 'Quiet'], ['-14', 'Normal'], ['-11', 'Loud']]), 'options');
     eq(tg.value, '-14', 'Normal selected'); eq(tg.opacity, '1', 'row lit while loudness is on'); eq(tg.afterLoudness, true, 'Target row follows the Loudness row');
     await targetChoose(-11); await sleep(250);
@@ -1271,7 +1271,7 @@ const FIXTURE_SRC = `
       await h2(`root.querySelector('.tab[data-tab="audio"]').click();`); await sleep(700);
       const desc = await h2(`const b = [...a.querySelectorAll('button[role=switch]')].find((x) => x.previousElementSibling.firstChild.textContent === 'Loudness normalize'); return b.previousElementSibling.children[1].textContent;`);
       eq(desc, 'Even out quiet & loud tracks · remembered · +9.0 dB', 'row says remembered');
-      const sub2 = await h2(`return a.firstElementChild.firstElementChild.children[1].textContent;`);
+      const sub2 = await h2(`return a.children[1].firstElementChild.children[1].textContent;`);
       assert(SUB_RX.test(sub2), 'header meter line in the fresh page (got ' + sub2 + ')');
       await p2.keyboard.press('Alt+L'); await sleep(300);
       // downstream changes: bass +6 (auto-headroom moves the pre-amp), balance −100 (the matrix) — the source taps see none of it
@@ -1317,9 +1317,9 @@ const FIXTURE_SRC = `
   const sliderSet = (label, v) => abody(`const r = [...a.querySelectorAll('input[type=range]')].find((x) => x.parentElement.firstChild.textContent === ${JSON.stringify(label)}); r.value = ${JSON.stringify(String(v))}; r.dispatchEvent(new Event('input', { bubbles: true }));`);
   const sliderReset = (label) => abody(`const r = [...a.querySelectorAll('input[type=range]')].find((x) => x.parentElement.firstChild.textContent === ${JSON.stringify(label)}); r.parentElement.firstChild.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));`);
   const chipInfo = () => abody(`return [...a.querySelectorAll('button')].filter((b) => /^(Headphones|Laptop|Speakers)$/.test(b.textContent)).map((b) => ({ txt: b.textContent, bg: b.style.background, color: b.style.color, flex: b.style.flex, padding: b.style.padding }));`);
-  const sectionOrder = () => abody(`return [...a.children[2].children].map((el) => el.textContent.trim().slice(0, 16));`);
+  const sectionOrder = () => abody(`return [...a.children[3].children].map((el) => el.textContent.trim().slice(0, 16));`);
   const switchState = (label) => abody(`const b = [...a.querySelectorAll('button[role=switch]')].find((x) => x.previousElementSibling && x.previousElementSibling.firstChild && x.previousElementSibling.firstChild.textContent === ${JSON.stringify(label)}); return b ? b.getAttribute('aria-checked') : null;`);
-  const selectByLabel = (label) => abody(`const s = [...a.querySelectorAll('span')].find((x) => x.textContent === ${JSON.stringify(label)}); const sel = s && s.nextElementSibling; return sel && sel.tagName === 'SELECT' ? { value: sel.value, opacity: sel.parentElement.style.opacity, opts: [...sel.options].map((o) => o.value + ':' + o.textContent).join(','), css: sel.style.cssText, cls: sel.className, labelW: s.getBoundingClientRect().width } : null;`);
+  const selectByLabel = (label) => abody(`const s = [...a.querySelectorAll('span')].find((x) => x.textContent === ${JSON.stringify(label)}); const sel = s && s.nextElementSibling; return sel && sel.tagName === 'SELECT' ? { value: sel.value, opacity: sel.parentElement.style.opacity, opts: [...sel.options].map((o) => o.value + ':' + o.textContent).join(','), css: getComputedStyle(sel).borderRadius + '/' + getComputedStyle(sel).padding, cls: sel.className, labelW: s.getBoundingClientRect().width } : null;`);
   const selectChoose = (label, v) => abody(`const s = [...a.querySelectorAll('span')].find((x) => x.textContent === ${JSON.stringify(label)}); const sel = s.nextElementSibling; sel.value = ${JSON.stringify(v)}; sel.dispatchEvent(new Event('change', { bubbles: true }));`);
   const rowStarts = (order, i, p) => assert(order[i] != null && order[i].indexOf(p) === 0, 'row ' + i + ' starts with ' + JSON.stringify(p) + ' (got ' + JSON.stringify(order[i]) + ')');
 
@@ -1497,8 +1497,8 @@ const FIXTURE_SRC = `
     eq(await toggleDesc('Mono'), 'Same sound in both ears · for one earbud or a single speaker', 'mono copy');
     let md = await selectByLabel('Mode');
     assert(md, 'Mode select present'); eq(md.opts, 'subtle:Subtle,natural:Natural,strong:Strong', 'mode options'); eq(md.value, 'natural', 'natural by default');
-    eq(md.opacity, '0.45', 'Mode row dimmed while crossfeed is off'); eq(md.cls, 'sxsel', 'select class'); approx(md.labelW, 86, 1, 'Mode label 86 px');
-    assert(/border-radius: 10px/.test(md.css) && /padding: 10px 12px/.test(md.css), 'the preset select\'s cssText');
+    eq(md.opacity, '0.45', 'Mode row dimmed while crossfeed is off'); eq(md.cls, 'sxsel tw-sel grow', 'select class'); approx(md.labelW, 96, 1, 'Mode label 96 px');
+    eq(md.css, '10px/8px 30px 8px 11px', 'the select pill: radius 10, the chevron gutter on the right');
     await selectChoose('Mode', 'strong'); await sleep(200);
     eq(await get('crossfeedMode'), 'strong', 'select writes crossfeedMode'); eq(await get('crossfeedOn'), true, 'choosing a mode wakes the switch');
     eq(await switchState('Crossfeed'), 'true', 'switch painted on'); eq((await selectByLabel('Mode')).opacity, '1', 'Mode row lit');
@@ -1625,12 +1625,12 @@ const FIXTURE_SRC = `
   });
 
   /* ── WP7 helpers: the two paste boxes (0 = Headphone correction, 1 = the footer) and the footnote ── */
-  const boxState = (i) => abody(`const t = a.querySelectorAll('textarea')[${i}]; if (!t) return null; const act = t.nextElementSibling; return { display: t.style.display, act: act.style.display, actBtns: [...act.querySelectorAll('button')].map((b) => b.textContent).join(','), ph: t.placeholder, css: t.style.cssText, value: t.value, focused: a.getRootNode().activeElement === t, tag: t.tagName };`);
+  const boxState = (i) => abody(`const t = a.querySelectorAll('textarea')[${i}]; if (!t) return null; const act = t.nextElementSibling; return { display: t.style.display, act: act.style.display, actBtns: [...act.querySelectorAll('button')].map((b) => b.textContent).join(','), ph: t.placeholder, css: t.style.cssText, cls: t.className, value: t.value, focused: a.getRootNode().activeElement === t, tag: t.tagName };`);
   const boxType = (i, txt) => abody(`a.querySelectorAll('textarea')[${i}].value = ${JSON.stringify(txt)};`);
   const boxBtn = (i, txt) => abody(`const t = a.querySelectorAll('textarea')[${i}]; const b = [...t.nextElementSibling.querySelectorAll('button')].find((x) => x.textContent === ${JSON.stringify(txt)}); if (!b) throw new Error('no box button ' + ${JSON.stringify(txt)}); b.click();`);
   const btnDisplay = (txt) => abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === ${JSON.stringify(txt)}); return b ? b.style.display : null;`);
   const noteText = () => abody(`return [...a.querySelectorAll('div')].pop().textContent;`);
-  const headerTitle = () => abody(`try { return a.firstElementChild.firstElementChild.children[0].textContent; } catch (e) { return null; }`);
+  const headerTitle = () => abody(`try { return a.children[1].firstElementChild.children[0].textContent; } catch (e) { return null; }`);
   const AUTOEQ_2 = 'Preamp: -6.0 dB\nFilter 1: ON PK Fc 105 Hz Gain 3.1 dB Q 0.70\nFilter 2: ON HSC Fc 10000 Hz Gain -2.0 dB';
   // twelve filters, pasted out of frequency order, with a name line; filters 3 (210 Hz, +0.3) and 7 (3300 Hz, −0.2)
   // carry the two smallest |gain| and are the ones the ten-filter cap must drop; one OFF filter and an LS alias
@@ -1652,7 +1652,7 @@ const FIXTURE_SRC = `
     assert(iH > 0, 'Headphone correction section present');
     rowStarts(order, iH - 1, 'Swap left / righ'); rowStarts(order, iH + 1, 'Headphone correc'); rowStarts(order, iH + 2, 'Paste AutoEQClea');
     eq(order[iH + 3], '', 'the paste box row (empty text)'); rowStarts(order, iH + 4, 'ApplyCancel'); rowStarts(order, iH + 5, 'Copy settingsPas');
-    eq(await abody(`return [...a.querySelectorAll('div')].filter((d) => /uppercase/.test(d.style.cssText)).map((d) => d.textContent).pop();`), 'Headphone correction', 'the label text (uppercase via CSS)');
+    eq(await abody(`return [...a.querySelectorAll('.tw-sec')].map((d) => d.textContent).pop();`), 'Headphone correction', 'the label text (a tw-sec eyebrow)');
     eq(await toggleDesc('Headphone correction'), 'Paste an AutoEQ profile for your headphones', 'hint while nothing is loaded');
     eq(await switchState('Headphone correction'), 'false', 'off by default'); eq(await btnDisplay('Clear'), 'none', 'Clear hidden with no profile');
     // the spec's two-filter paste through the debug accessor
@@ -1691,7 +1691,7 @@ const FIXTURE_SRC = `
     await btnClick('Paste AutoEQ'); b = await boxState(0);
     eq(b.display, 'block', 'box opens'); eq(b.act, 'flex', 'Apply / Cancel shown'); eq(b.actBtns, 'Apply,Cancel', 'the two buttons'); eq(b.focused, true, 'box focused');
     eq(b.ph, 'Preamp: -6.2 dB\nFilter 1: ON PK Fc 105 Hz Gain 3.1 dB Q 0.7 …', 'placeholder');
-    assert(/height: 96px/.test(b.css) && /resize: vertical/.test(b.css) && /border-radius: 10px/.test(b.css) && /padding: 10px 12px/.test(b.css), 'the preset select\'s clothes + height 96 / resize vertical');
+    assert(/height: 96px/.test(b.css) && /resize: vertical/.test(b.css) && b.cls === 'tw-ta', 'the paste box wears tw-ta, height 96, resize vertical');
     await boxBtn(0, 'Cancel'); b = await boxState(0); eq(b.display, 'none', 'Cancel hides it'); eq(b.act, 'none', 'actions hidden again');
     await btnClick('Paste AutoEQ'); await boxType(0, 'hello there, no filters here'); await boxBtn(0, 'Apply'); await sleep(120);
     eq(await toastText(), 'No filters found in that text', 'junk refused'); eq((await boxState(0)).display, 'block', 'box stays open after a refusal');
@@ -2021,12 +2021,12 @@ const FIXTURE_SRC = `
     let s = await snap();
     eq(+m[1], Math.round(s.sampleRate / 1000), 'the rate of the context SoundCloud routes through (' + s.sampleRate + ')'); eq(+m[2], +m[3] + +m[4], 'total = output + effects'); eq(+m[4], s.latencyMs, 'effects = fxLatencyMs'); eq(+m[3], s.outLatMs, 'output = the smoothed output latency');
     eq(+m[4], 12, '12 ms effects (two compressors)'); assert(s.sampleRate === 44100 || s.sampleRate === 48000, 'a default-rate context');
-    const st = await abody(`const n = [...a.querySelectorAll('div')].pop(); return n.style.fontSize + '|' + n.style.color + '|' + n.style.marginTop + '|' + n.style.lineHeight;`);
-    eq(st, '10px|rgb(103, 103, 111)|20px|1.5', 'the note keeps its 10 px #67676f look');
+    const st = await abody(`const n = [...a.querySelectorAll('div')].pop(); return n.className + '|' + getComputedStyle(n).fontSize + '|' + n.style.marginTop;`);
+    eq(st, 'tw-note|10.5px|16px', 'the note wears tw-note, 16 px above');
     const order = await sectionOrder(), L = order.length;
     rowStarts(order, L - 1, m[1] + ' kHz'); rowStarts(order, L - 2, 'ApplyCancel'); eq(order[L - 3], '', 'the footer paste box'); rowStarts(order, L - 4, 'Copy settingsPas');
-    const ft = await abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Copy settings'); return { css: b.parentElement.style.cssText, btns: [...b.parentElement.children].map((c) => c.textContent).join(','), weight: getComputedStyle(b).fontWeight, size: getComputedStyle(b).fontSize, radius: b.style.borderRadius, bg: b.style.background, ref: (() => { const c = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Save'); return c ? getComputedStyle(c).fontWeight + '/' + getComputedStyle(c).fontSize + '/' + c.style.borderRadius + '/' + c.style.background : null; })() };`);
-    eq(ft.btns, 'Copy settings,Paste settings,Reset all audio', 'the three footer buttons'); assert(/display: flex/.test(ft.css) && /gap: 8px/.test(ft.css) && /margin-top: 18px/.test(ft.css), 'footer row style (got ' + ft.css + ')');
+    const ft = await abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Copy settings'); return { css: b.parentElement.className, btns: [...b.parentElement.children].map((c) => c.textContent).join(','), weight: getComputedStyle(b).fontWeight, size: getComputedStyle(b).fontSize, radius: b.style.borderRadius, bg: b.style.background, ref: (() => { const c = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Save'); return c ? getComputedStyle(c).fontWeight + '/' + getComputedStyle(c).fontSize + '/' + c.style.borderRadius + '/' + c.style.background : null; })() };`);
+    eq(ft.btns, 'Copy settings,Paste settings,Reset all audio', 'the three footer buttons'); eq(ft.css, 'tw-foot', 'footer row class');
     eq(ft.weight + '/' + ft.size + '/' + ft.radius + '/' + ft.bg, ft.ref, 'the footer buttons wear exactly what the preset Save button wears (mkBtn)');
     // Enhance adds the 4× shapers' 192 samples (4 ms at 48 kHz → 16); the line follows within 60 frames
     await set('enhanceOn', true); await sleep(1600); t = await noteText(); m = RE.exec(t);
@@ -2534,7 +2534,7 @@ const FIXTURE_SRC = `
     assert((await wetPk()) < -90, 'silent');
     // the chip: a bundle in, a bundle out; the Speed and Reverb rows follow
     const chip = () => abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Slowed + reverb'); return { bg: b.style.background, color: b.style.color };`);
-    eq((await chip()).bg, 'rgba(255, 255, 255, 0.06)', 'chip unlit');
+    eq((await chip()).bg, PLAIN.bg, 'chip unlit');
     await btnClick('Slowed + reverb'); await sleep(300);
     eq(await get('speed'), 85, 'speed 85'); eq(await get('vinylMode'), true, 'pitch follows speed'); eq(await get('reverbAmt'), 25, 'reverb 25');
     eq(await elProp('playbackRate'), 0.85, 'element at 0.85×'); eq(await elProp('preservesPitch'), false, 'pitch follows');
@@ -2543,7 +2543,7 @@ const FIXTURE_SRC = `
     eq((await sliderByLabel('Speed')).val, '0.85×', 'the Speed row follows'); eq((await sliderByLabel('Reverb')).val, '25%', 'the Reverb row follows');
     eq(await switchState('Pitch follows speed'), 'true', 'the vinyl switch follows');
     await btnClick('Slowed + reverb'); await sleep(300);
-    eq(await get('speed'), 100, 'speed back to 100'); eq(await get('vinylMode'), false, 'pitch off'); eq(await get('reverbAmt'), 0, 'reverb off'); eq((await chip()).bg, 'rgba(255, 255, 255, 0.06)', 'chip unlit again');
+    eq(await get('speed'), 100, 'speed back to 100'); eq(await get('vinylMode'), false, 'pitch off'); eq(await get('reverbAmt'), 0, 'reverb off'); eq((await chip()).bg, PLAIN.bg, 'chip unlit again');
     eq(await elProp('playbackRate'), 1, 'element at 1×');
     await closeHub(); await sleep(150); eq((await snap()).routed, false, 'all off, tab closed → detached');
     await stopPlay();
