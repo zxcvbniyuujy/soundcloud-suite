@@ -92,6 +92,21 @@ never plays.
   which is what its lyric service wants from outside China; when a sheet still
   will not load, the toast says what happened (no answer, a placeholder, no
   timed lines) and the Copy diagnostics trail records it.
+- **Floating lyrics window** — **P** in the hub, ⋯ → Floating lyrics window,
+  or Ctrl+K: a small always-on-top window (Document Picture-in-Picture,
+  Chrome 116+) with the artwork, the sung line and its karaoke wipe, the next
+  line, a progress bar and prev / play / next. Space and ← → work inside it,
+  ⤴ brings the SoundCloud tab forward, and the worker ticker keeps it moving
+  while the tab is hidden. It reads the same synced sheet as the mini bar, so
+  a text-only sheet shows the track instead.
+- **The tour** — after the first-run setup choice, three spotlights on the
+  suite's own buttons in the player bar (lyrics, shuffle, everything else);
+  Next, Skip, Esc, Enter. Ctrl+K → Take the tour repeats it any time.
+- **Rate & share** — Ctrl+K → Share SoundCloud Suite copies a line with the
+  Chrome Web Store link (the relay hands the page the extension id); Rate
+  SoundCloud Suite opens the store's review page. After seven days and
+  thirty tracks a small corner card asks once: Rate, Share or Not now, and
+  any answer settles it.
 - **Sturdier under real conditions** — the toolbar icon toggles the hub
   without reloading the tab (it used to reload on every click, because the
   relay never answered); toasts raised in a hidden tab go away on their own;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.62.0
+// @version      4.63.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.62.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.63.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -8086,14 +8086,103 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // the panel closes — zero per-frame work for users who never open it
     }
 
+    /* ---------- floating lyrics window: a small always-on-top player with the sung line ----------
+     * Document Picture-in-Picture (Chrome 116+): a window of our own that stays above every app, driven by the
+     * worker ticker so it keeps moving while the SoundCloud tab is hidden. The sung line and the next one, the
+     * artwork, a progress bar and prev / play / next; the lines come from the same synced sheet the mini bar reads. */
+    let pip = null, pipT = null;
+    const PIP_CSS = 'html,body{margin:0;height:100%;background:#0b0b0f;color:#f4f4f6;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}'
+      + '.w{position:absolute;inset:0;display:flex;flex-direction:column;padding:12px 14px 10px;box-sizing:border-box;gap:8px}'
+      + '.top{display:flex;align-items:center;gap:11px;min-height:46px}.art{width:46px;height:46px;border-radius:10px;background:#1c1c22 center/cover no-repeat;flex:none;box-shadow:0 6px 18px -8px rgba(0,0,0,.8)}'
+      + '.meta{min-width:0;flex:1}.t{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.a{font-size:11.5px;color:#9a9aa4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}'
+      + '.ln{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}'
+      + '.cur{font-size:19px;font-weight:800;letter-spacing:-.2px;line-height:1.22;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%;'
+      + 'background:linear-gradient(90deg,#ff8a3d var(--fill),rgba(244,244,246,.92) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent}'
+      + '.cur.idle{color:#7c7c86;-webkit-text-fill-color:#7c7c86;font-weight:600;font-size:14px}'
+      + '.nx{font-size:12px;color:#7c7c86;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+      + '.bot{display:flex;align-items:center;gap:10px}.bar{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.12);overflow:hidden}.bar i{display:block;height:100%;width:0;background:#ff5500;border-radius:2px}'
+      + '.ctl{display:flex;gap:2px}.ctl button{width:30px;height:30px;border:0;border-radius:9px;background:none;color:#e6e6ea;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}'
+      + '.ctl button:hover{background:rgba(255,255,255,.1)}.ctl button:focus-visible{outline:2px solid #ff8a3d;outline-offset:1px}.ctl .pp{background:#ff5500;color:#fff}.ctl .pp:hover{background:#ff6a1f}'
+      + '.tm{font-size:10.5px;color:#7c7c86;font-variant-numeric:tabular-nums;flex:none}';
+    const PIP_HTML = '<div class="w"><div class="top"><div class="art"></div><div class="meta"><div class="t"></div><div class="a"></div></div>'
+      + '<div class="ctl"><button class="open" title="Show the SoundCloud tab">⤴</button></div></div>'
+      + '<div class="ln"><div class="cur idle">Waiting for lyrics…</div><div class="nx"></div></div>'
+      + '<div class="bot"><span class="tm">0:00</span><div class="bar"><i></i></div>'
+      + '<div class="ctl"><button class="prev" title="Previous track">⏮</button><button class="pp" title="Play / pause">⏸</button><button class="next" title="Next track">⏭</button></div></div></div>';
+    function floatSupported() { try { return !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow); } catch (e) { return false; } }
+    function floatOn() { return !!pip; }
+    function pipStop() { if (pipT) { try { pipT.stop(); } catch (e) {} pipT = null; } pip = null; }
+    async function toggleFloat() {
+      if (pip) { try { pip.win.close(); } catch (e) {} pipStop(); return; }
+      if (!floatSupported()) { toast('Floating lyrics need Chrome 116 or newer'); return; }
+      let win = null;
+      try { win = await window.documentPictureInPicture.requestWindow({ width: 440, height: 232 }); } catch (e) { toast('Couldn’t open the floating window — try again from a click or a key'); return; }
+      try {
+        const d = win.document;
+        d.title = 'SoundCloud Suite';
+        const st = d.createElement('style'); st.textContent = PIP_CSS; d.head.appendChild(st);
+        d.body.innerHTML = PIP_HTML;
+        const q = (s) => d.querySelector(s);
+        const cmd = (n) => { try { if (SUITE.command) SUITE.command(n); } catch (e) {} };
+        q('.prev').addEventListener('click', () => cmd('prev-track'));
+        q('.next').addEventListener('click', () => cmd('next-track'));
+        q('.pp').addEventListener('click', () => cmd('play-pause'));
+        q('.open').addEventListener('click', () => { try { window.focus(); } catch (e) {} });
+        d.addEventListener('keydown', (e) => { if (e.key === ' ') { e.preventDefault(); cmd('play-pause'); } else if (e.key === 'ArrowRight') cmd('next-track'); else if (e.key === 'ArrowLeft') cmd('prev-track'); });
+        pip = { win, d, art: q('.art'), t: q('.t'), a: q('.a'), cur: q('.cur'), nx: q('.nx'), fill: q('.bar i'), tm: q('.tm'), pp: q('.pp'), key: '', lastI: -2, lastPlaying: null, lastFill: '' };
+        win.addEventListener('pagehide', () => pipStop());
+        pipT = Ticker.every(pipTick, 100);   // the worker ticker keeps it moving while the tab is hidden
+        pipTick();
+        try { GM_setValue('sl:float', 1); } catch (e) {}
+      } catch (e) { try { win.close(); } catch (e2) {} pipStop(); toast('The floating window couldn’t be set up'); }
+    }
+    function pipTick() {
+      const P = pip; if (!P) return;
+      try {
+        const m = uiMeta;   // what the header shows (App.setHeader keeps it current)
+        const key = m ? (m.href || m.title || '') : '';
+        if (key !== P.key) {
+          P.key = key; P.lastI = -2;
+          P.t.textContent = m ? (m.title || 'SoundCloud') : 'Nothing playing';
+          P.a.textContent = m ? (m.uploader || '') : '';
+          P.art.style.backgroundImage = m && m.art ? 'url("' + m.art.replace(/-t\d+x\d+\./, '-t200x200.') + '")' : '';
+        }
+        const playing = Media.playing();
+        if (playing !== P.lastPlaying) { P.lastPlaying = playing; P.pp.textContent = playing ? '⏸' : '▶'; P.pp.title = playing ? 'Pause' : 'Play'; }
+        const now = Media.time(), dur = m && m.dur > 0 ? m.dur : 0;
+        const pct = dur ? Math.max(0, Math.min(100, now / dur * 100)) : 0;
+        const w = pct.toFixed(1) + '%'; if (w !== P.lastFill) { P.lastFill = w; P.fill.style.width = w; }
+        const ck = (t) => { t = Math.max(0, Math.floor(t)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+        const tm = ck(now) + (dur ? ' / ' + ck(dur) : ''); if (P.tm.textContent !== tm) P.tm.textContent = tm;
+        if (!miniData) {
+          if (P.lastI !== -1) { P.lastI = -1; P.cur.textContent = m ? 'No synced lyrics for this one' : 'Play something on SoundCloud'; P.cur.classList.add('idle'); P.nx.textContent = ''; }
+          return;
+        }
+        const i = curMiniLine();
+        if (i !== P.lastI) {
+          P.lastI = i;
+          P.cur.classList.remove('idle');
+          P.cur.textContent = i >= 0 ? miniData[i][1] : '♪';
+          P.nx.textContent = miniData[i + 1] ? miniData[i + 1][1] : '';
+        }
+        if (i >= 0) {
+          const s = miniData[i][0], e = miniData[i + 1] ? miniData[i + 1][0] : s + 4;
+          const t = miniClock();
+          const f = Math.max(0, Math.min(100, (t - s) / Math.max(0.2, e - s) * 100)).toFixed(0) + '%';
+          if (P.cur.style.getPropertyValue('--fill') !== f) P.cur.style.setProperty('--fill', f);
+        }
+      } catch (e) {}
+    }
+
     /* ---------- mini lyric bar ---------- */
     function setMini(lines) {
       miniData = (lines && lines.length) ? lines : null;
       if (!miniData && miniShown && mini) { miniShown = false; mini.classList.remove('on'); }
     }
+    function miniClock() { return Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000; }   // the highlight clock, for the mini bar and the floating window
     function curMiniLine() {
       if (!miniData) return -1;
-      const t = Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
+      const t = miniClock();
       let lo = 0, hi = miniData.length - 1, ans = -1;
       while (lo <= hi) { const m2 = (lo + hi) >> 1; if (miniData[m2][0] <= t) { ans = m2; lo = m2 + 1; } else hi = m2 - 1; }
       return ans;
@@ -8621,6 +8710,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⧉', 'Lyrics that float above everything', 'Press P in the hub (or ⋯ → Floating lyrics window) for a small window that stays on top of every app: artwork, the sung line with the karaoke wipe, the next line, a progress bar and prev / play / next. It keeps moving while the SoundCloud tab is hidden. Chrome 116 or newer.'],
+          ['★', 'A tour, and a way to spread the word', 'New listeners get three spotlights on the real buttons after the setup choice; Ctrl+K → Take the tour repeats it. Ctrl+K also has Share SoundCloud Suite (a line with the store link on the clipboard) and Rate SoundCloud Suite; after a week and thirty tracks a small card asks once.'],
           ['⚙', 'Sturdier everywhere', 'The toolbar icon toggles the hub without reloading the tab. Meters, loudness normalize and every current-track action follow the element that is playing, not the one SoundCloud keeps ready for the next track. Lyric requests you wait for go first, NetEase and Kugou are parked when they keep timing out, and the “no lyrics” card says which sources were unavailable. A failed shuffle says why, a rate-limited fetch counts down on the button, toasts in a hidden tab go away on their own, the dark theme lands before first paint, and slider drags no longer rebuild the page.'],
           ['≡', 'Sync that holds still, NetEase that loads', 'The vocal aligner waits for the audio instead of missing it on a cached sheet, keeps listening past the first 90 s, and trusts only two looks that agree — so a NetEase or Kugou sheet is pulled onto the vocals like an LRCLIB one, and a wrong sheet is left alone. NetEase requests carry the headers its own apps send, and when a sheet still will not load, the toast says why. A run of skipped tracks no longer starts a search for each.'],
           ['♪', 'Lyrics: found faster, synced tighter', 'The exact duration-matched lookup runs first on every track, junk like “sped up” or “Official Video” no longer poisons the search, and a search never runs past 14 s. Sheets a few seconds off the upload keep their timing instead of being stretched, and the vocal aligner now applies a clear finding by itself (0 undoes it). NetEase sheets bring word-level timing to the karaoke wipe.'],
@@ -9322,6 +9413,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         setMenu(true, true);   // keep the picker — a rebuild would put the full menu back
       });
       sep();
+      mi('Floating lyrics window: ' + (floatOn() ? 'on' : 'off'), () => toggleFloat(), 'P');
       mi('Mini lyric bar: ' + (miniOn ? 'on' : 'off'), () => toggleMini(), 'N');
       mi('Lyrics in tab title: ' + (tabTitleOn ? 'on' : 'off'), () => toggleTabTitle());
       mi('Auto-open when found: ' + (autoOpenFound ? 'on' : 'off'), () => toggleAutoOpen());
@@ -9507,7 +9599,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
          ['Space', 'Play / pause'], ['J / L', 'Seek ∓10 s'], ['← / →', 'Seek ∓5 s'],
          ['[ / ]', 'Nudge sync ±100 ms'], ['{ / }', 'Fine nudge ±25 ms'], ['< / >', 'Coarse nudge ±500 ms'],
          ['0', 'Reset sync & anchors'], ['− / =', 'Lyrics text size'], ['T', 'Cycle theme'],
-         ['M', 'Accent mood'], ['G', 'Backdrop density'], ['N', 'Mini lyric bar'],
+         ['M', 'Accent mood'], ['G', 'Backdrop density'], ['N', 'Mini lyric bar'], ['P', 'Floating lyrics window (stays on top)'],
          ['Audio tab', 'A hold = compare · N night · , . speed (with Global hotkeys on)'],
          ['Click a line', 'Seek there'], ['2× click a line', 'On guessed timing: pin that line as an anchor'], ['Alt+click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
          ['2× click artwork', 'Immersive fullscreen'], ['Click title', 'Copy track link'], ['Click the clock', 'Time left ↔ elapsed'],
@@ -10484,7 +10576,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('⚙', 'Tweaks tab', 'View', () => { setOpen(true); setTab('tweaks'); });
       add('⛶', 'Immersive mode', 'View', () => { setOpen(true); toggleMax(true); });
       add('◑', 'Toggle focus mode', 'View', () => { setOpen(true); toggleFocus(); });
+      add('⧉', (floatOn() ? 'Close the' : 'Open a') + ' floating lyrics window', 'View', () => toggleFloat());
       add('▭', 'Toggle mini lyric bar', 'View', () => toggleMini());
+      // help
+      add('★', 'Take the tour', 'Help', () => { try { setOpen(false); if (SUITE.startTour) SUITE.startTour(); } catch (e) {} });
+      add('♡', 'Rate SoundCloud Suite', 'Help', () => { try { if (SUITE.rateShare) SUITE.rateShare('rate'); } catch (e) {} });
+      add('↗', 'Share SoundCloud Suite', 'Help', () => { try { if (SUITE.rateShare) SUITE.rateShare('share'); } catch (e) {} });
       add('✕', 'Close hub', 'View', () => setOpen(false));
       // lyrics
       add('⟳', 'Re-search this track', 'Lyrics', () => { setOpen(true); setTab('lyrics'); App.retry(); });
@@ -10703,7 +10800,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
       shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
-      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, cycleTheme,
+      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, cycleTheme,
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
@@ -11833,6 +11930,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (e.key === 'c' || e.key === 'C') { own(); UI.jumpChorus(); return; }
       if (e.key === 't' || e.key === 'T') { own(); UI.cycleTheme(); return; }
       if (e.key === 'n' || e.key === 'N') { own(); UI.toggleMini(); return; }
+      if (e.key === 'p' || e.key === 'P') { own(); UI.toggleFloat(); return; }
       if (e.key === 'm' || e.key === 'M') { own(); UI.cycleMood(); return; }
       if (e.key === 'g' || e.key === 'G') { own(); UI.cycleGlass(); return; }
       if (e.key === '/') { own(); UI.setTab('lyrics'); UI.openFind(); return; }
@@ -12618,7 +12716,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
       m.addEventListener('playing', () => { try { offerResume(m); applyPendingJump(m); } catch (e) {} setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // long tracks: offer to resume when one starts from the top; the session update stays off the play-start path
       m.addEventListener('pause', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); tellState({ playing: false }); rewindNote(m); });
-      m.addEventListener('playing', () => { lastPlayingEl = m; tellState({ playing: true }); rewindApply(m); });
+      m.addEventListener('playing', () => { lastPlayingEl = m; tellState({ playing: true }); rewindApply(m); try { countPlay(); } catch (e) {} });
       m.addEventListener('ratechange', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });   // the OS scrubber follows the new speed at once
       m.addEventListener('seeked', () => { setTimeout(() => { try { mediaSessionSync(m, true); } catch (e) {} }, 0); });
       m.addEventListener('ended', () => { try { resumeForget(curTrackHref()); } catch (e) {} });
@@ -14946,6 +15044,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (name === 'mute') { const m = activeMedia(); if (!m) return false; toggleMute(); return true; }
     return false;
   }
+  try { SUITE.command = runCommand; } catch (e) {}   // the floating lyrics window's transport buttons
   let cmdLastAt = 0;   // when this tab last started or stopped playing: the router's tie-breaker
   function tellState(state) { if (state && typeof state.playing === 'boolean') cmdLastAt = Date.now(); try { W.postMessage(Object.assign({ scss: 'state' }, state), location.origin); } catch (e) {} }
   try {
@@ -17121,6 +17220,107 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function closeOnboarding() {
     if (onbEsc) { try { D.removeEventListener('keydown', onbEsc, true); } catch (e) {} onbEsc = null; }
     if (onbEl) { try { onbEl.remove(); } catch (e) {} onbEl = null; }
+    // the first thing after the setup choice: three spotlights on the real buttons (once; the palette repeats it)
+    try { if (!GET('sce:toured', 0)) setTimeout(() => { try { startTour(); } catch (e) {} }, 500); } catch (e) {}
+  }
+
+  /* ───────── the tour: three spotlights on the suite's own buttons in the player bar ─────────
+   * A dimmed page with a hole around the button, a card above it, Next / Skip, Esc. Never on a page without the bar. */
+  let tourEl = null, tourEsc = null, tourStep = 0, tourRs = null;
+  const TOUR = [
+    ['.sce-hub', 'Lyrics, synced to the vocals', 'Tap ♪ or press Alt+L on any track. Lyrics find themselves, follow the singer line by line, and the ⋯ menu opens a floating window that stays on top of every app (P).'],
+    ['.sce-shuffle', 'Shuffle your whole library', 'Not the last fifty — every like you have, with filters, artist spreading and a queue you can see. Alt+S from anywhere.'],
+    ['.sce-gear', 'Everything else lives here', 'Audio (EQ, Enhance, loudness), themes, declutter, keys, your data. Ctrl+K is the command palette for all of it.'],
+  ];
+  function endTour() {
+    if (tourEsc) { try { D.removeEventListener('keydown', tourEsc, true); } catch (e) {} tourEsc = null; }
+    if (tourRs) { try { W.removeEventListener('resize', tourRs); } catch (e) {} tourRs = null; }
+    if (tourEl) { try { tourEl.remove(); } catch (e) {} tourEl = null; }
+    try { SET('sce:toured', 1); } catch (e) {}
+  }
+  function tourPaint() {
+    if (!tourEl) return;
+    const step = TOUR[tourStep]; if (!step) { endTour(); return; }
+    const target = D.querySelector(step[0]);   // the pill sits inside SoundCloud's player bar
+    const hole = tourEl.firstChild, card = tourEl.lastChild;
+    if (!target) { hole.style.display = 'none'; card.style.left = '50%'; card.style.top = '50%'; card.style.transform = 'translate(-50%,-50%)'; }
+    else {
+      const r = target.getBoundingClientRect();
+      hole.style.display = ''; hole.style.left = (r.left - 6) + 'px'; hole.style.top = (r.top - 6) + 'px'; hole.style.width = (r.width + 12) + 'px'; hole.style.height = (r.height + 12) + 'px';
+      const cw = Math.min(340, W.innerWidth - 24);
+      const left = Math.max(12, Math.min(W.innerWidth - cw - 12, r.left + r.width / 2 - cw / 2));
+      card.style.width = cw + 'px'; card.style.left = left + 'px'; card.style.transform = ''; card.style.top = ''; card.style.bottom = (W.innerHeight - r.top + 14) + 'px';
+      const ar = card.querySelector('.sce-tour-arrow'); if (ar) ar.style.left = (r.left + r.width / 2 - left - 7) + 'px';
+    }
+    card.querySelector('.sce-tour-n').textContent = (tourStep + 1) + ' / ' + TOUR.length;
+    card.querySelector('.sce-tour-h').textContent = step[1];
+    card.querySelector('.sce-tour-p').textContent = step[2];
+    card.querySelector('.sce-tour-next').textContent = tourStep + 1 < TOUR.length ? 'Next' : 'Done';
+  }
+  function startTour() {
+    if (tourEl) return;
+    try { if (!D.querySelector('.sce-hub')) ensureBar(); } catch (e) {}
+    tourStep = 0;
+    tourEl = D.createElement('div');
+    tourEl.style.cssText = 'position:fixed;inset:0;z-index:2147483362;pointer-events:auto';
+    const hole = D.createElement('div');
+    hole.style.cssText = 'position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(6,6,9,.72),0 0 0 2px rgba(255,138,61,.9),0 0 26px 4px rgba(255,90,0,.45);transition:left .25s ease,top .25s ease,width .25s ease,height .25s ease;pointer-events:none';
+    const card = D.createElement('div');
+    card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Tour');
+    card.style.cssText = 'position:fixed;background:linear-gradient(180deg,rgba(24,24,28,.985),rgba(13,13,16,.99));color:#f2f2f4;border-radius:16px;padding:16px 18px 14px;box-shadow:0 24px 60px -18px rgba(0,0,0,.85),inset 0 0 0 1px rgba(255,255,255,.08);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;transition:left .25s ease,bottom .25s ease';
+    card.innerHTML = '<div class="sce-tour-arrow" style="position:absolute;bottom:-7px;width:14px;height:14px;transform:rotate(45deg);background:rgba(13,13,16,.99);box-shadow:1px 1px 0 rgba(255,255,255,.08)"></div>'
+      + '<div class="sce-tour-n" style="font-size:10.5px;font-weight:800;letter-spacing:.08em;color:#ff8a3d;margin-bottom:6px"></div>'
+      + '<div class="sce-tour-h" style="font-size:15px;font-weight:800;letter-spacing:-.2px"></div>'
+      + '<div class="sce-tour-p" style="font-size:12.5px;color:#b4b4bc;margin-top:6px"></div>'
+      + '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end"><button type="button" class="sce-tour-skip" style="border:0;background:rgba(255,255,255,.08);color:#cfcfd6;border-radius:10px;padding:8px 12px;font:700 12px inherit;cursor:pointer">Skip</button>'
+      + '<button type="button" class="sce-tour-next" style="border:0;background:linear-gradient(135deg,#f50,#ff8a3d);color:#fff;border-radius:10px;padding:8px 14px;font:800 12px inherit;cursor:pointer">Next</button></div>';
+    card.addEventListener('click', (e) => e.stopPropagation());
+    card.querySelector('.sce-tour-skip').addEventListener('click', endTour);
+    card.querySelector('.sce-tour-next').addEventListener('click', () => { tourStep++; if (tourStep >= TOUR.length) endTour(); else tourPaint(); });
+    tourEl.append(hole, card);
+    tourEl.addEventListener('click', () => { tourStep++; if (tourStep >= TOUR.length) endTour(); else tourPaint(); });
+    tourEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endTour(); } else if (e.key === 'Enter' || e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); tourStep++; if (tourStep >= TOUR.length) endTour(); else tourPaint(); } };
+    D.addEventListener('keydown', tourEsc, true);
+    tourRs = () => tourPaint(); W.addEventListener('resize', tourRs);
+    (D.body || D.documentElement).appendChild(tourEl);
+    tourPaint();
+    try { card.querySelector('.sce-tour-next').focus({ preventScroll: true }); } catch (e) {}
+  }
+  try { SUITE.startTour = startTour; } catch (e) {}
+
+  /* ───────── rate & share: once, after a week and thirty tracks; the store link comes from the relay ─────────
+   * Never a modal: a small card in the corner with Rate, Share and Not now. Any answer settles it for good. */
+  let extId = '', rateEl = null, lastPlayHref = '';
+  try { W.addEventListener('message', (e) => { const d = e.data; if (e.source === W && d && d.scss === 'ext-id' && typeof d.id === 'string') extId = d.id; }); W.postMessage({ scss: 'ext-id?' }, location.origin); } catch (e) {}
+  function storeUrl() { return extId ? 'https://chromewebstore.google.com/detail/' + extId : ''; }
+  function shareText() { const u = storeUrl(); return 'SoundCloud Suite — synced lyrics, studio-grade audio and a full-library shuffle for the SoundCloud web player' + (u ? ': ' + u : ''); }
+  function rateShare(what) {
+    if (what === 'rate') { const u = storeUrl(); if (!u) { toast('The store page opens once the suite is installed from the Chrome Web Store'); return; } try { W.open(u + '/reviews', '_blank', 'noopener'); } catch (e) {} SET('sce:rated', 1); return; }
+    try { GM_setClipboard(shareText()); toast('Copied a line about the suite' + (storeUrl() ? ' with its store link' : '')); } catch (e) { toast('Couldn’t copy'); }
+    SET('sce:rated', 1);
+  }
+  try { SUITE.rateShare = rateShare; SUITE.storeUrl = storeUrl; } catch (e) {}
+  function countPlay() {
+    try {
+      const h = curTrackHref(); if (!h || h === lastPlayHref) return; lastPlayHref = h;
+      if (!GET('sce:firstRun', 0)) SET('sce:firstRun', Date.now());
+      const n = (GET('sce:plays', 0) | 0) + 1; SET('sce:plays', n);
+      if (n >= 30 && !GET('sce:rated', 0) && !rateEl && Date.now() - (+GET('sce:firstRun', 0) || Date.now()) > 7 * 864e5 && GET('sce:onboarded', 0)) setTimeout(showRateCard, 4000);
+    } catch (e) {}
+  }
+  function showRateCard() {
+    if (rateEl || GET('sce:rated', 0)) return;
+    rateEl = D.createElement('div');
+    rateEl.setAttribute('role', 'dialog'); rateEl.setAttribute('aria-label', 'Enjoying SoundCloud Suite?');
+    rateEl.style.cssText = 'position:fixed;right:16px;bottom:92px;z-index:2147483360;width:min(320px,calc(100vw - 32px));background:linear-gradient(180deg,rgba(24,24,28,.985),rgba(13,13,16,.99));color:#f2f2f4;border-radius:16px;padding:14px 16px 12px;box-shadow:0 24px 60px -18px rgba(0,0,0,.85),inset 0 0 0 1px rgba(255,255,255,.08);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;opacity:0;transform:translateY(8px);transition:opacity .25s ease,transform .25s ease';
+    rateEl.innerHTML = '<div style="font-size:14px;font-weight:800;letter-spacing:-.2px">Enjoying SoundCloud Suite?</div>'
+      + '<div style="font-size:12px;color:#b4b4bc;margin-top:4px">A rating helps other listeners find it. Thirty tracks in, you know it better than any description does.</div>'
+      + '<div style="display:flex;gap:8px;margin-top:12px"><button type="button" data-a="rate" style="flex:1;border:0;background:linear-gradient(135deg,#f50,#ff8a3d);color:#fff;border-radius:10px;padding:8px 10px;font:800 12px inherit;cursor:pointer">★ Rate it</button>'
+      + '<button type="button" data-a="share" style="border:0;background:rgba(255,255,255,.08);color:#cfcfd6;border-radius:10px;padding:8px 12px;font:700 12px inherit;cursor:pointer">Share</button>'
+      + '<button type="button" data-a="later" style="border:0;background:none;color:#8a8a92;border-radius:10px;padding:8px 8px;font:700 12px inherit;cursor:pointer">Not now</button></div>';
+    rateEl.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button[data-a]') : null; if (!b) return; const a = b.dataset.a; if (a === 'later') SET('sce:rated', 1); else rateShare(a); try { rateEl.remove(); } catch (er) {} rateEl = null; });
+    (D.body || D.documentElement).appendChild(rateEl);
+    try { requestAnimationFrame(() => { if (rateEl) { rateEl.style.opacity = '1'; rateEl.style.transform = 'none'; } }); } catch (e) { rateEl.style.opacity = '1'; }
   }
   function showOnboarding() {
     if (onbEl) return;

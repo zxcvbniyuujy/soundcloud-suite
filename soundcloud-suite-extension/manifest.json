@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SoundCloud Suite",
-  "version": "4.62.0",
+  "version": "4.63.0",
   "description": "Synced lyrics, studio-grade audio, full-library shuffle and a cleaner look for the SoundCloud web player.",
   "minimum_chrome_version": "111",
   "icons": {

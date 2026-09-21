@@ -30,6 +30,8 @@
   window.addEventListener('message', (e) => {
     const d = e.data;
     if (e.source === window && d && d.scss === 'state') tell({ playing: d.playing === true ? true : d.playing === false ? false : undefined, focus: !!d.focus });
+    // the page asks for the extension id: it builds the Chrome Web Store link from it (Rate & share)
+    if (e.source === window && d && d.scss === 'ext-id?') { try { window.postMessage({ scss: 'ext-id', id: String(chrome.runtime.id || '') }, location.origin); } catch (err) {} }
   });
   window.addEventListener('focus', () => tell({ focus: true }));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tell({ focus: true }); });
