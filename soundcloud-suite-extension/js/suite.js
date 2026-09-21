@@ -11109,6 +11109,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     mediaKeys: true,        // title, artist, artwork and play / pause / seek in the OS now-playing panel
     tsLinks: true,          // m:ss in descriptions and comments jumps there
     setRuntime: true,       // track count and total length under a playlist title
+    bpmDetect: true,        // measure the tempo while the chain is routed
     hidePlaylistsFeed: false, // hide playlists in the stream
     compactFeed: false,     // tighter stream rows
     biggerWave: false,      // taller waveform
@@ -12043,6 +12044,23 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
   }
   registerProcessor('sce-tp-limiter', SceTpLimiter);
+  // Onset feed for the tempo estimator: per 512 frames the mean square of the mono mix, full band and
+  // below ~150 Hz (one-pole), sixteen values per message. The node outputs silence; the work is tiny.
+  class SceOnset extends AudioWorkletProcessor {
+    constructor() { super(); this.lo = 0; this.acc = new Float32Array(16); this.k = 0; this.frames = 0; this.sLo = 0; this.sHi = 0; this.a = 1 - Math.exp(-2 * Math.PI * 150 / sampleRate); this.fs = sampleRate / 512; }
+    process(inputs) {
+      var inp = inputs[0]; if (!inp || !inp.length || !inp[0]) return true;
+      var L = inp[0], R = inp[1] || inp[0], n = L.length, a = this.a, lo = this.lo, sLo = 0, sHi = 0, i, x;
+      for (i = 0; i < n; i++) { x = (L[i] + R[i]) * 0.5; lo += a * (x - lo); sLo += lo * lo; sHi += x * x; }
+      this.lo = lo; this.sLo += sLo; this.sHi += sHi; this.frames += n;
+      if (this.frames >= 512) {
+        this.acc[this.k++] = this.sLo / this.frames; this.acc[this.k++] = this.sHi / this.frames; this.sLo = 0; this.sHi = 0; this.frames = 0;
+        if (this.k >= 16) { this.port.postMessage({ e: this.acc.slice(0), fs: this.fs }); this.k = 0; }
+      }
+      return true;
+    }
+  }
+  registerProcessor('sce-onset', SceOnset);
   `,
 
     // Adds the processor module to ctx.audioWorklet from a Blob URL, once per context.
@@ -12649,6 +12667,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function attachGuard(e) {
     try {
       const c = e.chain; if (!c || c.tpl) return;
+      attachOnset(e);
       const t = TP_LIMITER.create(e.ctx); if (!t) return;
       try { t.parameters.get('ceiling').value = TP_CEIL; t.parameters.get('bypass').value = 1; } catch (er) {}
       c.gB.connect(t); t.connect(c.tplAlign); c.tpl = t;
@@ -13244,6 +13263,87 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     toast('Resumed at ' + fmtClock(pos));
   }
 
+  /* ── tempo: a tiny worklet on the chain's input reports block energies; an onset envelope (half-wave
+   * rectified log-energy flux, the low band weighted up) is autocorrelated every 4 s over the last 32 s,
+   * harmonics reinforced and a soft prior around 120 BPM, then divided by the playback rate so the figure
+   * is the track's own. Two agreeing estimates publish; a track's BPM is remembered for a year. ── */
+  const BPM_KEY = 'enh:bpm', BPM_MAX = 300;
+  const bpm = { env: new Float32Array(4096), n: 0, fs: 0, prevLo: 0, prevHi: 0, last: null, stable: 0, pub: null, href: '', tick: 0 };
+  function bpmReset(href) { bpm.n = 0; bpm.prevLo = 0; bpm.prevHi = 0; bpm.last = null; bpm.stable = 0; bpm.pub = null; bpm.href = href || ''; }
+  function bpmFeed(pairs, fs) {
+    if (!CFG.bpmDetect || !pairs) return;
+    if (fs && fs !== bpm.fs) { bpm.fs = fs; bpm.n = 0; }
+    for (let i = 0; i + 1 < pairs.length; i += 2) {
+      const lo = Math.log(pairs[i] + 1e-9), hi = Math.log(pairs[i + 1] + 1e-9);
+      const f = Math.max(0, lo - bpm.prevLo) * 1.5 + Math.max(0, hi - bpm.prevHi);
+      bpm.prevLo = lo; bpm.prevHi = hi;
+      if (bpm.n >= bpm.env.length) { bpm.env.copyWithin(0, 512); bpm.n -= 512; }
+      bpm.env[bpm.n++] = f;
+    }
+  }
+  function bpmEstimate() {
+    const fs = bpm.fs; if (!fs) return null;
+    const N = Math.min(bpm.n, Math.round(fs * 32)); if (N < fs * 16) return null;
+    const x = bpm.env.subarray(bpm.n - N, bpm.n);
+    const w = Math.round(fs), d = new Float32Array(N); let acc = 0;
+    for (let i = 0; i < N; i++) { acc += x[i]; if (i >= w) acc -= x[i - w]; d[i] = x[i] - acc / Math.min(i + 1, w); }   // 1 s detrend
+    const ac = (L) => { let sum = 0; for (let i = L; i < N; i++) sum += d[i] * d[i - L]; return sum / (N - L); };
+    const a0 = ac(0); if (!(a0 > 0)) return null;
+    const Lmin = Math.max(2, Math.floor(fs * 60 / 200)), Lmax = Math.ceil(fs * 60 / 60);
+    const acs = new Float32Array(Lmax * 2 + 3);
+    for (let L = Lmin >> 1; L <= Lmax * 2 + 1 && L < N; L++) acs[L] = ac(L) / a0;
+    let best = -Infinity, bestL = 0; const scores = [];
+    for (let L = Lmin; L <= Lmax; L++) {
+      const b = 60 * fs / L, pref = Math.exp(-0.5 * Math.pow(Math.log2(b / 120) / 0.9, 2));
+      const sc = (acs[L] + 0.5 * (acs[2 * L] || 0) + 0.25 * (acs[Math.round(L / 2)] || 0)) * pref;
+      scores.push(sc); if (sc > best) { best = sc; bestL = L; }
+    }
+    if (!(best > 0) || !bestL) return null;
+    const y0 = acs[bestL - 1] || 0, y1 = acs[bestL], y2 = acs[bestL + 1] || 0, den = y0 - 2 * y1 + y2;
+    const off = den ? Math.max(-0.5, Math.min(0.5, 0.5 * (y0 - y2) / den)) : 0;
+    scores.sort((p, q) => p - q);
+    const med = scores[scores.length >> 1] || 0;
+    return { bpm: 60 * fs / (bestL + off), conf: Math.max(0, Math.min(1, (best - med) / (best + 1e-9))) };
+  }
+  function bpmMem() { const o = GET(BPM_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  function bpmTick(m) {   // 1 Hz: track changes reset (and recall), an estimate every 4 s of routed playback
+    if (!CFG.bpmDetect) { if (bpm.pub) bpm.pub = null; return; }
+    const href = curTrackHref() || '';
+    if (href !== bpm.href) {
+      bpmReset(href);
+      const e = href && bpmMem()[href];
+      if (e && e.b > 0 && Date.now() - (e.t || 0) < 365 * 864e5) bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' };
+    }
+    if (!m || m.paused || (++bpm.tick % 4)) return;
+    const est = bpmEstimate(); if (!est || est.conf < 0.3) return;
+    const rate = (m.playbackRate > 0 ? m.playbackRate : 1), b = est.bpm / rate;
+    if (bpm.last && Math.abs(b - bpm.last) < 1.5) bpm.stable++; else bpm.stable = 0;
+    bpm.last = b;
+    if (bpm.stable < 1) return;
+    const rounded = Math.round(b * 10) / 10;
+    if (!bpm.pub || bpm.pub.src !== 'measured' || Math.abs(bpm.pub.bpm - rounded) >= 0.5) {
+      bpm.pub = { bpm: rounded, conf: Math.round(est.conf * 100) / 100, src: 'measured' };
+      if (href) { const map = bpmMem(); map[href] = { b: rounded, c: bpm.pub.conf, t: Date.now() }; const keys = Object.keys(map); if (keys.length > BPM_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete map[k]; }); } SET(BPM_KEY, map); }
+      repaintAudioSoon();
+    }
+  }
+  function bpmText(withRate) {   // '≈ 128 BPM', with the sped-up figure when the rate is not 1×
+    const p = bpm.pub; if (!p) return '';
+    const b = p.bpm, txt = '≈ ' + (Math.abs(b - Math.round(b)) < 0.05 ? String(Math.round(b)) : b.toFixed(1)) + ' BPM';
+    const r = wantedRate();
+    return txt + (withRate && Math.abs(r - 1) > 0.01 ? ' · ' + Math.round(b * r) + ' at ' + r + '×' : '');
+  }
+  function attachOnset(e) {   // the onset feed sits on the chain's input, so the tone settings never colour the tempo
+    try {
+      const c = e.chain; if (!c || c.onset || e.ctx.__sceTpLimiterOk !== true || typeof AudioWorkletNode === 'undefined') return;
+      const node = new AudioWorkletNode(e.ctx, 'sce-onset', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: 'clamped-max' });
+      node.port.onmessage = (ev) => { try { if (ev.data && ev.data.e) bpmFeed(ev.data.e, ev.data.fs); } catch (er) {} };
+      const mute = e.ctx.createGain(); mute.gain.value = 0;
+      c.input.connect(node); node.connect(mute); mute.connect(e.ctx.destination);
+      c.onset = node; c.onsetMute = mute;
+    } catch (er) {}
+  }
+
   /* ── system media controls: SoundCloud registers only next / previous and no metadata, so the OS
    * now-playing panel and the media keys know nothing about the track. Title, artist and artwork come
    * from the player bar; play / pause / seek and the position state from the captured element. ── */
@@ -13401,6 +13501,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const m = activeMedia();
       if (!m) { try { mediaSessionSync(null); } catch (e) {} return; }
       try { offerResume(m); recordResume(m); applyResume(m); applyPendingJump(m); mediaSessionSync(m); } catch (e) {}
+      try { bpmTick(m); } catch (e) {}
       // end-of-track silence trim (WP10): source peak < −60 dBFS for 2 s with under 30 s left → seek to the end.
       // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
       try {
@@ -13835,6 +13936,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const metaChips = [];
     if (genre) metaChips.push(['Genre', genre]);
     if (bpm) metaChips.push(['BPM', String(bpm)]);
+    else if (bpmText(false) && curTrackHref() === (d.permalink_url ? new URL(d.permalink_url).pathname : '')) metaChips.push(['BPM', bpmText(false).replace(/ BPM$/, '')]);
     if (date) metaChips.push(['Released', date]);
     metaChips.push(['Length', len]);
     let chipHtml = '';
@@ -14031,6 +14133,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   // ── Copy / Paste / Reset all audio (2.22) ──
   let audioHost = null;   // the tab body audioRender last painted: a paste or a reset rebuilds it in place
+  function repaintAudioSoon() { try { if (eqRepaint) eqRepaint(); } catch (e) {} }   // the Audio tab's live rows, when it is open
   function rerenderAudio() { try { if (audioHost && audioHost.isConnected && audioTabOn) audioRender(audioHost); else if (eqRepaint) eqRepaint(); } catch (e) {} }
   function exportAudio() {
     const audio = {};
@@ -14157,13 +14260,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const subText = () => {
         if (fxBypass) return 'Comparing · original tone' + (cmpLatched ? ' — click Compare to return' : '');
         const boost = CFG.boostAmt | 0, loud = !!CFG.loudnessOn, gr = +meter.limGr;
-        if (!loud && boost <= 100 && !needsLimiter()) return HINT;
+        if (!loud && boost <= 100 && !needsLimiter()) return bpm.pub ? HINT + ' · ' + bpmText(false) : HINT;
         const seg = [];
         if (loud && isFinite(meter.i)) seg.push(fmtDb(meter.i) + ' LUFS');
         if (isFinite(meter.peak) && meter.peak > -90) seg.push('peak ' + fmtDb(meter.peak) + ' dB');
         if (loud && isFinite(meter.gainDb) && meter.gainDb > -90) seg.push(fmtDb(meter.gainDb, true) + ' dB applied');
         if (boost > 100) seg.push('boost ' + boost + ' %');
         if (isFinite(gr) && gr < -0.3) seg.push('guard ' + fmtDb(gr) + ' dB');
+        if (bpm.pub) seg.push(bpmText(false));
         return seg.length ? seg.join(' · ') : HINT;
       };
       const paintSub = () => { const t = subText(); if (t !== lastSub) { lastSub = t; subEl.textContent = t; } };
@@ -14293,6 +14397,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try { spdR.input.value = CFG.speed; } catch (e) {} spdR.paint(); paintSpeed(); toast(lit ? 'Slowed + reverb off' : 'Slowed + reverb · 0.85×, pitch follows, a little room');
       });
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
+      const bpmLine = D.createElement('div'); bpmLine.style.cssText = 'font-size:10.5px;color:#7c7c84;margin-top:8px;font-variant-numeric:tabular-nums'; bodyEl.appendChild(bpmLine);
+      const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on'); if (bpmLine.textContent !== t) bpmLine.textContent = t; };
+      paintBpm(); liveSync.push(paintBpm);
       paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
       // fade in / out (2.21): the lengths dim while off and wake the switch like Intensity does
@@ -14762,6 +14869,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n,
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15002,6 +15110,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
+    ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
     ['resumePos', 'select', 'Resume long tracks', 'Mixes and podcasts over 10 minutes remember where you stopped, for a month', [['ask', 'Offer to resume'], ['auto', 'Resume automatically'], ['off', 'Off']]],

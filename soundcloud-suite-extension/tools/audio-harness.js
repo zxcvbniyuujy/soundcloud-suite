@@ -64,6 +64,8 @@ const FIXTURE_SRC = `
     B: () => wav((t) => (t < 2 ? 0 : ((t % 0.5) < 0.1 ? (sine(t) >= 0 ? 1 : -1) : 0)), 6),
     // C: 997 Hz at −20 dBFS, 10 s
     C: () => wav((t) => sine(t) * Math.pow(10, -20 / 20), 10),
+    // K: a 128 BPM kick pattern (60 Hz decaying bursts, a soft 8th-note tick between), 15 s, for the tempo estimator
+    K: () => wav((t) => { const beat = 60 / 128, p = t % beat, q = (t + beat / 2) % beat; const kick = p < 0.12 ? Math.sin(2 * Math.PI * 60 * t) * Math.exp(-p * 28) * 0.85 : 0; const tick = q < 0.02 ? Math.sin(2 * Math.PI * 4000 * t) * Math.exp(-q * 250) * 0.2 : 0; return kick + tick; }, 15),
     // D: 997 Hz tone bursts, peak −3 dBFS, 50 ms on / 350 ms off, 12 s (≈ −13 LUFS)
     D: () => wav((t) => ((t % 0.4) < 0.05 ? sine(t) * Math.pow(10, -3 / 20) : 0), 12),
     // E: 997 Hz bed at −26 dBFS with 10 ms bursts at −3 dBFS every 400 ms, 12 s (≈ −18.2 LUFS, peak 0.708):
@@ -1841,6 +1843,24 @@ const FIXTURE_SRC = `
     // speed is not an effect: with everything else off the chain detaches when the tab closes
     await btnClick('1.25×'); await closeHub(); await sleep(150); const s = await snap(); eq(s.routed, false, 'detached'); eq(await elProp('playbackRate'), 1.25, 'speed stays');
     await set('speed', 100); await dbg(`d.applySpeed();`); await stopPlay();
+  });
+
+  scenario('bpm-detect', async () => {
+    // tempo: a 128 BPM kick pattern is measured within ~30 s of the chain being routed, the figure is the track's own even
+    // at 1.25×, and it is remembered per track
+    await play('K', { loop: true, href: '/test/bpm' });
+    await audioTab(); await sleep(30000);
+    let b = await dbg(`return d.bpm();`);
+    assert(b && Math.abs(b.bpm - 128) < 2, 'detected ≈ 128 BPM (got ' + JSON.stringify(b) + ', fed ' + (await dbg(`return d.bpmFed();`)) + ')');
+    eq(b.src, 'measured', 'measured, not remembered');
+    const line = await abody(`const el = [...a.querySelectorAll('div')].find((d) => /^Tempo ≈/.test(d.textContent)); return el ? el.textContent : null;`);
+    assert(line && /Tempo ≈ 12[78](\.\d)? BPM/.test(line), 'the Audio tab shows it (got ' + JSON.stringify(line) + ')');
+    await set('speed', 125); await sleep(40000);
+    b = await dbg(`return d.bpm();`);
+    assert(b && Math.abs(b.bpm - 128) < 3, 'still the track\'s own tempo at 1.25× (got ' + JSON.stringify(b) + ')');
+    const mem = await dbg(`return d.gm('enh:bpm');`);
+    assert(mem && mem['/test/bpm'] && Math.abs(mem['/test/bpm'].b - 128) < 3, 'remembered per track');
+    await set('speed', 100); await closeHub(); await stopPlay();
   });
 
   scenario('fades', async () => {
