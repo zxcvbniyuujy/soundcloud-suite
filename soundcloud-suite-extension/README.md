@@ -43,8 +43,10 @@ never plays.
   next, Alt+Shift+B previous, Alt+Shift+L like, from any tab; change them at
   `chrome://extensions/shortcuts`. The command reaches the SoundCloud tab
   that is playing, else the one last in front. No new permissions.
-- **Pause when headphones disconnect** — an audio output that vanishes pauses
-  playback instead of switching to the speakers (Tweaks → Player).
+- **Pause when the audio output goes away** — headphones unplugged or a
+  Bluetooth link dropped: playback pauses instead of switching to the speakers
+  (Tweaks → Player). Chrome names outputs only once the site may use the
+  microphone; before that the pause comes when no output is left.
 - **Smart rewind** — a pause of three minutes on a track of five minutes or
   more resumes 5 s back, fifteen minutes 15 s back (Tweaks → Player).
 - **Listen later** — a private, local shortlist that needs no account: save

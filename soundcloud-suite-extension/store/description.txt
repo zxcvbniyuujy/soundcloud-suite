@@ -62,7 +62,7 @@ Eleven dark themes. A light one. Zen mode for when you want nothing but the musi
 • Open on the page you choose
 • Title, artwork and seek on your media keys and the system now-playing panel
 • Play, skip and like from any tab with Alt+Shift+P, N, B and L
-• Unplug your headphones and playback pauses
+• Lose your audio output and playback pauses instead of switching to the speakers
 • Speed, an A–B loop and a sleep timer in the player bar
 • Track info, timecodes, a waveform timeline
 • Ctrl+K opens a command palette for everything: type 12:34 to jump, 1.5x for the speed, or a title from your likes to play it. Press ? for every shortcut.

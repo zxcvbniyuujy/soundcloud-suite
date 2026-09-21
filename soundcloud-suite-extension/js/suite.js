@@ -14230,25 +14230,36 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       toast('Back ' + back + ' s after the pause');
     } catch (e) {}
   }
-  /* ── pause when an audio output goes away: unplug the headphones or lose the Bluetooth link and the site
-   * carries on through the speakers. Device counts need no permission (labels do; we never ask). ── */
-  function countOutputs() {
+  /* ── pause when the audio output goes away: unplug the headphones or lose the Bluetooth link and the site
+   * carries on through the speakers. Without microphone permission Chrome lists outputs as nameless placeholders
+   * (one per kind at most), so then the pause comes only when no output is left; with real ids, the output that
+   * was in use (the element's sink, else the first physical one listed) has to be the one that vanished. ── */
+  let devPrev = null;
+  function listOutputs() {
     if (devCount) return devCount();
-    try { return navigator.mediaDevices.enumerateDevices().then((list) => list.filter((d) => d.kind === 'audiooutput').length).catch(() => -1); } catch (e) { return Promise.resolve(-1); }
+    try { return navigator.mediaDevices.enumerateDevices().then((list) => list.filter((d) => d.kind === 'audiooutput').map((d) => String(d.deviceId || ''))).catch(() => null); } catch (e) { return Promise.resolve(null); }
+  }
+  function outputInUse(ids) {
+    const m = activeMedia(); const sink = m && typeof m.sinkId === 'string' ? m.sinkId : '';
+    if (sink && ids.indexOf(sink) !== -1) return sink;
+    return ids.find((id) => id && id !== 'default' && id !== 'communications') || '';
   }
   function onDeviceChange() {
-    countOutputs().then((n) => {
-      const was = devOutN; devOutN = n;
-      if (!CFG.pauseUnplug || n < 0 || was < 0 || n >= was) return;
+    listOutputs().then((now) => {
+      const was = devPrev; devPrev = now;
+      if (!CFG.pauseUnplug || !now || !was) return;
+      const inUse = outputInUse(was);
+      const gone = inUse ? now.indexOf(inUse) === -1 : (was.length > 0 && now.length === 0);
+      if (!gone) return;
       const m = activeMedia(); if (!m || m.paused) return;
-      clickPlayBtn(); toast('Paused — an audio output disconnected');
+      clickPlayBtn(); toast('Paused — the audio output disconnected');
     });
   }
   function watchDevices() {
     try {
       if (devWatching || !CFG.pauseUnplug || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
       devWatching = true;
-      countOutputs().then((n) => { if (devOutN < 0) devOutN = n; });
+      listOutputs().then((l) => { if (!devPrev) devPrev = l; devOutN = l ? l.length : -1; });
       navigator.mediaDevices.addEventListener('devicechange', () => { clearTimeout(devTimer); devTimer = setTimeout(onDeviceChange, 250); });   // a change lands as a burst of events
     } catch (e) {}
   }
@@ -15405,7 +15416,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (n) => { devCount = () => Promise.resolve(n); onDeviceChange(); }, devOut: () => devOutN, rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15650,7 +15661,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
-    ['pauseUnplug', 'toggle', 'Pause when headphones disconnect', 'Any audio output that vanishes — unplugged, or a Bluetooth link dropped — pauses playback instead of switching to the speakers (the browser cannot tell which output is in use)'],
+    ['pauseUnplug', 'toggle', 'Pause when the audio output goes away', 'Headphones unplugged or a Bluetooth link dropped: playback pauses instead of switching to the speakers. Chrome only names outputs once the site may use your microphone; before that it pauses when no output is left'],
     ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
     ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
