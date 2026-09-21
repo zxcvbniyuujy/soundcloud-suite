@@ -11328,6 +11328,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     feedHideLiked: false,   // hide tracks already in the likes library
     resumePos: 'ask',       // long tracks remember their position: 'ask' | 'auto' | 'off'
     mediaKeys: true,        // title, artist, artwork and play / pause / seek in the OS now-playing panel
+    pauseUnplug: true,      // an audio output that vanishes (headphones unplugged, Bluetooth dropped) pauses playback
     tsLinks: true,          // m:ss in descriptions and comments jumps there
     setRuntime: true,       // track count and total length under a playlist title
     bpmDetect: true,        // measure the tempo while the chain is routed
@@ -14003,6 +14004,29 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { W.postMessage({ scss: 'cmd-ack', id: d.id, handled }, location.origin); } catch (e2) {}
     });
   } catch (e) {}
+  /* ── pause when an audio output goes away: unplug the headphones or lose the Bluetooth link and the site
+   * carries on through the speakers. Device counts need no permission (labels do; we never ask). ── */
+  let devOutN = -1, devTimer = 0, devCount = null;
+  function countOutputs() {
+    if (devCount) return devCount();
+    try { return navigator.mediaDevices.enumerateDevices().then((list) => list.filter((d) => d.kind === 'audiooutput').length).catch(() => -1); } catch (e) { return Promise.resolve(-1); }
+  }
+  function onDeviceChange() {
+    countOutputs().then((n) => {
+      const was = devOutN; devOutN = n;
+      if (!CFG.pauseUnplug || n < 0 || was < 0 || n >= was) return;
+      const m = activeMedia(); if (!m || m.paused) return;
+      clickPlayBtn(); toast('Paused — an audio output disconnected');
+    });
+  }
+  function watchDevices() {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      countOutputs().then((n) => { if (devOutN < 0) devOutN = n; });
+      navigator.mediaDevices.addEventListener('devicechange', () => { clearTimeout(devTimer); devTimer = setTimeout(onDeviceChange, 250); });   // a change lands as a burst of events
+    } catch (e) {}
+  }
+  try { watchDevices(); } catch (e) {}
   function likeCurrent() {
     // the player bar only, most specific first: a selector list returns the first match in DOCUMENT order, i.e. a stream item's button
     const b = ['.playbackSoundBadge__actions .sc-button-like', '.playbackSoundBadge__like', '.playControls__soundBadge .sc-button-like', '.playControls .sc-button-like'].map((s) => D.querySelector(s)).find(Boolean);
@@ -15146,7 +15170,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (n) => { devCount = () => Promise.resolve(n); onDeviceChange(); }, devOut: () => devOutN, bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -15388,6 +15412,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
     ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
     ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
+    ['pauseUnplug', 'toggle', 'Pause when headphones disconnect', 'An audio output that vanishes — unplugged, or Bluetooth dropped — pauses playback instead of switching to the speakers'],
     ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
     ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
