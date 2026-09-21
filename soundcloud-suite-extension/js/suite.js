@@ -7033,6 +7033,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .stathero { margin: 14px 12px 2px; padding: 16px 18px; border-radius: 15px; background: rgba(255,255,255,0.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
 .stathero .sh-big { font-size: 30px; font-weight: 750; letter-spacing: -1px; line-height: 1.05; color: #f3f3f5; font-variant-numeric: tabular-nums; }
 .stathero .sh-sub { font-size: 11.5px; color: #8a8a92; margin-top: 4px; font-weight: 500; }
+.stathero { position: relative; }
+.stathero .sh-share { position: absolute; top: 14px; right: 14px; }
 .panel.lite .stathero { background: rgba(0,0,0,0.035); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); }
 .panel.lite .stathero .sh-big { color: #1b1b1f; }
 .panel.lite .stathero .sh-sub { color: #6a6a72; }
@@ -7978,10 +7980,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       else { if (shareSel.length >= 6) { toast('Six lines is the most a card can hold'); return; } shareSel.push(i); lineEls[i].classList.add('sel'); }
       sharePreview();
     }
-    async function shareExport(copy) {
-      const lines = shareLinesText();
-      if (!lines.length) { toast('Pick a line first'); return; }
-      const c = await shareRender(lines, 1080);
+    async function shareOut(c, filename, copy) {   // one exit for every card: clipboard when asked and possible, else a PNG download
       const blob = await new Promise((r) => { try { c.toBlob(r, 'image/png'); } catch (e) { r(null); } });
       if (!blob) { toast('Could not build the image'); return; }
       if (copy) {
@@ -7989,12 +7988,124 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       try {
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-        const m = uiMeta || {};
-        a.download = 'lyric-card-' + String(m.title || 'lyrics').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) + '.png';
+        a.download = filename;
         (document.body || document.documentElement).appendChild(a); a.click();
         setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1000);
         toast(copy ? 'Clipboard unavailable · saved as a file instead' : 'Card saved');
       } catch (e) { toast('Could not save the image'); }
+    }
+    async function shareExport(copy) {
+      const lines = shareLinesText();
+      if (!lines.length) { toast('Pick a line first'); return; }
+      const c = await shareRender(lines, 1080);
+      const m = uiMeta || {};
+      await shareOut(c, 'lyric-card-' + String(m.title || 'lyrics').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) + '.png', copy);
+    }
+
+    /* ---------- listening recap card: the Stats tab as one square image ---------- */
+    function recapData() {
+      const s = SUITE.statsSnapshot && SUITE.statsSnapshot();
+      if (!s || !(s.allMs >= 5 * 60000)) return null;   // five minutes: enough for a number worth a picture
+      const x = (SUITE.statsExtra && SUITE.statsExtra()) || {};
+      return { s, days: x.days || [], hours: x.hours || [], artists: x.topArtists || [], repeat: x.onRepeat || [] };
+    }
+    function recapRender(d, size) {
+      const S = size || 1080, c = document.createElement('canvas'); c.width = S; c.height = S;
+      const ctx = c.getContext('2d'); if (!ctx) return c;
+      const u = S / 1080, pad = Math.round(84 * u);
+      const acc = (getComputedStyle(panel).getPropertyValue('--acc') || '#ff5500').trim() || '#ff5500';
+      const fmtT = (ms) => { const mn = Math.floor(ms / 60000); return mn < 60 ? mn + 'm' : Math.floor(mn / 60) + 'h ' + (mn % 60) + 'm'; };
+      const hourLbl = (h) => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? 'am' : 'pm');
+      const eyebrow = (t, x, y) => { ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = shareFont(Math.round(22 * u), 700); ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(t, x, y); };
+      const g = ctx.createLinearGradient(0, 0, S, S); g.addColorStop(0, '#1b1820'); g.addColorStop(1, '#0c0c0f'); ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+      ctx.textBaseline = 'top';
+      // top band: eyebrow, the headline number, one line of context
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = shareFont(Math.round(24 * u), 700);
+      ctx.fillText(('MY LISTENING · ' + new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })).toUpperCase(), pad, pad);
+      ctx.fillStyle = '#fff'; ctx.font = shareFont(Math.round(118 * u), 750);
+      ctx.fillText(fmtT(d.s.allMs), pad, pad + 44 * u);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = shareFont(Math.round(30 * u), 500);
+      const sub = [d.s.allPlayed ? d.s.allPlayed.toLocaleString() + ' plays' : '', d.s.streak >= 2 ? d.s.streak + '-day streak' : '', d.s.todayMs > 0 ? fmtT(d.s.todayMs) + ' today' : ''].filter(Boolean).join('  ·  ');
+      ctx.fillText(sub || 'all time on SoundCloud', pad, pad + 186 * u);
+      // right: the listening clock — a 24-hour ring, each hour a wedge sized by minutes heard; the card's signature
+      const hours = d.hours.length === 24 ? d.hours : Array(24).fill(0);
+      const hmax = Math.max(...hours, 1), anyHours = hours.some((v) => v > 0);
+      const cx = S - pad - 230 * u, cy = 490 * u, r0 = 80 * u, r1 = 200 * u;
+      if (anyHours) {
+        let peak = 0; hours.forEach((v, i) => { if (v > hours[peak]) peak = i; });
+        ctx.save(); ctx.translate(cx, cy);
+        for (let h = 0; h < 24; h++) {
+          const a0 = -Math.PI / 2 + (h / 24) * Math.PI * 2, a1 = a0 + (Math.PI * 2) / 24 - 0.035;
+          const rr = r0 + (r1 - r0) * Math.max(0.05, hours[h] / hmax);
+          ctx.beginPath(); ctx.arc(0, 0, rr, a0, a1); ctx.arc(0, 0, r0, a1, a0, true); ctx.closePath();
+          ctx.fillStyle = hours[h] > 0 ? acc : 'rgba(255,255,255,0.10)'; ctx.globalAlpha = hours[h] > 0 ? 0.35 + 0.65 * (hours[h] / hmax) : 1; ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.font = shareFont(Math.round(32 * u), 750); ctx.fillText(hourLbl(peak), 0, -11 * u);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = shareFont(Math.round(16 * u), 600); ctx.fillText('PEAK HOUR', 0, 21 * u);
+        ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = shareFont(Math.round(19 * u), 600);
+        [['12am', 0, -1], ['6am', 1, 0], ['12pm', 0, 1], ['6pm', -1, 0]].forEach(([t, dx, dy]) => ctx.fillText(t, dx * (r1 + 40 * u), dy * (r1 + 40 * u)));
+        ctx.restore();
+      }
+      // left middle: top artists, or the tracks on repeat when no library is in memory
+      const list = d.artists.length ? d.artists.slice(0, 3).map((a) => ({ t: a.n, v: a.p + ' plays' })) : d.repeat.slice(0, 3).map((r) => ({ t: r.t, v: r.n + '×' }));
+      if (list.length) {
+        const ly = 372 * u, right = anyHours ? cx - r1 - 96 * u : S - pad;
+        eyebrow(d.artists.length ? 'TOP ARTISTS' : 'ON REPEAT', pad, ly);
+        list.forEach((a, i) => {
+          const y = ly + 48 * u + i * 60 * u;
+          ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = shareFont(Math.round(20 * u), 600); ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+          ctx.fillText(a.v, right, y + 8 * u); ctx.textAlign = 'left';
+          const maxW = right - pad - ctx.measureText(a.v).width - 24 * u;
+          ctx.fillStyle = '#fff'; ctx.font = shareFont(Math.round(32 * u), 700);
+          let t = String(a.t); while (t.length > 3 && ctx.measureText(t).width > maxW) t = t.slice(0, -2).trimEnd() + '…';
+          ctx.fillText(t, pad, y);
+        });
+      }
+      // bottom: the last seven days as bars, full width
+      const days = d.days.length ? d.days : [];
+      if (days.some((dd) => dd.ms > 0)) {
+        const bTop = 796 * u, bH = 120 * u, bW = S - pad * 2;
+        const weekMs = days.reduce((a, dd) => a + dd.ms, 0), dmax = Math.max(...days.map((dd) => dd.ms), 1);
+        eyebrow('LAST 7 DAYS · ' + fmtT(weekMs), pad, bTop - 42 * u);
+        const gap = 14 * u, w = (bW - gap * (days.length - 1)) / days.length;
+        days.forEach((dd, i) => {
+          const h = Math.max(8 * u, bH * dd.ms / dmax), x = pad + i * (w + gap);
+          ctx.fillStyle = dd.today ? acc : 'rgba(255,255,255,0.16)';
+          try { ctx.beginPath(); ctx.roundRect(x, bTop + bH - h, w, h, 6 * u); ctx.fill(); } catch (e) { ctx.fillRect(x, bTop + bH - h, w, h); }
+          ctx.fillStyle = dd.today ? '#fff' : 'rgba(255,255,255,0.45)'; ctx.font = shareFont(Math.round(17 * u), 650); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+          ctx.fillText(dd.w, x + w / 2, bTop + bH + 10 * u);
+        });
+        ctx.textAlign = 'left';
+      }
+      ctx.fillStyle = acc; ctx.font = shareFont(Math.round(22 * u), 700); ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+      ctx.fillText('SoundCloud Suite', S - pad, pad + 2 * u);
+      return c;
+    }
+    function recapSheet() {
+      const d = recapData();
+      if (!d) { toast('Listen for five minutes first — then there is a card to share'); return; }
+      const wrap = document.createElement('div');
+      wrap.className = 'keys on';
+      wrap.style.cursor = 'default';
+      wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-label', 'Listening card');
+      const h = document.createElement('h3'); h.textContent = 'Your listening card';
+      const pv = document.createElement('canvas'); pv.width = 720; pv.height = 720;
+      pv.style.cssText = 'width:100%;max-width:340px;aspect-ratio:1;height:auto;border-radius:14px;align-self:center;background:#141318;box-shadow:0 12px 34px rgba(0,0,0,0.45)';
+      const c = recapRender(d, 720); try { pv.getContext('2d').drawImage(c, 0, 0); } catch (e) {}
+      const note = document.createElement('div'); note.style.cssText = 'font-size:11px;color:#8a8a92;margin:10px 0 12px;text-align:center';
+      note.textContent = 'Total time, your listening clock, the last seven days and top artists · 1080×1080';
+      const row = document.createElement('div'); row.className = 'row';
+      const fname = () => 'listening-card-' + new Date().toISOString().slice(0, 10) + '.png';
+      const copyB = document.createElement('button'); copyB.className = 'btn acc'; copyB.textContent = 'Copy image'; copyB.addEventListener('click', () => shareOut(recapRender(d, 1080), fname(), true));
+      const saveB = document.createElement('button'); saveB.className = 'btn'; saveB.textContent = 'Save'; saveB.addEventListener('click', () => shareOut(recapRender(d, 1080), fname(), false));
+      const close = document.createElement('button'); close.className = 'btn'; close.textContent = 'Close'; close.addEventListener('click', () => wrap.remove());
+      row.append(copyB, saveB, close);
+      wrap.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') { ev.preventDefault(); wrap.remove(); } });
+      wrap.append(h, pv, note, row);
+      panel.appendChild(wrap);
+      setTimeout(() => { try { copyB.focus(); } catch (e) {} }, 30);
     }
     function shareSheet() {
       if (!lineEls.length || !curLyr || curLyr.instr) { toast('No lyrics to share yet'); return; }
@@ -8544,6 +8655,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const shBig = document.createElement('div'); shBig.className = 'sh-big'; shBig.textContent = fmtT(s.allMs);
       const shSub = document.createElement('div'); shSub.className = 'sh-sub'; shSub.textContent = 'total listening · ' + (s.streak >= 2 ? s.streak + '-day streak 🔥' : (fmtT(s.todayMs) + ' today'));
       hero.append(shBig, shSub);
+      const shBtn = document.createElement('button'); shBtn.className = 'sbtn sh-share'; shBtn.textContent = 'Share card'; shBtn.title = 'Your listening as a 1080×1080 image';
+      shBtn.addEventListener('click', () => recapSheet());
+      hero.appendChild(shBtn);
       sbody.appendChild(hero);
       sbody.appendChild(qh('This session'));
       sbody.appendChild(grid([[fmtT(s.sessMs), 'listened'], [String(s.played), 'played'], [String(s.skipped), 'skipped']]));
@@ -9861,6 +9975,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // lyrics
       add('⟳', 'Re-search this track', 'Lyrics', () => { setOpen(true); setTab('lyrics'); App.retry(); });
       add('▣', 'Share a lyric card', 'Lyrics', () => { setOpen(true); shareSheet(); });
+      add('▣', 'Share my listening card', 'Stats', () => { setOpen(true); setTab('stats'); recapSheet(); });
       add('⌕', 'Find a song by a lyric', 'Lyrics', () => { setOpen(true); setTab('lyrics'); lyricSearchSheet(); });
       // chapters / cue points
       if (Chapters.list.length) {
