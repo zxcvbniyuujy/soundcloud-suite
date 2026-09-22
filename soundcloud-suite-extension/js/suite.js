@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.64.0
+// @version      4.64.1
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.64.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.64.1';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -948,7 +948,7 @@
     // audio ads (Tweaks → Declutter → Skip audio ads, on by default): the player asks its own API for an ad before
     // a track and streams the creative from a separate CDN. The same two first-party calls the ad-blocking filter
     // lists fail (…/audio-ad…, …/promoted…) fail here with a network error — the player then simply plays the track.
-    const AD_RE = /^https:\/\/(?:[\w-]+\.)*soundcloud\.com\/(?:[^?#]*\/)?(?:audio-ads?|promoted)(?:[/?#]|$)/i;
+    const AD_RE = /^https:\/\/(?:[\w-]+\.)*soundcloud\.com\/(?:audio-ads?|promoted)(?:[/?#]|$)/i;   // host-anchored like the filter lists: the path starts with /audio-ad or /promoted
     const adBlocked = (url) => { try { return !!(SUITE.adSkip && SUITE.adSkip() && AD_RE.test(String(url || ''))); } catch (e) { return false; } };
     const adHit = () => { try { Log.metric('audio ads blocked'); if (SUITE.adHit) SUITE.adHit(); } catch (e) {} };
     PW.fetch = function (input, init) {
@@ -8735,7 +8735,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
-          ['⊘', 'No more audio ads', 'The ad calls fail the way an ad blocker fails them, so the next track plays instead; an ad file that still arrives is muted and over in a second. On by default — Tweaks → Declutter → Skip audio ads turns it off.'],
+          ['⊘', 'No more audio ads', 'The ad calls fail the way an ad blocker fails them, so the player never has an ad to play and goes straight to the track. Nothing is ever muted. On by default — Tweaks → Declutter → Skip audio ads turns it off.'],
           ['🌐', 'In your language', 'The suite’s own text in German, French, Spanish, Portuguese, Italian, Dutch, Polish, Turkish, Russian, Japanese or Korean, following your browser; Tweaks → Appearance → Language picks one. SoundCloud itself and the lyrics stay as they are.'],
           ['⧉', 'Lyrics that float above everything', 'Press P in the hub (or ⋯ → Floating lyrics window) for a small window that stays on top of every app: artwork, the sung line with the karaoke wipe, the next line, a progress bar and prev / play / next. It keeps moving while the SoundCloud tab is hidden. Chrome 116 or newer.'],
           ['★', 'A tour, and a way to spread the word', 'New listeners get three spotlights on the real buttons after the setup choice; Ctrl+K → Take the tour repeats it. Ctrl+K also has Share SoundCloud Suite (a line with the store link on the clipboard) and Rate SoundCloud Suite; after a week and thirty tracks a small card asks once.'],
@@ -12222,7 +12222,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     fadeIn: 0.6, fadeOut: 2.5,           // 0..3 s, 0..8 s
     skipSilence: false,     // end-of-track silence trim (WP10): the last 30 s only, never mid-track
     uiLang: 'auto',         // the suite's own text: auto follows the browser (i18n.js)
-    adSkip: true,           // audio ads: the ad calls fail like an ad blocker's; a creative that slips through is muted and finished in a second
+    adSkip: true,           // audio ads: the ad calls fail like an ad blocker's, so the player never has an ad to play
     reverbAmt: 0,           // 0..100 → wet 0..0.35 through a generated 1.6 s IR (WP10 "Slowed + reverb")
     // ── toolbar buttons ──
     barSpeed: true, barCopy: true, barRestart: true, barAB: false, barInfo: true,
@@ -12728,9 +12728,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const sceBufNodes = new Set();   // captured AudioBufferSourceNodes
   let sceLastCtx = null;           // the AudioContext SoundCloud routes through (for output-latency)
   let sceLatMs = 0;                // smoothed output latency (ms) — avoids per-frame jitter
-  // the ad creatives' own paths (the filter lists neuter these as media): never a track's stream, which lives under
-  // the HLS / progressive media hosts
-  const AD_SRC_RE = /^https?:\/\/(?:[\w-]+\.)*(?:p-cdn\.us\/public\/|sndcdn\.com\/audio\/)/i;
+  // audio ads are skipped at the request layer (module 1): the ad calls fail like a blocked request, so the player never
+  // has an ad to play. Nothing here ever mutes, re-rates or seeks an element — the sound the listener hears is never touched.
   function adHit() { try { const n = (GET('enh:adsSkipped', 0) | 0) + 1; SET('enh:adsSkipped', n); } catch (e) {} }
   try { SUITE.adSkip = () => !!CFG.adSkip; SUITE.adHit = adHit; SUITE.adsSkipped = () => GET('enh:adsSkipped', 0) | 0; } catch (e) {}
   function captureMedia(m) {
@@ -12744,18 +12743,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // only rejoins the set, so the bound can never turn into a re-registration loop
       if (m.__sceCap) return;
       m.__sceCap = true;
-      const re = () => { if (m.__sceAd) return; try { const w = wantedRate(); if (Math.abs((m.playbackRate || 1) - w) > 0.01) m.playbackRate = w; } catch (e) {} try { fadeCtl.onRate(m); } catch (e) {} };
-      // an ad creative that still arrives (its own CDN paths): muted, run at 16× and sent to its end — a 30 s ad is over
-      // in about a second and the track follows; the element is handed back untouched when a track loads into it
-      const adCheck = () => {
-        try {
-          const src = String(m.getAttribute('src') || m.src || m.currentSrc || '');   // the attribute first: on a swap, currentSrc still names the old resource
-          const isAd = !!CFG.adSkip && AD_SRC_RE.test(src);
-          if (isAd && !m.__sceAd) { m.__sceAd = true; m.__sceAdMuted = !m.muted; m.muted = true; try { m.playbackRate = 16; } catch (e) {} try { if (isFinite(m.duration) && m.duration > 0.3) m.currentTime = Math.max(0, m.duration - 0.1); } catch (e) {} adHit(); }
-          else if (!isAd && m.__sceAd) { m.__sceAd = false; if (m.__sceAdMuted) { m.muted = false; m.__sceAdMuted = false; } try { m.playbackRate = wantedRate(); } catch (e) {} }
-        } catch (e) {}
-      };
-      m.addEventListener('loadstart', adCheck); m.addEventListener('loadedmetadata', adCheck); m.addEventListener('play', adCheck); m.addEventListener('playing', adCheck); m.addEventListener('emptied', adCheck);
+      const re = () => { try { const w = wantedRate(); if (Math.abs((m.playbackRate || 1) - w) > 0.01) m.playbackRate = w; } catch (e) {} try { fadeCtl.onRate(m); } catch (e) {} };
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
@@ -12795,7 +12783,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       const want = wantedRate();
       try { D.querySelectorAll('audio,video').forEach((m) => captureMedia(m)); } catch (e) {}
-      sceMediaEls.forEach((m) => { if (m.__sceAd) return; try { if (Math.abs((m.playbackRate || 1) - want) > 0.01) m.playbackRate = want; } catch (e) {} syncPitch(m); });
+      sceMediaEls.forEach((m) => { try { if (Math.abs((m.playbackRate || 1) - want) > 0.01) m.playbackRate = want; } catch (e) {} syncPitch(m); });
       // raw buffer sources: only real tracks (> 30 s) follow the speed — UI blips and previews stay put (2.31)
       if (sceBufNodes.size) sceBufNodes.forEach((n) => { try { if (n.playbackRate && n.buffer && n.buffer.duration > 30 && n.playbackRate.value !== want) n.playbackRate.value = want; } catch (e) {} });
     } catch (e) {}
@@ -16642,7 +16630,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['thinScroll', 'toggle', 'Slim scrollbars', ''],
     ['fontScale', 'range', 'Text size', '', 85, 120],
     ['SEC', 'Declutter'],
-    ['adSkip', 'toggle', 'Skip audio ads', 'The ad calls fail the way an ad blocker fails them, so the track plays instead; an ad file that still arrives is muted and finished in a second'],
+    ['adSkip', 'toggle', 'Skip audio ads', 'The ad calls fail the way an ad blocker fails them, so the player never has an ad to play and goes straight to the track'],
     ['hideUpsell', 'toggle', 'Hide Go+ upsells', 'Upgrade nags & banners'],
     ['hideAppBanner', 'toggle', 'Hide app / cookie banners', ''],
     ['hidePromoted', 'toggle', 'Hide promoted items', 'Sponsored tracks in the stream'],

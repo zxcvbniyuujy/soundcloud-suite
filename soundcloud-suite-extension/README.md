@@ -96,10 +96,10 @@ never plays.
   first-party ad calls that ad-blocking filter lists fail (…/audio-ad…,
   …/promoted…) fail here exactly the way a blocked request looks to the
   page (fetch rejects, XHR reports status 0 with an error event), so the
-  player goes on to the track; a creative that still arrives from the ad
-  CDN paths is muted, run at 16× and sent to its end, and the element is
-  handed back untouched when a track loads into it. A tally sits in the
-  debug snapshot.
+  player never has an ad to play and goes straight to the track. Nothing is
+  ever muted, re-rated or seeked: the sound the listener hears is never
+  touched (4.64.1 removed a media-level fallback that could mute). A tally
+  sits in the debug snapshot.
 - **In your language** — the suite’s own text (tabs, rows, menus, toasts,
   tooltips, sheets, the tour, the floating window) in German, French,
   Spanish, Portuguese, Italian, Dutch, Polish, Turkish, Russian, Japanese or
