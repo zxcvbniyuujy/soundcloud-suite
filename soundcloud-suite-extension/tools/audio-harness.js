@@ -2424,13 +2424,14 @@ const FIXTURE_SRC = `
     approx(s.params.vGain.gain, 0.1, 0.01, 'softer 100 → 0.1'); eq((await sliderByLabel('Vocals')).val, 'Softer 100', 'value Softer 100');
     await play('A', { loop: true });
     await sleep(600); s = await snap(); approx(s.params.vGain.gain, 0.1, 0.01, 'still 0.1 before the 3 s verdict');
-    // the verdict needs 3 s of high reads after the first tick; poll up to 10 s for it (a busy machine ticks late)
-    let tv = 0; for (; tv < 100; tv++) { await sleep(100); s = await snap(); if (s.meter.monoSrc) break; }
+    // the verdict needs 3 s of high reads after the first tick; poll up to 20 s for it (a busy machine ticks late: with
+    // other browser sessions running alongside, the 1 Hz meter ticks land well past the 10 s this used to allow)
+    let tv = 0; for (; tv < 200; tv++) { await sleep(100); s = await snap(); if (s.meter.monoSrc) break; }
     assert(tv >= 15, 'no verdict inside the first 2 s (came at ' + ((tv + 6) / 10).toFixed(1) + ' s)');
     // r comes from two tap reads that a render quantum can straddle (the engine's verdict votes over three ticks for
     // exactly that reason): read fresh ticks until one is clean, up to three
     let corr = s.meter.corr; for (let i = 0; i < 3 && !(corr > 0.98); i++) { await sleep(150); corr = (await dbg(`return d.meterTick();`)).corr; }
-    assert(corr > 0.98, 'dual-mono fixture: r > 0.98 (got ' + corr + ')'); eq(s.meter.monoSrc, true, 'mono upload detected within 10 s');
+    assert(corr > 0.98, 'dual-mono fixture: r > 0.98 (got ' + corr + ')'); eq(s.meter.monoSrc, true, 'mono upload detected within 20 s (came at ' + ((tv + 6) / 10).toFixed(1) + ' s)');
     await sleep(200); s = await snap();   // the verdict's 50 ms gain ramp
     approx(s.params.vGain.gain, 1, 0.01, 'vGain forced to 1'); eq((await sliderByLabel('Vocals')).val, 'Mono upload', 'the Vocals value reads Mono upload');
     eq(await get('vocalAmt'), -100, 'the setting itself is untouched');
