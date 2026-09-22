@@ -103,6 +103,14 @@ const ROUTES = [
       await page.setViewportSize({ width: w, height: h }); await sleep(700);
       ok(fits(await geom()), `resized to ${w}×${h}: panel ${describe(await geom())}`);
     }
+    // fullscreen masks the saved size; a window that shrank meanwhile must be fitted again on the way out
+    await page.setViewportSize({ width: 1280, height: 800 }); await sleep(600);
+    const maxBtn = () => page.evaluate(() => { const h = document.getElementById('slx3-host'); const b = h && h.shadowRoot.querySelector('#bMax'); if (!b) return false; b.click(); return true; });
+    const entered = await maxBtn(); await sleep(600);
+    const maxed = await page.evaluate(() => { const h = document.getElementById('slx3-host'); const p = h && h.shadowRoot.querySelector('.panel'); return !!(p && p.classList.contains('max')); });
+    await page.setViewportSize({ width: 1024, height: 576 }); await sleep(600);
+    const left = await maxBtn(); await sleep(700);
+    ok(entered && maxed && left && fits(await geom()), `fullscreen entered ${entered && maxed}, window shrunk to 1024×576, fullscreen left ${left}: panel ${describe(await geom())}`);
     await page.keyboard.press('Alt+L');
   }
   // the SoundCloud class names the suite reads or mounts on, checked on the pages that carry them: a missing one

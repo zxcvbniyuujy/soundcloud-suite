@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.85.0
+// @version      4.86.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.85.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.86.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9726,6 +9726,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🔎', 'A review of the last three releases, two fixes', 'An independent reader went through everything since 4.82.0 with the pages open. Two findings held up. The repaired “Wider main column” kept the track page’s main column at its fixed 864 px, so on a window narrower than about 1290 px the sidebar ran over its right edge; the column is fluid now and stops 16 px short of the sidebar at every width (checked at 1600, 1280, 1200 and 1100). And a hub that left fullscreen kept the size it had before entering, so a window shrunk meanwhile could push its header off the top; leaving fullscreen fits it again. The lyrics one-to-one check is now a tool in the repository, and the debug readout says which highlight lead is in force.'],
           ['🧹', 'Every Hide tweak, checked against today’s pages', 'All 92 rows of the Tweaks table were tested against twelve public SoundCloud pages: does anything the row names still exist? Eight “Hide” tweaks had lost their target to a renamed class and now find it again: track tags (the # pill in the hero), the “In playlists” sidebar module, the trending-tracks module on the landing page, Follow buttons in follower lists, playlist track counts, the hero’s artwork-derived background, the header’s ⋯ menu and the “Report” link. Four rows hid things SoundCloud no longer draws at all (breadcrumbs, a waveform timeline that is canvas now, partner offers, a trending-tags bar) and are gone rather than left as switches that do nothing. The rest match, or wait for a signed-in page or a hover to have something to hide.'],
           ['🧭', 'The class names the suite lives on, checked', 'The launch gate now looks for every SoundCloud class name the suite reads or mounts on, page by page, and runs the shuffle engine’s own selector self-test beside it. It found two tweaks quietly doing nothing on today’s pages: “Wider main column” targeted a max-width SoundCloud no longer sets (the column is a fixed 1240 px on the outer wrappers now), and “Larger comment text” set the size comments already have. The wide column now really goes fluid with a 24 px gutter, the sidebar keeping its width; focus mode, which hides that sidebar, also lets the main column take the space it frees instead of leaving a blank strip; and larger comments are larger. The comment body’s new class name joins the theme rules too.'],
           ['🪟', 'A hub that fits the window', 'A sweep of 26 public SoundCloud pages with the suite loaded, signed out, then in-app navigation between a profile’s tabs and five window sizes, found the pages clean and one defect: a hub resized taller than a short window (a laptop at 125 % zoom, DevTools open, a half-height window) pushed its header and tabs above the top edge, both when the size was restored and when the window shrank under an open hub. The saved size is now applied through the window’s limits and re-applied on every resize, so the hub always shows whole and gets its saved size back when the window grows.'],
@@ -10650,7 +10651,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!silent) { try { GM_setValue('sl:max', maxOn ? 1 : 0); } catch (e) {} }
       if (maxOn && !open) setOpen(true);
       if (maxOn) wakeChrome();
-      else { panel.classList.remove('idle'); clearTimeout(idleT); }
+      else { panel.classList.remove('idle'); clearTimeout(idleT); requestAnimationFrame(clampPanel); }   // the window may have changed while the fullscreen rules masked the saved size: fit it again
       // recenter the active line after the reflow (and wake one frame even while paused)
       activeI = -1; lastFrameNow = -1;
       pauseScrollUntil = 0;
@@ -13254,7 +13255,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     return {
       meta: () => meta,
-      lyricDebug: () => ({ mediaT: Media.time(), off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, hold: !!SyncAuto.hold, doubt: !!SyncAuto.doubt, auto: !!SyncAuto.auto, looks: alignHist.length, scaled: !!(lyr && lyr.scaled), srcDur: (lyr && lyr.srcDur) || 0, mini: (() => { try { return UI.miniStats(); } catch (e) { return null; } })(), voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, words: !!(lyr && lyr.wt && Object.keys(lyr.wt).length), envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
+      lyricDebug: () => ({ mediaT: Media.time(), off, goff, lead, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, hold: !!SyncAuto.hold, doubt: !!SyncAuto.doubt, auto: !!SyncAuto.auto, looks: alignHist.length, scaled: !!(lyr && lyr.scaled), srcDur: (lyr && lyr.srcDur) || 0, mini: (() => { try { return UI.miniStats(); } catch (e) { return null; } })(), voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, words: !!(lyr && lyr.wt && Object.keys(lyr.wt).length), envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
       offsetMs: () => off,
       syncOffS: () => ((off || 0) + (goff || 0) + (SyncAuto.ms || 0)) / 1000,
       autoAlignMs: () => SyncAuto.ms,
@@ -13738,9 +13739,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mlZoomHover', 'Layout', 'Zoom artwork on hover', 'css', '.sound__artwork .sc-artwork{transition:transform .2s}.sound__artwork:hover .sc-artwork{transform:scale(1.04)}'],
     ['mlFadeImg', 'Layout', 'Fade images in', 'css', '@keyframes sceFade{from{opacity:0}to{opacity:1}}.sc-artwork,.image__full{animation:sceFade .4s ease}'],
     // today's pages size the column with a fixed width on the outer wrappers (1240 px, centred), not a max-width on
-    // .l-main; the outer wrappers go fluid with a 24 px gutter and the inner ones just lose their fixed width, so
-    // the sidebar keeps its 360 px and the main column takes the rest (measured at 1600 and 1920 wide)
-    ['mlWideMain', 'Layout', 'Wider main column', 'css', '.l-container,.l-content,.l-fullwidth{width:auto !important;max-width:none !important;margin-left:24px !important;margin-right:24px !important}.l-listen-wrapper,.l-main,.l-middle-fixed{width:auto !important;max-width:none !important;flex:1 1 auto !important}'],
+    // .l-main; the outer wrappers go fluid with a 24 px gutter and the inner ones lose their fixed width. The track
+    // page's main column (864 px next to a 360 px absolutely-positioned sidebar) goes fluid too, keeping the
+    // sidebar's 360 px as a right margin: a fixed 864 would run under the sidebar once the window is narrower than
+    // 1290 px. Focus mode drops that margin again after this table (its rule comes later in the sheet).
+    ['mlWideMain', 'Layout', 'Wider main column', 'css', '.l-container,.l-content,.l-fullwidth{width:auto !important;max-width:none !important;margin-left:24px !important;margin-right:24px !important}.l-listen-wrapper,.l-main,.l-middle-fixed{width:auto !important;max-width:none !important;flex:1 1 auto !important}.l-about-main{width:auto !important;max-width:none !important;margin-right:360px !important}.l-about-rows,.l-listen__mainContent{width:auto !important;max-width:none !important}'],
     ['mlTallTiles', 'Layout', 'Taller artwork tiles', 'css', '.audibleTile__artwork,.sound__coverArt{min-height:auto}'],
     // ── Delight ──
     ['mdSpinArt', 'Delight', 'Spin artwork while playing', 'css', '@keyframes sceSpin{to{transform:rotate(360deg)}}.playControls:has(.playControls__play.playing) .playbackSoundBadge__avatar .sc-artwork,.playControls:has(.playControls__play.playing) .playbackSoundBadge .image{animation:sceSpin 12s linear infinite;border-radius:50% !important}'],
@@ -14091,7 +14094,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (CFG.hideAppBanner) css += '.mobileAppBanner,[class*="appBanner" i],.smartBanner,.l-mobile-app-banner,#onetrust-banner-sdk{display:none !important}';
     // with the sidebar gone the track page's main column must give up its fixed 864 px (and the row wrappers their
     // sidebar reserve) to take the whole container; otherwise focus mode leaves a blank 360 px strip on the right
-    if (CFG.focusMode) css += '.l-sidebar-right,.sidebar,.l-fluid-fixed .l-sidebar-right{display:none !important}.l-main .l-fluid-fixed .l-middle-fixed,.l-main{max-width:100% !important}.l-listen__mainContent,.l-about-rows,.l-about-main{width:auto !important;max-width:none !important;padding-right:0 !important;margin-right:0 !important}';
+    if (CFG.focusMode) css += '.l-sidebar-right,.sidebar,.l-fluid-fixed .l-sidebar-right{display:none !important}.l-main .l-fluid-fixed .l-middle-fixed,.l-main{max-width:100% !important}';
     if (CFG.maxWidth) css += '.l-container.l-fluid,.l-container{max-width:1100px !important;margin:0 auto !important}';
     if (CFG.hideReposts) css += '.soundList__item .sound.streamContext-repost,.repostItem,[class*="repost" i].streamContext{display:none !important}';
     if (CFG.hidePlaylistsFeed) css += '.soundList__item:has(.playlist),.soundList__item:has(.systemPlaylistBadge),.stream__list .playlist{display:none !important}';
@@ -14102,6 +14105,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!CFG[f[0]]) continue;
       css += (f[3] === 'hide') ? (f[4] + '{display:none !important}') : f[4];
     }
+    // after the table on purpose: with the sidebar gone the track page's main column must give up its fixed 864 px
+    // (and the row wrappers their sidebar reserve, the wide-column tweak's included) to take the whole container;
+    // otherwise focus mode leaves a blank 360 px strip on the right
+    if (CFG.focusMode) css += '.l-listen__mainContent,.l-about-rows,.l-about-main{width:auto !important;max-width:none !important;padding-right:0 !important;margin-right:0 !important}';
     css += '\n.sce-row{outline:2px solid #ff5500 !important;outline-offset:-2px;border-radius:8px}'
       + '.sce-skip a{position:fixed;left:8px;top:-60px;z-index:2147483300;background:#ff5500;color:#fff;font:600 13px/1 system-ui,sans-serif;padding:10px 14px;border-radius:8px;text-decoration:none;transition:top .12s}.sce-skip a:focus{top:8px;outline:2px solid #fff}';
     try { if (CFG.motionOs && W.matchMedia && W.matchMedia('(prefers-reduced-motion: reduce)').matches) css += '\n.l-container *,.playControls *{transition-duration:.01s !important;animation-duration:.01s !important}'; } catch (e) {}

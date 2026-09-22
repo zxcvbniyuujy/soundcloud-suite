@@ -36,7 +36,7 @@ body:
     attributes:
       label: Suite version
       description: Open the hub (Alt+L) → the ⋯ menu shows "What's new in v…".
-      placeholder: v4.85.0
+      placeholder: v4.86.0
     validations:
       required: true
   - type: input

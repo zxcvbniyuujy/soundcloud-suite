@@ -130,6 +130,16 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **A review of the last three releases, two fixes** — an independent reader
+  went through everything since 4.82.0 with the pages open. Two findings held
+  up. The repaired "Wider main column" kept the track page's main column at
+  its fixed 864 px, so on a window narrower than about 1290 px the sidebar ran
+  over its right edge; the column is fluid now and stops 16 px short of the
+  sidebar at every width (checked at 1600, 1280, 1200 and 1100). And a hub
+  that left fullscreen kept the size it had before entering, so a window
+  shrunk meanwhile could push its header off the top; leaving fullscreen fits
+  it again. `tools/lyrics-sync-check.js` keeps the one-to-one measurement
+  runnable, and the debug readout names the highlight lead in force.
 - **Every Hide tweak, checked against today's pages** — all 92 rows of the
   Tweaks table were tested against twelve public SoundCloud pages: does
   anything the row names still exist? Eight "Hide" tweaks had lost their

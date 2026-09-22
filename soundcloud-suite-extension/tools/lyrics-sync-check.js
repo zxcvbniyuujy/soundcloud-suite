@@ -39,7 +39,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? '✓ ' : '✗ ') + m); if
   await page.evaluate((t) => { const d = window.__sceAudioDebug && window.__sceAudioDebug(); if (d && d.seek) d.seek(t); }, Math.max(0, t6 - 3));
   await sleep(70000);
   const log = await page.evaluate(() => window.__actLog);
-  const lead = /exact/.test(leadLabel || '') ? 0 : /early/.test(leadLabel || '') ? 250 : 100;
+  // the lead in force comes from the debug accessor (the hub's menu label is the fallback for older builds)
+  const leadNow = await page.evaluate(() => { const d = window.__sceLyricDebug && window.__sceLyricDebug(); return d && typeof d.lead === 'number' ? d.lead : null; });
+  const lead = leadNow != null ? leadNow : (/exact/.test(leadLabel || '') ? 0 : /early/.test(leadLabel || '') ? 250 : 100);
+  console.log('lead in force:', lead, 'ms', leadNow == null ? '(assumed from the menu label)' : '(from the debug accessor)');
   const errsMs = [];
   for (const e of log) { if (e.i < 0 || e.i >= d.lineTimes.length) continue; const clockOff = (lead + (e.off || 0) + (e.goff || 0) + (e.aoff || 0)) / 1000; const err = (e.mediaT + clockOff - d.lineTimes[e.i]) * 1000; errsMs.push({ i: e.i, err: Math.round(err), at: +e.mediaT.toFixed(2) }); }
   const sorted = errsMs.map((x) => x.err).sort((a, b) => a - b), q = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
