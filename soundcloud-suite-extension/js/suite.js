@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.83.0
+// @version      4.84.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.83.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.84.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9726,6 +9726,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🧭', 'The class names the suite lives on, checked', 'The launch gate now looks for every SoundCloud class name the suite reads or mounts on, page by page, and runs the shuffle engine’s own selector self-test beside it. It found two tweaks quietly doing nothing on today’s pages: “Wider main column” targeted a max-width SoundCloud no longer sets (the column is a fixed 1240 px on the outer wrappers now), and “Larger comment text” set the size comments already have. The wide column now really goes fluid with a 24 px gutter, the sidebar keeping its width; focus mode, which hides that sidebar, also lets the main column take the space it frees instead of leaving a blank strip; and larger comments are larger. The comment body’s new class name joins the theme rules too.'],
           ['🪟', 'A hub that fits the window', 'A sweep of 26 public SoundCloud pages with the suite loaded, signed out, then in-app navigation between a profile’s tabs and five window sizes, found the pages clean and one defect: a hub resized taller than a short window (a laptop at 125 % zoom, DevTools open, a half-height window) pushed its header and tabs above the top edge, both when the size was restored and when the window shrank under an open hub. The saved size is now applied through the window’s limits and re-applied on every resize, so the hub always shows whole and gets its saved size back when the window grows.'],
           ['🔎', 'A fourth review, five fixes', 'A second reader of the last two rounds. The reshuffle’s auto-run flag is now written only as the page actually leaves, so a slow reload keeps it and a refused one never sets it. What a page’s list loaded is kept per path, and the profile a cached library belongs to is stored with it rather than inferred from passing traffic. The compact library behind stats and search remembers which account it was checked for. The loader’s stall kick yields to the queue-panel jump, and the account lookup can be cancelled like the library fetch. Found while taking the store pictures: a shuffle through a library with a few removed uploads made SoundCloud’s player hit three dead stream URLs in a row, and the API watchdog read that as “SoundCloud API may have changed” — a missing stream is a dead upload, and no longer counts.'],
           ['🪪', 'Your own likes, on paper and in practice', 'The one flow that cannot be exercised from here is the signed-in Likes page, so a reviewer read it against what today’s SoundCloud does. Six things changed: the account id no longer depends on the shape of the sign-in token alone (the suite asks SoundCloud once when the token does not say), a liked playlist’s tracks count as already on the page, each page keeps its own record of what its list loaded, a library cached before accounts were kept apart is dropped rather than handed to whichever account shuffles first, the compact library used by stats and search is tagged with its account, and the Shuffle Play button on your Likes page finds a home above the list if SoundCloud renames its header. The compatibility engine was verified live on a public playlist.'],
@@ -13698,7 +13699,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mlDarkScroll', 'Layout', 'Dark scrollbars', 'css', '::-webkit-scrollbar-thumb{background:#555 !important;border-radius:6px}::-webkit-scrollbar-track{background:transparent}'],
     ['mlLineSpacing', 'Layout', 'Roomier line spacing', 'css', '.l-container,.soundDescription,.commentsList__item{line-height:1.7 !important}'],
     ['mlBigTargets', 'Layout', 'Bigger click targets', 'css', '.sc-button,.sc-button-medium{min-height:38px !important}'],
-    ['mlBigComments', 'Layout', 'Larger comment text', 'css', '.commentsList__item,.comment .commentItem__message{font-size:14px !important}'],
+    ['mlBigComments', 'Layout', 'Larger comment text', 'css', '.commentsList__item,.commentItem__body,.comment .commentItem__message{font-size:15px !important}'],
     ['mlCompactHeader', 'Layout', 'Compact header', 'css', '.header{height:46px !important;min-height:46px !important}'],
     ['mlRoundedArt', 'Layout', 'Softer rounded artwork', 'css', '.sc-artwork{border-radius:12px !important}'],
     ['mlNoHoverScale', 'Layout', 'No hover zoom', 'css', '.sound__artwork:hover .sc-artwork,.image:hover{transform:none !important}'],
@@ -13739,7 +13740,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mlRoundAvatars', 'Layout', 'Round avatars', 'css', '.userBadge__avatar,.commentItem__avatar{border-radius:50% !important}'],
     ['mlZoomHover', 'Layout', 'Zoom artwork on hover', 'css', '.sound__artwork .sc-artwork{transition:transform .2s}.sound__artwork:hover .sc-artwork{transform:scale(1.04)}'],
     ['mlFadeImg', 'Layout', 'Fade images in', 'css', '@keyframes sceFade{from{opacity:0}to{opacity:1}}.sc-artwork,.image__full{animation:sceFade .4s ease}'],
-    ['mlWideMain', 'Layout', 'Wider main column', 'css', '.l-main,.l-middle-fixed{max-width:none !important;flex:1 1 auto !important}'],
+    // today's pages size the column with a fixed width on the outer wrappers (1240 px, centred), not a max-width on
+    // .l-main; the outer wrappers go fluid with a 24 px gutter and the inner ones just lose their fixed width, so
+    // the sidebar keeps its 360 px and the main column takes the rest (measured at 1600 and 1920 wide)
+    ['mlWideMain', 'Layout', 'Wider main column', 'css', '.l-container,.l-content,.l-fullwidth{width:auto !important;max-width:none !important;margin-left:24px !important;margin-right:24px !important}.l-listen-wrapper,.l-main,.l-middle-fixed{width:auto !important;max-width:none !important;flex:1 1 auto !important}'],
     ['mlTallTiles', 'Layout', 'Taller artwork tiles', 'css', '.audibleTile__artwork,.sound__coverArt{min-height:auto}'],
     // ── Delight ──
     ['mdSpinArt', 'Delight', 'Spin artwork while playing', 'css', '@keyframes sceSpin{to{transform:rotate(360deg)}}.playControls:has(.playControls__play.playing) .playbackSoundBadge__avatar .sc-artwork,.playControls:has(.playControls__play.playing) .playbackSoundBadge .image{animation:sceSpin 12s linear infinite;border-radius:50% !important}'],
@@ -13960,7 +13964,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       '.fullHero__background,.listenHero__background,[class*="Hero__background" i],[class*="heroBackground" i],[class*="hero__bg" i],[class*="Hero__bg" i]{background:' + t.bg + ' !important;background-image:none !important;filter:none !important;opacity:1 !important}',
       // comment composer / reply box + individual comments
       '.commentForm,.commentForm__input,.commentForm textarea,.composer,.commentInput,[class*="commentForm" i],[class*="commentComposer" i]{background-color:' + t.card + ' !important;color:' + t.tx + ' !important;border-color:' + t.bd + ' !important}',
-      '.commentItem,.commentNode,.comment,.comment__body,.commentItem__message{background-color:transparent !important;color:' + t.tx + ' !important;border-color:' + t.bd + ' !important}',
+      '.commentItem,.commentNode,.comment,.comment__body,.commentItem__body,.commentItem__message{background-color:transparent !important;color:' + t.tx + ' !important;border-color:' + t.bd + ' !important}',
       // player-control icon buttons (so they read on the dark bar)
       // ── PLAYER BAR (exact SoundCloud classes from the live DOM) ──
       '.playControls,.playControls__inner,.playControls__wrapper,.playControls__bg{background-color:' + t.card + ' !important;background-image:none !important}',
@@ -14088,7 +14092,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (CFG.hideRelated) css += '.relatedTracks,.l-related,[class*="related" i].l-listenable-content{display:none !important}';
     if (CFG.hideCommentSection) css += '.comments,.commentsList,.commentsSection{display:none !important}';
     if (CFG.hideAppBanner) css += '.mobileAppBanner,[class*="appBanner" i],.smartBanner,.l-mobile-app-banner,#onetrust-banner-sdk{display:none !important}';
-    if (CFG.focusMode) css += '.l-sidebar-right,.sidebar,.l-fluid-fixed .l-sidebar-right{display:none !important}.l-main .l-fluid-fixed .l-middle-fixed,.l-main{max-width:100% !important}';
+    // with the sidebar gone the track page's main column must give up its fixed 864 px (and the row wrappers their
+    // sidebar reserve) to take the whole container; otherwise focus mode leaves a blank 360 px strip on the right
+    if (CFG.focusMode) css += '.l-sidebar-right,.sidebar,.l-fluid-fixed .l-sidebar-right{display:none !important}.l-main .l-fluid-fixed .l-middle-fixed,.l-main{max-width:100% !important}.l-listen__mainContent,.l-about-rows,.l-about-main{width:auto !important;max-width:none !important;padding-right:0 !important;margin-right:0 !important}';
     if (CFG.maxWidth) css += '.l-container.l-fluid,.l-container{max-width:1100px !important;margin:0 auto !important}';
     if (CFG.hideReposts) css += '.soundList__item .sound.streamContext-repost,.repostItem,[class*="repost" i].streamContext{display:none !important}';
     if (CFG.hidePlaylistsFeed) css += '.soundList__item:has(.playlist),.soundList__item:has(.systemPlaylistBadge),.stream__list .playlist{display:none !important}';

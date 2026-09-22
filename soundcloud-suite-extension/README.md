@@ -130,6 +130,18 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **The class names the suite lives on, checked** — the launch gate now looks
+  for every SoundCloud class name the suite reads or mounts on, page by page
+  (the track page, a likes list, a profile, discover, the player bar while
+  playing, the sign-in nudge, the queue panel), and runs the shuffle engine's
+  own selector self-test beside it. It found two tweaks quietly doing nothing
+  on today's pages: "Wider main column" targeted a max-width SoundCloud no
+  longer sets (the column is a fixed 1240 px on the outer wrappers now), and
+  "Larger comment text" set the size comments already have. The wide column
+  now really goes fluid with a 24 px gutter, the sidebar keeping its 360 px;
+  focus mode, which hides that sidebar, also lets the main column take the
+  space it frees instead of leaving a blank strip; larger comments are 15 px.
+  The comment body's new class name joins the theme rules too.
 - **A hub that fits the window** — a sweep of 26 public SoundCloud pages with
   the suite loaded, signed out (search, charts, profiles and their tabs, a
   track and its sub-pages, tags, the upload and sign-in pages), then in-app
@@ -571,13 +583,18 @@ search, charts, a profile and each of its tabs, a track and its sub-pages, a
 tag, the upload and sign-in pages. Every page must render its own content,
 carry exactly one hub host, open and close the hub, and throw nothing from
 the extension's scripts. It then navigates between a profile's tabs in-app
-(one host throughout, the Shuffle Play button only on Likes) and checks that
+(one host throughout, the Shuffle Play button only on Likes), checks that
 the hub panel fits short and narrow windows, both when a saved size is
-restored there and when the window shrinks under an open panel.
+restored there and when the window shrinks under an open panel, and finally
+looks for every SoundCloud class name the suite reads or mounts on, page by
+page (the track page, a likes list, a profile, discover, the player bar
+while playing, the sign-in nudge, the queue panel), running the shuffle
+engine's own selector self-test beside it, so a site redesign names the
+feature it will break before a user does.
 
 ```sh
-node tools/route-sweep.js              # about five minutes
-ONLY=nav node tools/route-sweep.js     # navigation and window sizes only
+node tools/route-sweep.js                  # about seven minutes
+ONLY=nav,sel node tools/route-sweep.js     # a subset: routes, nav, sel
 ```
 
 ## Troubleshooting

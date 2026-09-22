@@ -3,13 +3,14 @@
 // throw nothing from the extension's scripts; in-app navigation between a profile's tabs must keep one host and
 // show the Shuffle Play button only on the likes tab; the hub panel must fit short and narrow windows, both when a
 // saved 470×690 size is restored there and when the window shrinks under an open panel.
-//   node tools/route-sweep.js            # everything (~5 min)
-//   ONLY=nav node tools/route-sweep.js   # navigation and viewports only
+//   node tools/route-sweep.js                # everything (~7 min)
+//   ONLY=nav,sel node tools/route-sweep.js   # a subset: routes, nav (in-app navigation and viewports), sel (selectors)
 const path = require('path'), fs = require('fs');
 const { chromium } = require('playwright');
 const EXT = path.resolve(__dirname, '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0; const ok = (c, m) => { console.log((c ? '✓ ' : '✗ ') + m); if (!c) fails++; };
+const only = (process.env.ONLY || '').split(',').map((s) => s.trim()).filter(Boolean); const want = (s) => !only.length || only.includes(s);
 const ROUTES = [
   ['/', 'body'],
   ['/discover', '.l-main, #content, main'],
@@ -44,7 +45,8 @@ const ROUTES = [
     args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-sandbox', '--disable-features=PostQuantumKyber,UseMLKEM', '--disable-http2', '--disable-quic', '--autoplay-policy=no-user-gesture-required'] });
   // skip the first-run card and the What's-new card, as a returning user's page would
   await ctx.addInitScript((mv) => { window.__MV = mv; }, require(path.join(EXT, 'manifest.json')).version.split('.').slice(0, 2).join('.'));
-  await ctx.addInitScript(() => { try { if (window.top === window) { localStorage.setItem('scssgm:sce:onboarded', '1'); localStorage.setItem('scssgm:sl:ver', JSON.stringify(window.__MV)); } } catch (e) {} });
+  // scss:debug exposes the audio accessor; bh_sc_cfg.debug exposes the shuffle engine (window.__scShuffle, its selfTest)
+  await ctx.addInitScript(() => { try { if (window.top === window) { localStorage.setItem('scss:debug', '1'); if (!localStorage.getItem('bh_sc_cfg')) localStorage.setItem('bh_sc_cfg', JSON.stringify({ debug: true })); localStorage.setItem('scssgm:sce:onboarded', '1'); localStorage.setItem('scssgm:sl:ver', JSON.stringify(window.__MV)); } } catch (e) {} });
   const page = ctx.pages()[0] || await ctx.newPage();
   const extErrors = [], siteErrors = [], extConsole = [];
   const isExt = (s) => /chrome-extension:\/\//.test(s || '');
@@ -54,7 +56,7 @@ const ROUTES = [
   const hubState = () => page.evaluate(() => { const hosts = document.querySelectorAll('#slx3-host'); const h = hosts[0], r = h && h.shadowRoot, p = r && r.querySelector('.panel'); return { hosts: hosts.length, open: !!(p && p.classList.contains('open')), gears: document.querySelectorAll('.sce-gear').length, shuf: document.querySelectorAll('.bhx-shufbtn').length }; });
   const visible = (sel) => page.evaluate((s) => { const el = document.querySelector(s); if (!el) return 'missing'; const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return (r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none') ? 'visible' : 'hidden'; }, sel);
   console.log('=== routes');
-  for (const [route, sel] of (process.env.ONLY ? [] : ROUTES)) {
+  for (const [route, sel] of (want('routes') ? ROUTES : [])) {
     const before = extErrors.length + extConsole.length;
     let nav = 'ok';
     try { await page.goto('https://soundcloud.com' + route, { waitUntil: 'domcontentloaded', timeout: 60000 }); } catch (e) { nav = 'goto: ' + e.message.split('\n')[0]; }
@@ -75,8 +77,8 @@ const ROUTES = [
   // the likes page carries the network tabs (Likes / Following / Followers), so the way back to Tracks is the
   // profile link; each hop is a pushState navigation the engine must follow
   console.log('=== in-app navigation');
-  await page.goto('https://soundcloud.com/flume', { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(5000); await closeModals();
-  for (const [href, wantShuf] of [['/flume/likes', 1], ['/flume', 0], ['/flume/tracks', 0], ['/flume/likes', 1], ['/flume/following', 0], ['/flume/likes', 1], ['/flume', 0], ['/flume/sets', 0]]) {
+  if (want('nav')) { await page.goto('https://soundcloud.com/flume', { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(5000); await closeModals(); }
+  for (const [href, wantShuf] of (want('nav') ? [['/flume/likes', 1], ['/flume', 0], ['/flume/tracks', 0], ['/flume/likes', 1], ['/flume/following', 0], ['/flume/likes', 1], ['/flume', 0], ['/flume/sets', 0]] : [])) {
     const clicked = await page.evaluate((h) => { const a = [...document.querySelectorAll(`a[href="${h}"]`)].find((el) => el.getBoundingClientRect().width > 0); if (!a) return false; a.click(); return true; }, href);
     await sleep(3500);
     const s = await hubState(); const where = await page.evaluate(() => location.pathname);
@@ -87,20 +89,66 @@ const ROUTES = [
   const geom = () => page.evaluate(() => { const h = document.getElementById('slx3-host'); const r = h && h.shadowRoot, p = r && r.querySelector('.panel'); if (!p) return null; const b = p.getBoundingClientRect(); const tabs = r.querySelector('.tabs, .tab'); const tb = tabs && tabs.getBoundingClientRect(); const gear = document.querySelector('.sce-gear'); const gb = gear && gear.getBoundingClientRect(); return { x: Math.round(b.left), y: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), tabsIn: !!(tb && tb.top >= 0 && tb.bottom <= innerHeight), gearIn: !!(gb && gb.width > 0 && gb.right <= innerWidth && gb.left >= 0), iw: innerWidth, ih: innerHeight }; });
   const fits = (g) => !!(g && g.x >= 0 && g.y >= 0 && g.r <= g.iw && g.b <= g.ih && g.tabsIn && g.gearIn);
   const describe = (g) => g ? `${g.w}×${g.h} at (${g.x},${g.y})→(${g.r},${g.b}) of ${g.iw}×${g.ih}, tabs in view ${g.tabsIn}, gear in view ${g.gearIn}` : 'no panel';
-  for (const [w, h] of [[1280, 800], [1024, 576], [800, 500], [640, 900]]) {
+  for (const [w, h] of (want('nav') ? [[1280, 800], [1024, 576], [800, 500], [640, 900]] : [])) {
     await page.setViewportSize({ width: w, height: h });
     await page.goto('https://soundcloud.com/rexorangecounty/best-friend', { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(5000); await closeModals();
     await page.keyboard.press('Alt+L'); await sleep(900);
     ok(fits(await geom()), `restored at ${w}×${h}: panel ${describe(await geom())}`);
   }
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('https://soundcloud.com/rexorangecounty/best-friend', { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(5000); await closeModals();
-  await page.keyboard.press('Alt+L'); await sleep(900);
-  for (const [w, h] of [[1024, 576], [800, 500], [1920, 1080], [640, 900]]) {
-    await page.setViewportSize({ width: w, height: h }); await sleep(700);
-    ok(fits(await geom()), `resized to ${w}×${h}: panel ${describe(await geom())}`);
+  if (want('nav')) {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('https://soundcloud.com/rexorangecounty/best-friend', { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(5000); await closeModals();
+    await page.keyboard.press('Alt+L'); await sleep(900);
+    for (const [w, h] of [[1024, 576], [800, 500], [1920, 1080], [640, 900]]) {
+      await page.setViewportSize({ width: w, height: h }); await sleep(700);
+      ok(fits(await geom()), `resized to ${w}×${h}: panel ${describe(await geom())}`);
+    }
+    await page.keyboard.press('Alt+L');
   }
-  await page.keyboard.press('Alt+L');
+  // the SoundCloud class names the suite reads or mounts on, checked on the pages that carry them: a missing one
+  // names the feature that will quietly stop working after a site redesign
+  console.log('=== selectors');
+  // the shuffle module keeps its own registry with a self-test (window.__scShuffle.selfTest() in debug mode); the
+  // keys listed per page are the ones that page is expected to carry
+  const SEL = [
+    ['/rexorangecounty/best-friend', 'the track page', ['.l-container', '.l-listen-wrapper, .l-main', '.l-sidebar-right', '.fullHero', '.fullHero__title', '.fullHero__artwork', '.fullHero .sc-button-play', '.listenEngagement', '.sc-button-like', '.sc-button-repost', '.sc-button-share', '.sc-button-more', '.sc-ministats', '.commentsList', '.commentsList__item', '.commentItem__body', '.commentItem__avatar', '.commentItem__timestamp', '.soundDescription, .truncatedAudioInfo__content'], ['playControl', 'barHost']],
+    ['/flume/likes', 'the likes list', ['.l-container', '.l-main', '.soundList__item', '.soundTitle__title', '.soundTitle__username', '.sound__coverArt, .sound__artwork', '.sc-artwork', '.lazyLoadingList__list'], ['likesList', 'userTabs', 'tabsItems', 'rowTitle', 'playButton', 'moreButton', 'soundActions']],
+    ['/flume', 'the profile', ['.sc-button-follow', '.userBadge__avatar, .profileHeaderInfo__avatar, .sc-artwork', '.l-sidebar-right'], []],
+    ['/discover', 'discover', ['.audibleTile, .playableTile', '.playableTile__heading, .audibleTile__heading', '.l-main', '.l-sidebar-right'], []],
+  ];
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const selfTest = (keys) => page.evaluate((ks) => { const t = window.__scShuffle && window.__scShuffle.selfTest; if (!t) return { missing: ['(no __scShuffle: debug mode off)'] }; const r = t(); return { missing: ks.filter((k) => !r[k]) }; }, keys);
+  for (const [route, label, sels, keys] of (want('sel') ? SEL : [])) {
+    await page.goto('https://soundcloud.com' + route, { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(6000); await closeModals();
+    const missing = await page.evaluate((list) => list.filter((s) => !document.querySelector(s)), sels);
+    const st = keys.length ? await selfTest(keys) : { missing: [] };
+    ok(!missing.length && !st.missing.length, `${label}: ${sels.length - missing.length}/${sels.length} selectors present${missing.length ? ' — missing ' + missing.join(', ') : ''}${keys.length ? `; shuffle registry ${keys.length - st.missing.length}/${keys.length}${st.missing.length ? ' — missing ' + st.missing.join(', ') : ''}` : ''}`);
+  }
+  // the player bar, the sign-in nudge a signed-out play click opens, and the queue panel
+  if (want('sel')) {
+  // SoundCloud opens the nudge on its own a few seconds into a signed-out track page, or on the first play click,
+  // once per session: start that session afresh (the init script puts the suite's own flags back) and wait for it
+  // before closing anything
+  await ctx.clearCookies(); await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} });
+  await page.goto('https://soundcloud.com/rexorangecounty/best-friend', { waitUntil: 'domcontentloaded', timeout: 60000 }); await sleep(3000);
+  await page.evaluate(() => { const b = document.querySelector('#onetrust-accept-btn-handler'); if (b) b.click(); });
+  const nudgeNow = () => page.evaluate(() => ({ modal: !!document.querySelector('.modal.auth-modal'), close: !!document.querySelector('.modal.auth-modal .modal__closeButton, .modal.auth-modal .modal__close') }));
+  let nudge = null; for (let i = 0; i < 12; i++) { nudge = await nudgeNow(); if (nudge.close) break; await sleep(500); }
+  if (!nudge.close) { await page.evaluate(() => { const b = document.querySelector('.fullHero .sc-button-play'); if (b) b.click(); }); for (let i = 0; i < 12; i++) { await sleep(500); nudge = await nudgeNow(); if (nudge.close) break; } }
+  ok(nudge.modal && nudge.close, `the sign-in nudge: .modal.auth-modal ${nudge.modal}, its close button ${nudge.close}`);
+  await closeModals(); await sleep(1500);
+  for (let i = 0; i < 4 && !(await page.evaluate(() => { const b = document.querySelector('.playControls__play'); return !!(b && b.classList.contains('playing')); })); i++) { await page.evaluate(() => { const b = document.querySelector('.playControls__play'); if (b) b.click(); }); await sleep(2000); await closeModals(); }
+  const barSels = ['.playControls', '.playControls__elements', '.playControls__play', '.playControls__play.playing', '.playControls__queue', '.playControls__soundBadge', '.playbackSoundBadge', '.playbackSoundBadge__actions', '.playbackSoundBadge__lightLink', '.playbackSoundBadge__titleLink', '.playbackSoundBadge__titleContextContainer', '.playbackSoundBadge__avatar', '.playbackSoundBadge__like', '.playbackSoundBadge__queueCircle', '.playbackTimeline__progressWrapper', '.playbackTimeline__timePassed', '.playbackTimeline__duration'];
+  const barMissing = await page.evaluate((list) => list.filter((s) => !document.querySelector(s)), barSels);
+  const barSt = await selfTest(['playControl', 'skipNext', 'queue', 'queueToggle', 'badgeTitle', 'barHost']);
+  ok(!barMissing.length && !barSt.missing.length, `the player bar while playing: ${barSels.length - barMissing.length}/${barSels.length} selectors present${barMissing.length ? ' — missing ' + barMissing.join(', ') : ''}; shuffle registry${barSt.missing.length ? ' missing ' + barSt.missing.join(', ') : ' complete'}`);
+  await page.evaluate(() => { const b = document.querySelector('.playbackSoundBadge__queueCircle'); if (b) b.click(); }); await sleep(3000);
+  const qSels = ['.queue', '.queue__scrollableInner', '.queue__itemsHeight', '.queue__itemWrapper', '.queueItemView__playButton', '.queue__clear'];
+  const qMissing = await page.evaluate((list) => list.filter((s) => !document.querySelector(s)), qSels);
+  const qSt = await selfTest(['queueScrollable', 'queueHeights', 'queueItem']);
+  ok(!qMissing.length && !qSt.missing.length, `the queue panel: ${qSels.length - qMissing.length}/${qSels.length} selectors present${qMissing.length ? ' — missing ' + qMissing.join(', ') : ''}; shuffle registry${qSt.missing.length ? ' missing ' + qSt.missing.join(', ') : ' complete'}`);
+  await page.evaluate(() => { const b = document.querySelector('.playbackSoundBadge__queueCircle'); if (b) b.click(); const p = document.querySelector('.playControls__play'); if (p && p.classList.contains('playing')) p.click(); });
+  }
   console.log('=== errors');
   console.log('extension page errors:', JSON.stringify(extErrors));
   console.log('extension console errors:', JSON.stringify(extConsole));
