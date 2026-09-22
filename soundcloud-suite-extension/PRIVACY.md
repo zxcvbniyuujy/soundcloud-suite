@@ -32,7 +32,12 @@ you press play. Every request goes over HTTPS.
 - api.listenbrainz.org — **only** if you add your own ListenBrainz token to
   scrobble plays (off by default)
 - api-v2.soundcloud.com / soundcloud.com — to read the playing track's public
-  metadata
+  metadata, and, for Shuffle Play, the likes of the page you shuffle (yours, or
+  the public likes of the profile you are viewing), using the site's own
+  session in your browser. When you are signed in, your account id (read from
+  your own session, or asked of SoundCloud once when the session does not
+  carry it) keys the cached library on your device, so two accounts on one
+  browser never share a library. Nothing about this leaves your browser.
 
 These requests contain only the song's title and artist (or the URL you are
 viewing). Requests to third-party hosts are made **without cookies**. No
