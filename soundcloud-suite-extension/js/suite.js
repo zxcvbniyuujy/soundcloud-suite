@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.84.0
+// @version      4.85.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.84.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.85.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9726,6 +9726,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🧹', 'Every Hide tweak, checked against today’s pages', 'All 92 rows of the Tweaks table were tested against twelve public SoundCloud pages: does anything the row names still exist? Eight “Hide” tweaks had lost their target to a renamed class and now find it again: track tags (the # pill in the hero), the “In playlists” sidebar module, the trending-tracks module on the landing page, Follow buttons in follower lists, playlist track counts, the hero’s artwork-derived background, the header’s ⋯ menu and the “Report” link. Four rows hid things SoundCloud no longer draws at all (breadcrumbs, a waveform timeline that is canvas now, partner offers, a trending-tags bar) and are gone rather than left as switches that do nothing. The rest match, or wait for a signed-in page or a hover to have something to hide.'],
           ['🧭', 'The class names the suite lives on, checked', 'The launch gate now looks for every SoundCloud class name the suite reads or mounts on, page by page, and runs the shuffle engine’s own selector self-test beside it. It found two tweaks quietly doing nothing on today’s pages: “Wider main column” targeted a max-width SoundCloud no longer sets (the column is a fixed 1240 px on the outer wrappers now), and “Larger comment text” set the size comments already have. The wide column now really goes fluid with a 24 px gutter, the sidebar keeping its width; focus mode, which hides that sidebar, also lets the main column take the space it frees instead of leaving a blank strip; and larger comments are larger. The comment body’s new class name joins the theme rules too.'],
           ['🪟', 'A hub that fits the window', 'A sweep of 26 public SoundCloud pages with the suite loaded, signed out, then in-app navigation between a profile’s tabs and five window sizes, found the pages clean and one defect: a hub resized taller than a short window (a laptop at 125 % zoom, DevTools open, a half-height window) pushed its header and tabs above the top edge, both when the size was restored and when the window shrank under an open hub. The saved size is now applied through the window’s limits and re-applied on every resize, so the hub always shows whole and gets its saved size back when the window grows.'],
           ['🔎', 'A fourth review, five fixes', 'A second reader of the last two rounds. The reshuffle’s auto-run flag is now written only as the page actually leaves, so a slow reload keeps it and a refused one never sets it. What a page’s list loaded is kept per path, and the profile a cached library belongs to is stored with it rather than inferred from passing traffic. The compact library behind stats and search remembers which account it was checked for. The loader’s stall kick yields to the queue-panel jump, and the account lookup can be cancelled like the library fetch. Found while taking the store pictures: a shuffle through a library with a few removed uploads made SoundCloud’s player hit three dead stream URLs in a row, and the API watchdog read that as “SoundCloud API may have changed” — a missing stream is a dead upload, and no longer counts.'],
@@ -13651,12 +13652,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const MORE = [
     // ── Declutter ──
     ['mhFooter', 'Hide more', 'Page footer', 'hide', '#app__footer,.l-footer,.footer__inner,footer.l-container'],
-    ['mhTags', 'Hide more', 'Track tags', 'hide', '.sc-tagList,.tagList,.soundBadge__tagList,.tagContent'],
+    ['mhTags', 'Hide more', 'Track tags', 'hide', '.sc-tagList,.tagList,.soundBadge__tagList,.tagContent,.sc-tag'],
     ['mhDesc', 'Hide more', 'Track descriptions', 'hide', '.soundDescription,.truncatedAudioInfo,.sound__description,.audibleTitle'],
     ['mhShare', 'Hide more', 'Share buttons', 'hide', '.sc-button-share,.shareButton'],
     ['mhBuy', 'Hide more', 'Buy / purchase links', 'hide', '.buyLink,.soundActions__purchase,[class*="purchase" i],a.sc-buylink'],
-    ['mhTrending', 'Hide more', 'Trending / charts sidebar', 'hide', '.sidebar .trending,[class*="chart" i].sidebarModule,.l-sidebar-right .charts'],
-    ['mhInPlaylists', 'Hide more', '“In playlists” section', 'hide', '.soundContentInformation,.relatedPlaylists,.l-listen-content .inPlaylists'],
+    ['mhTrending', 'Hide more', 'Trending / charts sidebar', 'hide', '.sidebar .trending,[class*="chart" i].sidebarModule,.l-sidebar-right .charts,.trendingTracks'],
+    ['mhInPlaylists', 'Hide more', '“In playlists” section', 'hide', '.soundContentInformation,.relatedPlaylists,.l-listen-content .inPlaylists,.sidebarModule.soundInSetsModule'],
     ['mhMessages', 'Hide more', 'Messages icon', 'hide', 'a[href="/messages"],.header__notification--messages'],
     ['mhNotif', 'Hide more', 'Notifications icon', 'hide', 'a[href="/notifications"],.header__activities,.header__notification'],
     ['mhStats', 'Hide more', 'Stat numbers everywhere', 'hide', '.sc-ministats-comments,.infoStats__value,.sc-ministats-reposts'],
@@ -13682,18 +13683,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mrHideAllCounts', 'Reading', 'Hide all engagement counts', 'hide', '.sc-ministats-item,.sound__soundStats .sc-ministats'],
     ['mrHideAvatarsFeed', 'Reading', 'Hide avatars in feed', 'hide', '.soundList__item .userBadge__avatar,.stream .userAvatar'],
     // ── Hide more (wave 2) ──
-    ['mhFollowBtns', 'Hide more', 'Follow buttons in lists', 'hide', '.soundList__item .sc-button-follow,.userBadgeList .sc-button-follow'],
+    ['mhFollowBtns', 'Hide more', 'Follow buttons in lists', 'hide', '.soundList__item .sc-button-follow,.userBadgeList .sc-button-follow,.userBadgeListItem .sc-button-follow,.badgeList__item .sc-button-follow'],
     ['mhVerified', 'Hide more', 'Verified badges', 'hide', '.verifiedBadge,[class*="verified" i].badge,.g-badge-verified'],
-    ['mhBreadcrumb', 'Hide more', 'Breadcrumbs', 'hide', '.breadcrumb,.soundActions__breadcrumb,.systemPlaylistDetails__breadcrumb'],
     ['mhNativeShuffle', 'Hide more', 'SoundCloud shuffle/repeat', 'hide', '.shuffleControl,.repeatControl'],
-    ['mhPlaylistCounts', 'Hide more', 'Playlist track counts', 'hide', '.playlist__trackCount,.trackList__count,.genericTrackCount__count'],
+    ['mhPlaylistCounts', 'Hide more', 'Playlist track counts', 'hide', '.playlist__trackCount,.trackList__count,.genericTrackCount__count,.sc-ministats-sounds'],
     ['mhSuggested', 'Hide more', 'Suggested tracks', 'hide', '.suggestedTracks,[class*="suggestion" i].soundList'],
     ['mhUploadAll', 'Hide more', 'Upload links everywhere', 'hide', 'a[href="/upload"],.uploadButton,.header__upsell'],
     ['mhNewBadges', 'Hide more', 'Unread / “new” dots', 'hide', '.header__notification--unread,.g-badge,[class*="unread" i].badge'],
-    ['mhCoverBlur', 'Hide more', 'Blurred cover backgrounds', 'hide', '.fullHero__background,.listenHero__background,.l-hero-bg'],
+    ['mhCoverBlur', 'Hide more', 'Blurred cover backgrounds', 'hide', '.fullHero__background,.listenHero__background,.l-hero-bg,.fullListenHero .backgroundGradient'],
     ['mhGenre', 'Hide more', 'Genre labels', 'hide', '.sc-tag.genre,.soundTitle__additionalContainer .sc-tag,.genreLabel'],
     ['mhListenHistory', 'Hide more', '“Recently played”', 'hide', '.historyList,[class*="recentlyPlayed" i]'],
-    ['mhWaveTime', 'Hide more', 'Waveform timeline (under the wave)', 'hide', '.waveform__timeline,.playbackTimeline__timestamp'],
     // ── Layout (wave 2) ──
     ['mlFlat', 'Layout', 'Flat design (no shadows)', 'css', '.l-container *,.playControls{box-shadow:none !important}'],
     ['mlDarkScroll', 'Layout', 'Dark scrollbars', 'css', '::-webkit-scrollbar-thumb{background:#555 !important;border-radius:6px}::-webkit-scrollbar-track{background:transparent}'],
@@ -13711,19 +13710,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['mrReadable', 'Reading', 'Readable secondary text', 'css', '.sc-text-light,.sc-text-secondary,.sc-text-h4,.soundTitle__uploadTime,.sound__uploadTime,.commentItem__createdAt{color:#595959 !important}.theme-dark .sc-text-light,.theme-dark .sc-text-secondary,.theme-dark .soundTitle__uploadTime,.theme-dark .commentItem__createdAt{color:#b3b3b3 !important}'],
     ['mrReduceTransparency', 'Reading', 'Reduce transparency', 'css', '.l-container [style*="rgba"],.modal__modal{backdrop-filter:none !important}'],
     // ── Hide more (wave 3) ──
-    ['mhHeaderMore', 'Hide more', 'Header “⋯” menu', 'hide', '.header__moreActions,.header__moreMenu'],
+    ['mhHeaderMore', 'Hide more', 'Header “⋯” menu', 'hide', '.header__moreActions,.header__moreMenu,.header__moreButton'],
     ['mhArtistStudio', 'Hide more', 'Artist Studio link', 'hide', 'a[href*="artists.soundcloud.com"],a[href^="/artist-studio"],.header__link--studio,.creatorSubscriptionUpsell'],
     ['mhProfileBanner', 'Hide more', 'Profile header banner', 'hide', '.profileHeaderBackground,.userHeader__background,.fullHero__background'],
     ['mhTrackNums', 'Hide more', 'Track numbers in lists', 'hide', '.trackItem__number,.trackList__item .trackItem__number'],
     ['mhRepostOverlay', 'Hide more', 'Repost overlay on tiles', 'hide', '.sound__artwork .sc-button-repost,.audibleTile .sc-button-repost'],
     ['mhCommentTimes', 'Hide more', 'Comment timestamps', 'hide', '.commentItem__timestamp,.comment__timestamp,.commentNode__timestamp'],
     ['mhSocialFooter', 'Hide more', 'Footer social links', 'hide', '.footer__socialLinks,.l-footer__social,.footer__columns'],
-    ['mhReport', 'Hide more', '“Report” links', 'hide', '.sc-button-report,a[href*="/report"],.reportLink'],
-    ['mhPartnerOffers', 'Hide more', 'Partner offers', 'hide', '[class*="partnerOffer" i],a[href*="partner-offers"],a[href$="/partners"]'],
+    ['mhReport', 'Hide more', '“Report” links', 'hide', '.sc-button-report,a[href*="/report"],.reportLink,.reportCopyright,.listenArtistInfo__report'],
     ['mhInsightsNag', 'Hide more', 'Insights / studio nags', 'hide', '.insightsUpsell,[class*="insights" i].upsell,.creatorUpsell'],
     ['mhFollowProfile', 'Hide more', 'Follow button on profiles', 'hide', '.profileHeaderInfo .sc-button-follow,.userInfoBar .sc-button-follow'],
     ['mhWaveNumbers', 'Hide more', 'Player-bar duration & timecodes', 'hide', '.playbackTimeline__duration,.waveform__layer .timecode'],
-    ['mhTrendingTags', 'Hide more', 'Trending tags bar', 'hide', '.trendingTags,.g-tags-trending,[class*="trendingTag" i]'],
     // ── Layout (wave 3) ──
     ['mlSharp', 'Layout', 'Sharp corners (no rounding)', 'css', '.sc-artwork,.sc-button,.image,.image__rounded{border-radius:0 !important}'],
     ['mlBubbly', 'Layout', 'Extra-rounded artwork', 'css', '.sc-artwork,.sound__coverArt .image{border-radius:16px !important}'],

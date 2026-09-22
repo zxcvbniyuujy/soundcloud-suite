@@ -130,6 +130,17 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **Every Hide tweak, checked against today's pages** — all 92 rows of the
+  Tweaks table were tested against twelve public SoundCloud pages: does
+  anything the row names still exist? Eight "Hide" tweaks had lost their
+  target to a renamed class and find it again: track tags (the # pill in the
+  hero), the "In playlists" sidebar module, the trending-tracks module on the
+  landing page, Follow buttons in follower lists, playlist track counts, the
+  hero's artwork-derived background, the header's ⋯ menu and the "Report"
+  link. Four rows hid things SoundCloud no longer draws at all (breadcrumbs,
+  a waveform timeline that is canvas now, partner offers, a trending-tags
+  bar) and are gone rather than left as switches that do nothing. The rest
+  match, or wait for a signed-in page or a hover to have something to hide.
 - **The class names the suite lives on, checked** — the launch gate now looks
   for every SoundCloud class name the suite reads or mounts on, page by page
   (the track page, a likes list, a profile, discover, the player bar while
