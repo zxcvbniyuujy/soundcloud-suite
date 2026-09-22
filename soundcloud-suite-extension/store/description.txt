@@ -74,7 +74,7 @@ Eleven dark themes. A light one. Zen mode for when you want nothing but the musi
 • J and K walk any list, Enter plays
 • Lose your audio output and playback pauses instead of switching to the speakers
 • One clean pill in the player bar: lyrics, shuffle, restart, speed, an A–B loop, track info, copy link, settings
-• Track info, timecodes, a waveform timeline
+• Track info at a click; timestamps in descriptions and comments become links that seek
 • Ctrl+K opens a command palette for everything: type 12:34 to jump, 1.5x for the speed, or a title from your likes to play it. Press ? for every shortcut.
 
 
