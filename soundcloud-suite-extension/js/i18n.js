@@ -9,7 +9,7 @@
   if (window.__scsI18n) return;
   const LANGS = ['de', 'fr', 'es', 'pt', 'it', 'nl', 'pl', 'tr', 'ru', 'ja', 'ko'];
   const NUM = /\d[\d.,:]*/g;
-  const SKIP_CLASS = /(^|\s)(line|rline|tline|lines|res|qrow|qtitle|qart|hist|hrow|tt|nxt|mini|cur|nx|t|a|sce-mini-title|sce-mini-artist|bhx-track|bhx-artist|cmdkl|cmdki)(\s|$)/;
+  const SKIP_CLASS = /(^|\s)(line|rline|tline|lines|res|qrow|qtitle|qart|hist|hrow|tt|nxt|mini|cur|nx|pv|ln|t|a|sce-mini-title|sce-mini-artist|bhx-track|bhx-artist|cmdkl|cmdki)(\s|$)/;   // pv · ln: the floating window's previous line and its line block
   const SKIP_TAG = /^(SCRIPT|STYLE|TEXTAREA|INPUT|CODE|PRE)$/;
   const ATTRS = ['title', 'placeholder', 'aria-label'];
   const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
@@ -23,13 +23,24 @@
   }
   function saved() { try { const c = JSON.parse(localStorage.getItem('scssgm:enh:cfg') || '{}'); return (c && typeof c.uiLang === 'string') ? c.uiLang : 'auto'; } catch (e) { return 'auto'; } }
 
-  function lookup(text) {
-    const d = st.dict; if (!d) return null;
-    const t = norm(text); if (!t || !/[A-Za-z]/.test(t)) return null;
+  function lookupOne(d, t) {
     let r = d[t]; if (typeof r === 'string' && r) return r;
     const nums = t.match(NUM); if (!nums) return null;
     r = d[t.replace(NUM, '#')]; if (typeof r !== 'string' || !r) return null;
     let i = 0; return r.replace(/#/g, () => (i < nums.length ? nums[i++] : '#'));
+  }
+  // "Label: value" and "a · b" are built at run time from parts the dictionary holds one by one ("Focus mode: off",
+  // "Queue · <track title>"): when the whole has no entry, each part is looked up on its own and the separators stay.
+  // A part with no entry (a title, a name) stays as written; a whole with no translated part is left alone
+  const SEP = /( · |: )/;
+  function lookup(text) {
+    const d = st.dict; if (!d) return null;
+    const t = norm(text); if (!t || !/[A-Za-z]/.test(t)) return null;
+    const whole = lookupOne(d, t); if (whole) return whole;
+    if (!SEP.test(t)) return null;
+    const bits = t.split(SEP); let hit = false;
+    for (let i = 0; i < bits.length; i += 2) { const r = lookupOne(d, bits[i]); if (r) { bits[i] = r; hit = true; } }
+    return hit ? bits.join('') : null;
   }
   function skip(el) {
     let n = el, k = 0;
@@ -49,8 +60,18 @@
     const v = lead + r + tail; if (v === cur) return;
     st.orig.set(node, cur); st.out.set(node, v); node.nodeValue = v;
   }
+  // attributes: a skipped container's title / aria-label carries the same content as its text (a track title as a
+  // tooltip), so the class and data-i18n-skip rules apply — but not the tag rule: a field's placeholder is the suite's
+  function skipAttr(el) {
+    let n = el, k = 0;
+    while (n && n.nodeType === 1 && k++ < 6) {
+      if (n.hasAttribute('data-i18n-skip') || SKIP_CLASS.test(n.className || '')) return true;
+      n = n.parentNode && n.parentNode.nodeType === 1 ? n.parentNode : null;
+    }
+    return false;
+  }
   function attrs(el) {
-    if (el.nodeType !== 1) return;
+    if (el.nodeType !== 1 || skipAttr(el)) return;
     for (const a of ATTRS) {
       if (!el.hasAttribute(a)) continue;
       const cur = el.getAttribute(a);

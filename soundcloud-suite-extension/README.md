@@ -117,6 +117,16 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **The whole suite in your language** — every string the suite shows has an
+  entry in all eleven languages (179 were missing after the stage, pins, pill
+  and Tweaks waves), and a line built from parts, like “Queue · <track>” or
+  “Focus mode: off”, is translated part by part. Lyric lines, track titles and
+  artist names are never touched, tooltips included.
+- **Twelve fixes from a full review** — the promo sweep could hide the player
+  bar when a track was called “100% Royalty Free”; Enter on a hub button toggled
+  playback; timestamps, playlist runtime and hidden banners stayed after their
+  switch went off; the playing-chapter highlight sat on the wrong row; and
+  eight smaller ones (see the commit for 4.71.0).
 - **A wrapped line fills row by row** — the karaoke wipe paints the line's
   inline text span, so a two-row line fills its first row before its second
   starts (the block used to light every row from the left at once). Panel,

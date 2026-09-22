@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.70.0
+// @version      4.71.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.70.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.71.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -1381,7 +1381,7 @@
         setBusy(S.active);
     }
     let toastEl = null, toastTimer = 0;
-    function showToast(msg, sub, action) {
+    function showToast(msg, sub, action, subRaw) {   // subRaw: the sub-line is content (a track title), never translated
         if (!document.body) return;
         injectStyle(); applyTheme();
         if (!toastEl) {
@@ -1402,7 +1402,7 @@
         if (sub) {
             toastEl.innerHTML = `<span class="bhx-dot"></span><span><b></b><i></i></span>`;
             toastEl.querySelector('b').textContent = msg;
-            toastEl.querySelector('i').textContent = sub;
+            toastEl.querySelector('i').textContent = sub; if (subRaw) toastEl.querySelector('i').setAttribute('data-i18n-skip', '');
         } else {
             toastEl.innerHTML = `<span class="bhx-dot"></span><span></span>`;
             toastEl.lastChild.textContent = msg;
@@ -1560,7 +1560,7 @@
                                         else if (!b3.urls.includes(prevUrl)) b3.urls.push(prevUrl);
                                         saveBlock(b3);
                                         showToast('Blocked — it won’t be shuffled again');
-                                    } });
+                                    } }, true);
                                 }
                             }
                         } catch (e) { swallow(e, 'skip nudge'); }
@@ -3301,7 +3301,7 @@
                 const weekMs = days.reduce((s, x) => s + x.ms, 0);
                 if (weekMs > 0) {
                     b.appendChild(el('div', 'bhx-sec', 'Last 7 days'));
-                    const max = Math.max(...days.map(x => x.ms), 1);
+                    const max = Math.max(...days.map(x => x.ms), 10 * 60000);   // ten-minute floor: seconds of play are a sliver, not a full bar
                     const spark = el('div', 'bhx-spark');
                     const labels = el('div', 'bhx-spark-l');
                     days.forEach((x, i2) => {
@@ -7745,7 +7745,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel .tw-find::placeholder { color: #7c7c84; }
 .panel .tw-find:focus { background-color: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); }
 .panel .tw-nav { position: sticky; top: 0; z-index: 3; display: flex; gap: 4px; margin: 0 -14px 4px; padding: 6px 14px 8px; transition: background .18s; }
-.panel .tw-nav.stuck { background: rgba(19,20,24,0.84); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.panel .tw-nav.stuck { background: rgba(19,20,24,0.96); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }   /* near-opaque: at .84 the rows scrolling under the strip read through it */
 .panel .tw-nav::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: rgba(255,255,255,0.06); opacity: 0; transition: opacity .18s; }
 .panel .tw-nav.stuck::after { opacity: 1; }
 .panel .tw-chip { flex: 1; min-width: 0; border: 0; border-radius: 99px; padding: 7px 2px; font: inherit; font-size: 11px; font-weight: 650; letter-spacing: .01em; color: #9a9aa2; background: rgba(255,255,255,0.05); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .14s, color .14s; }
@@ -8234,7 +8234,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       for (const ev of ['keydown', 'keypress', 'keyup']) root.addEventListener(ev, (e) => {
         const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) e.stopPropagation();
-        else if (ev !== 'keydown' && (e.key === ' ' || e.key === 'Spacebar') && t && (t.tagName === 'BUTTON' || (typeof t.getAttribute === 'function' && t.getAttribute('role') === 'button'))) e.stopPropagation();   // the release of a Space that pressed a hub button is not a play / pause
+        else if (t && (t.tagName === 'BUTTON' || (typeof t.getAttribute === 'function' && t.getAttribute('role') === 'button')) && (e.key === 'Enter' || (ev !== 'keydown' && (e.key === ' ' || e.key === 'Spacebar')))) e.stopPropagation();   // Enter on a hub button is the button's alone: SoundCloud toggles play on the press and cancels the activation with it; the release of a Space that pressed a hub button is not a play toggle either (its press is the hub's own hotkey)   // the release of a Space that pressed a hub button is not a play / pause
       });
 
       const style = document.createElement('style');
@@ -8369,7 +8369,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       panel.querySelector('#bSearch').addEventListener('click', () => { setTab('lyrics'); (searchMode ? exitSearch() : enterSearch()); });
       panel.querySelector('#bMax').addEventListener('click', () => toggleMax());
       bMenuEl.addEventListener('click', (e) => { e.stopPropagation(); setMenu(!menuOn); });
-      src.addEventListener('click', () => { if (src.classList.contains('lk') && !searchMode) enterSearch(); });
+      src.addEventListener('click', () => { if (src.classList.contains('lk') && !searchMode) { if (tab !== 'lyrics') setTab('lyrics'); enterSearch(); } });   // the results paint into the lyrics body: show it
       tabsEl.addEventListener('click', (e) => {
         const b = e.target.closest('.tab');
         if (b) setTab(b.dataset.tab);
@@ -8385,7 +8385,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       tmEl.addEventListener('click', () => {
         tmRemain = !tmRemain;
         try { GM_setValue('sl:tmr', tmRemain ? 1 : 0); } catch (e2) {}
-        lastTm = -1;   // force the next loop tick to repaint
+        lastTm = -1; lastFrameNow = -1;   // force the next loop tick to repaint, paused or not
       });
       keysEl.addEventListener('click', () => showKeys(false));
       root.addEventListener('pointerdown', (e) => {
@@ -8405,6 +8405,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       });
       hdrEl.addEventListener('pointermove', (e) => {
         if (!drag) return;
+        if (e.pointerType === 'mouse' && !(e.buttons & 1)) { drag = null; return; }   // released where we could not see it (past the header before capture, in another window): not a drag
         // capture only once the pointer really travels: capturing on pointerdown retargets the
         // click to the header, which killed the clock, title, source-line and artwork clicks
         if (!drag.moved) {
@@ -9210,6 +9211,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🌐', 'The whole suite in your language', 'Every string the suite shows — the stage, the pins, the pill, the regrouped Tweaks, the Audio tab, the command palette — now has an entry in all eleven languages (179 were missing), and a line built from parts, like “Queue · <track>” or “Focus mode: off”, is translated part by part. Lyric lines, track titles and artist names are never touched, tooltips included.'],
+          ['🛡', 'Twelve fixes from a full review', 'The promo-banner sweep could hide the whole player bar when a track was called “100% Royalty Free”; Enter on a hub button toggled SoundCloud’s playback; a switch turned off left its work behind (timestamps, playlist runtime, hidden banners); the playing-chapter highlight sat on the wrong row under a shelf; a source-line tap from another tab searched into a hidden body; a stuck header drag; Ctrl+K losing your place; a clock or a pin that waited for play to repaint; the hub’s light/dark not following a theme pick; volume written to storage every two seconds; a pinned chip strip that let rows show through; a stats chart that painted a full bar for a few seconds of play.'],
           ['⇢', 'A wrapped line fills row by row', 'The karaoke wipe used to light every row of a two-row line from the left at once, so the first words of the second row lit before they were sung. The wipe now runs across the text as one strip: the first row fills completely, then the second starts — in the panel, on the stage and in the floating window.'],
           ['◌', 'A cleaner pill in the player bar', 'One capsule that takes its tint from the bar, round 26 px buttons, a hairline between the suite’s own buttons and the track tools, a label that floats above the hovered button, a ring for the keyboard, and the hub button lit while the hub is open. On narrow windows the bar and the title badge give way, so the gear never runs off the edge again.'],
           ['⇄', 'The vocals decide how a sheet is read', 'A sheet from a master of another length can be read two ways: as written, with an intro or outro of another length (the same master, cut differently), or stretched by the length ratio (a sped-up upload). Stretching by length alone put every line seconds off. Now a sheet starts as written unless the upload says sped-up or slowed, and each look scores both readings on the vocals: a clearly better one takes over — the panel, the mini bar, the floating window and the cache entry all switch, and the trail says why.'],
@@ -9352,6 +9355,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function setTab(t) {
       if (t !== 'lyrics' && t !== 'queue' && t !== 'stats' && t !== 'tweaks' && t !== 'audio') return;
       tab = t;
+      lastTm = -1; lastFrameNow = -1;   // the clock's shape follows the tab: repaint once even while paused
       if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(); }
       syncStage();   // find bar / manual search must not float over other tabs; a result found meanwhile gets painted
       try { GM_setValue('sl:tab', t); } catch (e) {}
@@ -9461,7 +9465,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const now = Chapters.indexAt(Media.time() || 0);
       L.forEach((c, i) => {
         const r = document.createElement('div');
-        r.className = 'qrow ch' + (i === now ? ' now' : '') + (c.src === 'cue' ? ' cue' : '');
+        r.className = 'qrow ch chap' + (i === now ? ' now' : '') + (c.src === 'cue' ? ' cue' : '');   // chap: the rows the 1 Hz highlight counts (the shelves above are .ch too)
         r.tabIndex = 0; r.setAttribute('role', 'button');
         const n = document.createElement('span'); n.className = 'n'; n.textContent = Chapters.ts(c.t);
         const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = c.name;
@@ -9483,7 +9487,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function paintChapterNow() {   // 1 Hz while the Queue tab shows: the playing chapter follows the head
       try {
         if (tab !== 'queue' || !panel.classList.contains('open')) return;
-        const rows = qbody.querySelectorAll('.qrow.ch');
+        const rows = qbody.querySelectorAll('.qrow.chap');
         if (!rows.length) return;
         const now = Chapters.indexAt(Media.time() || 0);
         rows.forEach((r, i) => { const on = i === now; if (r.classList.contains('now') !== on) { r.classList.toggle('now', on); if (on) { try { r.scrollIntoView({ block: 'nearest' }); } catch (e) {} } } });
@@ -9702,7 +9706,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (x && x.days && x.days.some((d) => d.ms > 0)) {
         const weekMs = x.days.reduce((a, d) => a + d.ms, 0);
         sbody.appendChild(qh('Last 7 days · ' + fmtT(weekMs)));
-        const max = Math.max(...x.days.map((d) => d.ms), 1);
+        const max = Math.max(...x.days.map((d) => d.ms), 10 * 60000);   // a floor of ten minutes: a few seconds today must not paint a full bar next to a 0m label
         const sp = document.createElement('div'); sp.className = 'spark';
         const lb = document.createElement('div'); lb.className = 'sparkl';
         x.days.forEach((d) => {
@@ -9719,7 +9723,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (x && x.hours && x.hours.some((v) => v > 0)) {
         let peak = 0;
         x.hours.forEach((v, i) => { if (v > x.hours[peak]) peak = i; });
-        const hmax = Math.max(...x.hours, 1);
+        const hmax = Math.max(...x.hours, 10 * 60000);
         const fmtH2 = (h2) => (h2 % 12 === 0 ? 12 : h2 % 12) + (h2 < 12 ? 'am' : 'pm');
         sbody.appendChild(qh('Listening clock · peak ' + fmtH2(peak)));
         const hp = document.createElement('div'); hp.className = 'spark hrs';
@@ -10085,6 +10089,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function toggleMax(force, silent) {
       maxOn = force != null ? !!force : !maxOn;
       panel.classList.toggle('max', maxOn);
+      lastTm = -1; lastFrameNow = -1;   // the roomy panel carries the length: repaint once even while paused
       syncStage();
       // keep #bMax aria-pressed in sync with the visible state (was declared
       // but never wired when ARIA attributes shipped in Sprint 3).
@@ -10551,7 +10556,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             const list = App.addAnchor(idx, Media.time());
             times = warpTimes(baseTimes, list);
             followAnchors(list);
-            activeI = -1;
+            activeI = -1; lastFrameNow = -1;   // a pin while paused lights the pinned line now
             const [s2, lk2] = srcFor(lyr);
             setSrcLine(s2, lk2);
             toast('Anchored — sync calibrated');
@@ -11444,7 +11449,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
-      openPalette, closePalette, paletteOpen, curTab: () => tab,
+      openPalette, closePalette, paletteOpen, applyPanelTheme, curTab: () => tab,
       setOffsetSource: (fn) => { offsetSrc = typeof fn === 'function' ? fn : null; },
     };
   })();
@@ -12709,7 +12714,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ⌘K / Ctrl+K — command palette, openable from anywhere (the palette's own
       // input stops propagation, so this never fights it once it's open)
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === 'KeyK') {
-        e.preventDefault(); UI.openPalette(); return;
+        e.preventDefault(); if (UI.paletteOpen()) UI.closePalette(); else UI.openPalette(); return;
       }
       if (isTyping(ae) || isTyping(rt)) return;
 
@@ -12798,6 +12803,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       App.watch();
       hotkeys();
       SUITE.lyricsOpen = () => UI.isOpen();
+      SUITE.hubThemeSync = () => { try { UI.applyPanelTheme(); } catch (e) {} };   // a theme picked on the Tweaks tab reaches the hub's own light/dark at once
       SUITE.lyricsAlign = () => { try { return { last: SyncAuto.last, ms: SyncAuto.ms, conf: SyncAuto.conf, auto: !!SyncAuto.auto }; } catch (e) { return null; } };
       try { if (localStorage.getItem('scss:debug') === '1') { window.__slxAlign = SUITE.lyricsAlign; window.__slxAlignTest = SUITE.lyricsAlignTest; window.__slxTrail = () => Trail.dump(); Trail.max = 600; } } catch (e) {}
       // all-in-one: the ✦ enhancer button opens the hub on its Tweaks tab
@@ -13498,7 +13504,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   /* ───────── behavioural features (guarded, enforced on a slow tick) ───────── */
   const VOL_KEY = 'enh:vol';
   let mutedVol = null;   // the level M muted from (null = not muted); the 1 Hz volume memory skips saves while set
-  let lastVolSaved = 0;
+  let lastVolSaved = 0, lastVolStr = '';   // lastVolStr: the value last written — the same value is not written again every other tick
   // playback speed — SoundCloud plays through the WEB AUDIO API with NO <audio>
   // element in the page DOM (the console diagnostic showed querySelectorAll
   // returns 0). So plain playbackRate has nothing to drive. Instead we CAPTURE
@@ -15079,8 +15085,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // no upsell-ish class for CSS to target, so match them by TEXT and hide the
   // full-width bar. Bounded + text-gated so it can never touch real content.
   let _upsellTick = 0;
+  const upsellHidden = new Set();   // what the sweep hid, to put back the moment the switch goes off
   function killUpsellBanners() {
     try {
+      if (!CFG.hideUpsell) {
+        if (upsellHidden.size) { upsellHidden.forEach((x) => { try { x.style.removeProperty('display'); x.__sceKilled = false; } catch (e) {} }); upsellHidden.clear(); }
+        return;   // an exact no-op while off (the sweep used to run regardless, and kept what it hid)
+      }
       // The full-document scan below is costly; the promo bar appears rarely and
       // hiding it a few seconds late is invisible, so run it every ~5s, not every tick.
       if ((_upsellTick++ % 5) !== 0 || D.hidden || !D.body) return;
@@ -15097,7 +15108,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (!el || el.__sceKilled) continue;
         // never inside real content: a comment or description that quotes the
         // upsell wording is the user's, not SoundCloud's
-        if (el.closest && el.closest('.commentsList,.commentItem,.commentNode,.soundDescription,.truncatedAudioInfo,.soundList__item,.trackList__item,.soundTitle')) continue;
+        // …nor the player bar, a track hero, a profile head, the queue or a link: a track called "100% Royalty Free"
+        // is a track (the bar's title once matched and the whole bar went for the rest of the session)
+        if (el.closest && el.closest('.commentsList,.commentItem,.commentNode,.soundDescription,.truncatedAudioInfo,.soundList__item,.trackList__item,.soundTitle,.playControls,.playbackSoundBadge,.queue,.fullHero,.l-listen-hero,.profileHeader,a[href]')) continue;
         // the small block around the text (the old scan's leaf-ish element), never a large container
         for (let i = 0; i < 3 && el.parentElement && el.parentElement !== D.body && !/^(DIV|SECTION|ASIDE)$/.test(el.tagName); i++) el = el.parentElement;
         const t = el.textContent;
@@ -15107,11 +15120,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         // ancestor, so we can't nuke a large legit container
         let n = el, bar = null;
         for (let i = 0; i < 5 && n && n !== D.body; i++) {
-          if (n.offsetWidth >= vw && n.offsetHeight > 0 && n.offsetHeight < 220) { bar = n; break; }
+          if (n.offsetWidth >= vw && n.offsetHeight > 0 && n.offsetHeight < 220 && !n.querySelector('.playControls__play,.fullHero,.playbackSoundBadge')) { bar = n; break; }   // a bar that holds the player is not a banner
           n = n.parentElement;
         }
         const target = bar || el;
-        target.__sceKilled = true; target.style.setProperty('display', 'none', 'important');
+        target.__sceKilled = true; target.style.setProperty('display', 'none', 'important'); upsellHidden.add(target);
         return;
       }
     } catch (e) {}
@@ -15416,10 +15429,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * track is not the one playing starts it and lands on the time once it plays. #t=m:ss in the URL does
    * the same, so a copied "link at current time" opens where it was copied. ── */
   const TS_RX = /(?:^|[\s(\[])((?:\d{1,2}:)?\d{1,3}:\d{2})(?=$|[\s)\].,;:!?])/g;
-  let tsTick = 0, tsPending = null;
+  let tsTick = 0, tsPending = null, tsLinked = false;   // tsLinked: anchors are in the page, to unwrap when the switch goes off
   function tsSecs(txt) { const p = String(txt).split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : (p[0] || 0) * 60 + (p[1] || 0); }
   function linkTimestamps() {
-    if (!CFG.tsLinks || (tsTick++ % 2)) return;   // every other tick is plenty
+    if (!CFG.tsLinks) {
+      if (tsLinked) { tsLinked = false; D.querySelectorAll('a.sce-ts').forEach((a) => { try { a.replaceWith(D.createTextNode(a.textContent)); } catch (e) {} }); D.querySelectorAll('.truncatedAudioInfo__content, .commentItem__body').forEach((r) => { r.__sceTs = 0; }); }
+      return;
+    }
+    if (tsTick++ % 2) return;   // every other tick is plenty
     if (/^\/[\w.-]+\/sets\//.test(location.pathname)) return;   // a playlist description has no single track to jump within
     const roots = D.querySelectorAll('.truncatedAudioInfo__content, .commentItem__body');
     for (const root of roots) {
@@ -15442,7 +15459,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
         if (!last) continue;
         frag.appendChild(D.createTextNode(txt.slice(last)));
-        try { tn.parentNode.replaceChild(frag, tn); } catch (e) {}
+        try { tn.parentNode.replaceChild(frag, tn); tsLinked = true; } catch (e) {}
       }
     }
   }
@@ -15499,7 +15516,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return p;
   }
   function playlistRuntime() {
-    if (!CFG.setRuntime || (setTick++ % 3)) return;
+    if (!CFG.setRuntime) { const m = D.querySelector('.sce-setmeta'); if (m) m.remove(); return; }
+    if (setTick++ % 3) return;
     const path = location.pathname.replace(/\/$/, '');
     if (!/^\/[\w.-]+\/sets\/[\w.-]+$/.test(path)) return;
     const head = D.querySelector('.fullHero__title'); if (!head || head.querySelector('.sce-setmeta')) return;
@@ -15584,7 +15602,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           // (nor a sleep-timer fade in flight: its stepped-down levels are not "the volume" either)
           let sleepFading = false; try { sleepFading = !!(SUITE.sleep && SUITE.sleep.fading && SUITE.sleep.fading()); } catch (e) {}
           if (mutedVol != null && isFinite(m.volume) && m.volume >= 0.02) mutedVol = null;   // the slider raised the level: that is an unmute
-          if (mutedVol == null && !sleepFading && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; SET(VOL_KEY, String(m.volume)); }
+          if (mutedVol == null && !sleepFading && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; const vs = String(m.volume); if (vs !== lastVolStr) { lastVolStr = vs; SET(VOL_KEY, vs); } }
         }
       }
     } catch (e) {}
@@ -17924,7 +17942,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // a manual pick wins over auto-dark so the choice actually sticks
   try { SUITE.setTheme = (id) => { try { if (typeof id !== 'string') return; CFG.theme = id; CFG.autoDark = false; save(); applyAll(); } catch (e) {} }; } catch (e) {}
 
-  function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); try { if (W.__scsI18n) W.__scsI18n.setLang(CFG.uiLang || 'auto'); } catch (e) {} }
+  function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); try { if (SUITE.hubThemeSync) SUITE.hubThemeSync(); } catch (e) {} try { if (W.__scsI18n) W.__scsI18n.setLang(CFG.uiLang || 'auto'); } catch (e) {} }
   // a slider fires ~60 input events a second: the speed slider sets the rate and the bar, the text-size slider the
   // stylesheet — not a full CSS rebuild, graph write, DOM scan and banner sweep per event
   let rememberSpeedT = null;
@@ -18164,7 +18182,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       setupBehaviour();
       ensureBar();
       try { const sp = CFG.startPage; if (sp && /^\/[\w/-]+$/.test(sp) && (location.pathname === '/' || location.pathname === '/discover') && location.pathname !== sp && !/^https:\/\/soundcloud\.com/.test(D.referrer || '')) location.replace(sp); } catch (e) {}   // a cold load only: in-app navigation keeps SoundCloud's own routing
-      D.addEventListener('click', (e) => { const a = e.target && e.target.closest ? e.target.closest('a.sce-ts') : null; if (!a) return; e.preventDefault(); e.stopPropagation(); jumpToPageTime(+a.dataset.t || 0); }, true);
+      D.addEventListener('click', (e) => { if (!CFG.tsLinks) return; const a = e.target && e.target.closest ? e.target.closest('a.sce-ts') : null; if (!a) return; e.preventDefault(); e.stopPropagation(); jumpToPageTime(+a.dataset.t || 0); }, true);
       try { const hm = /[#&]t=((?:\d{1,2}:)?\d{1,3}:\d{2})\b/.exec(location.hash || ''); if (hm) tsPending = { href: location.pathname.replace(/\/$/, ''), pos: tsSecs(hm[1]), t: Date.now() }; } catch (e) {}
       // first run → offer the recommended-vs-manual setup once (after the page settles)
       try { if (!GET('sce:onboarded', 0)) setTimeout(() => { try { if (!GET('sce:onboarded', 0)) showOnboarding(); } catch (e) {} }, 3500); } catch (e) {}
