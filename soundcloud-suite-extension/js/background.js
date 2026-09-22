@@ -23,6 +23,8 @@ const ALLOWED_HOSTS = [
   'krcs.kugou.com',
   'lyrics.kugou.com',
   'music.163.com',
+  'c.y.qq.com',
+  'u.y.qq.com',
   'api.listenbrainz.org',
   'translate.googleapis.com',
 ];

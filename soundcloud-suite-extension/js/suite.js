@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.64.2
+// @version      4.65.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -33,6 +33,8 @@
 // @connect      krcs.kugou.com
 // @connect      lyrics.kugou.com
 // @connect      music.163.com
+// @connect      c.y.qq.com
+// @connect      u.y.qq.com
 // @connect      api.listenbrainz.org
 // @connect      translate.googleapis.com
 //
@@ -102,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.64.2';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.65.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -4204,6 +4206,7 @@
 
       var halfWin = (FFT / 2) / ctx.sampleRate;
       var lastMt = -1, seg = null, ticks = 0, cpuMs = 0, frames = 0, disposed = false;
+      var od = opts.onOnset ? onsetDetector() : null, odLast = -1;   // a voice after a pause → opts.onOnset(mediaTime)
       var now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0; };
       var body = function () {
         var mt = +opts.mediaTime();
@@ -4239,6 +4242,12 @@
         anM.getFloatTimeDomainData(buf); var m2 = meanSq(buf);
         anS.getFloatTimeDomainData(buf); var s2 = meanSq(buf);
         if (env.cnt[idx] < 65535) { env.mid[idx] += m2; env.side[idx] += s2; env.cnt[idx]++; frames++; }
+        if (od) {
+          if (odLast >= 0 && (t < odLast || t - odLast > 1)) od.reset();   // a seek: the pause before it is not a pause before this
+          odLast = t;
+          var on = od.push(10 * Math.log10(Math.max(1e-10, m2 - 0.65 * s2)), t);   // the centred (vocal) part of the band
+          if (on != null) { try { opts.onOnset(on); } catch (e) {} }
+        }
       };
       var tick = function () { if (disposed) return; var t0 = now(); ticks++; try { body(); } catch (e) {} cpuMs += now() - t0; };
       // the shared worker ticker where there is one: a hidden tab clamps setInterval to once a second, which starves the envelope
@@ -4264,7 +4273,42 @@
       };
     }
 
-    return { create: create, analyse: analyse, VERSION: '0.1' };
+    /* A voice coming in after a pause, from the vocal-band level alone: a steady stretch (the beat by itself,
+     * or silence — the level within flatDb for preHops), then a rise of riseDb or more that HOLDS for holdHops.
+     * A drum hit rises too but is gone again within the hold; dense material whose hits alone swing the level
+     * more than flatDb never qualifies. So a loud beat can only miss a voice, not invent one. push() returns
+     * the onset's time or null; the caller takes the level's own lag off. */
+    function onsetDetector(o) {
+      o = o || {};
+      var pre = o.preHops || 25, riseHops = o.riseHops || 10, hold = o.holdHops || 8, flatDb = o.flatDb || 6, riseDb = o.riseDb || 4, refractory = o.refractory || 0.4, warm = o.warmHops || 50;
+      var n = pre + riseHops, ring = new Array(n), head = 0, filled = 0, lvl = null, hops = 0, lastAt = -1, armed = true, cand = null;
+      return {
+        push: function (db, t) {
+          if (!(db > -200)) db = -120;
+          lvl = lvl == null ? db : lvl + 0.28 * (db - lvl);
+          hops++;
+          var out = null;
+          if (cand) {   // a rise on probation: still up after the hold → a voice; back down → a hit
+            if (lvl - cand.mx >= riseDb) { if (--cand.left <= 0) { lastAt = cand.t; out = cand.t; cand = null; } }
+            else cand = null;
+          }
+          if (filled >= n) {
+            var mx = -Infinity, mn = Infinity;
+            for (var k = 0; k < pre; k++) { var v = ring[(head + k) % n]; if (v > mx) mx = v; if (v < mn) mn = v; }   // the oldest `pre` entries: before the rise
+            var flat = mx - mn <= flatDb, rise = lvl - mx >= riseDb;
+            if (flat && rise) { if (armed && !cand && hops > warm && (lastAt < 0 || t - lastAt > refractory)) cand = { t: t, mx: mx, left: hold }; armed = false; }
+            else if (!rise) armed = true;   // armed again once the level is back near the window
+          }
+          ring[(head + filled) % n] = lvl;
+          if (filled < n) filled++; else head = (head + 1) % n;
+          return out;
+        },
+        reset: function () { filled = 0; head = 0; armed = true; lastAt = -1; cand = null; },
+        state: function () { return { lvl: lvl, filled: filled, armed: armed, cand: !!cand }; },
+      };
+    }
+
+    return { create: create, analyse: analyse, onsetDetector: onsetDetector, VERSION: '0.2' };
   })();
 
   const Media = (() => {
@@ -5538,7 +5582,7 @@
     const st = {};
     const load = (n) => { if (!st[n]) { let u = 0; try { u = +GM_getValue('sl:park:' + n, 0) || 0; } catch (e) {} st[n] = { fails: 0, until: u }; } return st[n]; };
     const outage = (e) => /^(timeout|neterr)$/.test(String((e && e.message) || e || ''));
-    ['netease', 'kugou'].forEach(load);
+    ['netease', 'kugou', 'qq'].forEach(load);
     return {
       parked: (n) => Date.now() < load(n).until,
       ok: (n) => { const x = load(n); x.fails = 0; if (x.until) { x.until = 0; try { GM_setValue('sl:park:' + n, 0); } catch (e) {} } },
@@ -5656,6 +5700,47 @@
       const j2 = await gmJSON('https://music.163.com/api/song/media?id=' + nid, NEO);
       const raw2 = j2 && j2.lyric;
       return raw2 && raw2.trim() ? raw2 : null;
+    });
+  }
+
+  /* ----- QQ MUSIC (synced LRC, the other huge Chinese catalog — Western songs too, keyless) ----- */
+
+  async function qqSearch(q, durSec) {
+    if (HostPark.parked('qq')) return { songs: [] };
+    let j;
+    try {
+      j = await gmJSON('https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&n=6&p=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&w=' + encodeURIComponent(q), { timeout: 8000 });
+      HostPark.ok('qq');
+    } catch (e) { HostPark.fail('qq', e); throw e; }
+    const list = (j && j.data && j.data.song && j.data.song.list) || [];
+    return {
+      songs: list.slice(0, 6).map((x, i) => {
+        const singers = (x.singer || []).map((g) => g && g.name).filter(Boolean);
+        return {
+          src: 'qq', id: 'q' + x.songmid, qmid: String(x.songmid || ''), rank: i,
+          t: String(x.songname || '').trim(), a: singers[0] || '', an: singers.join(', '),
+          dur: Math.round(+x.interval || 0), img: '',
+        };
+      }).filter((x) => x.qmid),
+    };
+  }
+
+  function qqLyric(mid) {
+    return cachedBody('q:' + mid, async () => {
+      if (HostPark.parked('qq')) return null;
+      const data = JSON.stringify({ comm: { ct: 24 }, lyric: { module: 'music.musichallSong.PlayLyricInfo', method: 'GetPlayLyricInfo', param: { songMID: mid } } });
+      let j;
+      try { j = await gmJSON('https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=' + encodeURIComponent(data), { timeout: 8000, prio: true }); HostPark.ok('qq'); }
+      catch (e) { HostPark.fail('qq', e); throw e; }
+      const body = j && j.lyric && j.lyric.data && j.lyric.data.lyric;
+      if (!body) return null;
+      const timed = (x) => /\[\d{1,2}:\d{2}/.test(x);
+      let raw = String(body);
+      if (!timed(raw)) {   // the sheet comes base64-encoded; a plain one is taken as it is
+        try { raw = atob(raw.replace(/\s+/g, '')); } catch (e) { return null; }
+        try { raw = decodeURIComponent(escape(raw)); } catch (e) {}
+      }
+      return raw && timed(raw) ? raw : null;
     });
   }
 
@@ -6154,7 +6239,7 @@
   };
 
   const rankPrior = (r) => (r === 0 ? 0.05 : r === 1 ? 0.03 : r === 2 ? 0.015 : 0);
-  const needsBody = (c) => c.src === 'genius' || c.src === 'kugou' || c.src === 'netease';
+  const needsBody = (c) => c.src === 'genius' || c.src === 'kugou' || c.src === 'netease' || c.src === 'qq';
 
   const FT_SPLIT = /\s*(?:\(|\)|\[|\]|,|&|\+|\b(?:ft|feat|featuring|with)\b\.?|\bx\b|\band\b)\s*/gi;
   function artistParts(c) {
@@ -6389,7 +6474,9 @@
           ? geniusLyrics(c.url).then((lines) => (lines && lines.length ? { synced: false, lines } : null))
           : c.src === 'netease'
             ? neteaseLyric(c.nid).then((raw) => { const b = fromLrcRaw(raw); if (b && NE_WORDS.has(c.nid)) b.wt = NE_WORDS.get(c.nid); return b; })
-            : kugouLyric(c.kid, c.kkey).then(fromLrcRaw);
+            : c.src === 'qq'
+              ? qqLyric(c.qmid).then(fromLrcRaw)
+              : kugouLyric(c.kid, c.kkey).then(fromLrcRaw);
         // a STRONG match whose lyric download dies must not end the search —
         // its artist+title are confirmed evidence: pivot them into exact
         // lookups at the catalogs that ARE reachable (the trail showed
@@ -6531,12 +6618,14 @@
         if (done) return;
         pool.sort((a, b) => b.score - a.score);
 
-        // eagerly fetch bodies: top 3 genius, top kugou/netease, plus Genius' own #1
+        // eagerly fetch bodies: top 3 genius, top kugou/netease/qq, plus Genius' own #1
         pool.filter((p) => p.src === 'genius').slice(0, 3).forEach(fetchBody);
         const kk = pool.find((p) => p.src === 'kugou');
         if (kk) fetchBody(kk);
         const ne = pool.find((p) => p.src === 'netease');
         if (ne) fetchBody(ne);
+        const qq = pool.find((p) => p.src === 'qq');
+        if (qq) fetchBody(qq);
         if (!pool.some((p) => p.src === 'genius') && reserve[0]) fetchBody(reserve[0]);
 
         const el = performance.now() - t0;
@@ -6623,7 +6712,7 @@
         for (const it of res.songs || []) {
           // language gate: a Latin-titled track never matches a CJK/Cyrillic candidate
           // a CJK-catalogue entry whose length matches this upload to the second is evidence, not noise: keep it
-          const durHit = meta.dur > 0 && it.dur > 0 && Math.abs(it.dur - meta.dur) <= 1.5 && (it.synced || it.src === 'kugou' || it.src === 'netease');
+          const durHit = meta.dur > 0 && it.dur > 0 && Math.abs(it.dur - meta.dur) <= 1.5 && (it.synced || it.src === 'kugou' || it.src === 'netease' || it.src === 'qq');
           if (wantLatin && !durHit && latinish((it.t || '') + ' ' + (it.a || '')) < 0.4) continue;
           if (banned && banned.includes(banTag(it))) continue;
           if (it.src === 'genius' && primary && (it.rank || 0) <= 1 && reserve.length < 2
@@ -6644,7 +6733,7 @@
             for (const p of pool) {
               if (p.src === it.src || it.agreeBonus) continue;
               if (sameTitle(p.t, it.t) && sim(p.a, it.a) > 0.8) {
-                const syncedish = (x) => !!x.synced || x.src === 'kugou' || x.src === 'netease';
+                const syncedish = (x) => !!x.synced || x.src === 'kugou' || x.src === 'netease' || x.src === 'qq';
                 const bonus = (x, other) => (syncedish(x) && other.src === 'genius') ? 0.1 : 0.05;
                 it.agreeBonus = bonus(it, p); it.score += it.agreeBonus;
                 if (!p.agreeBonus) { p.agreeBonus = bonus(p, it); p.score += p.agreeBonus; }
@@ -6659,7 +6748,7 @@
           if (!artistLoopFired && it.a && (
                 (it.src === 'genius' && (it.ts || 0) >= 0.58) ||
                 ((it.src === 'lrclib' || it.src === 'mxm') && it.synced && (it.ts || 0) >= 0.75) ||
-                ((it.src === 'kugou' || it.src === 'netease') && (it.ts || 0) >= 0.75)
+                ((it.src === 'kugou' || it.src === 'netease' || it.src === 'qq') && (it.ts || 0) >= 0.75)
               )) {
             const k = normKey(it.a);
             if (k && !G.hints.some((h) => normKey(h.a) === k)) {
@@ -6670,6 +6759,7 @@
               Trail.add(`${it.src} anchor: "${it.a} — ${it.t}" → exact synced lookups`);
               track(lrcGet({ track: it.t, artist: it.a, dur: meta.dur > 0 ? meta.dur : (it.dur || 0) }));
               track(kugouSearch((it.a + ' ' + it.t).trim(), meta.dur));
+              track(qqSearch((it.a + ' ' + it.t).trim(), meta.dur));
               const fp = artistParts(it).filter((p) => normKey(p) !== normKey(it.a) && !/[()\[\]]/.test(p)).slice(0, 1);
               fp.forEach((p) => {
                 if (!G.hints.some((h) => normKey(h.a) === normKey(p))) G.hints.push({ a: p, conf: 0.65 });
@@ -6726,6 +6816,7 @@
         track(MXM.find({ artist, track: G.clean.title, dur: meta.dur > 0 ? meta.dur : 0 }));
         track(kugouSearch((artist + ' ' + G.clean.title).trim(), meta.dur));
         track(neteaseSearch((artist + ' ' + G.clean.title).trim(), meta.dur));
+        track(qqSearch((artist + ' ' + G.clean.title).trim(), meta.dur));
         const cq = (artist + ' ' + G.clean.title).trim();
         if (!G.gq.some((q) => normKey(q) === normKey(cq))) {
           if (Gtok.has()) track(geniusApiSearch(cq), true, true);   // reliable, cheap — worth it even in lite
@@ -6853,7 +6944,7 @@
       // connections queue up and *everything* crawls)
       const strong = () => pool.some((p) => p.score >= 0.72);
       let wsLaunched = false;   // webSearch fires once per run, even if Gmode flips mid-find
-      let mxmLaunched = false, neteaseLaunched = false;   // wave-1 promotion must not double-fire in 1.8
+      let mxmLaunched = false, neteaseLaunched = false, qqLaunched = false;   // wave-1 promotion must not double-fire in 1.8
 
       // wave 0 — when the library cache already gave us canonical artist +
       // title + duration, LRCLIB's /get endpoint can answer EXACTLY in one
@@ -6900,6 +6991,8 @@
         track(MXM.find({ artist: (h0w && h0w.a) || '', track: G.clean.title, dur: meta.dur > 0 ? meta.dur : 0 }));
         neteaseLaunched = true;
         track(neteaseSearch(G.gq[0] || G.clean.title, meta.dur));
+        qqLaunched = true;
+        track(qqSearch(G.gq[0] || G.clean.title, meta.dur));
       }
 
       if (!lite) {
@@ -6919,6 +7012,7 @@
           const th = G.hints[0];
           if (!mxmLaunched && th && th.conf >= 0.6) { mxmLaunched = true; track(MXM.find({ artist: th.a, track: G.clean.title, dur: meta.dur > 0 ? meta.dur : 0 })); }
           if (!neteaseLaunched) { neteaseLaunched = true; track(neteaseSearch(G.gq[0] || G.clean.title, meta.dur)); }
+          if (!qqLaunched) { qqLaunched = true; track(qqSearch(G.gq[0] || G.clean.title, meta.dur)); }
           if (G.lq[1]) track(lrcSearch({ q: G.lq[1] }));
         }, 900);
 
@@ -6933,6 +7027,7 @@
             track(lrcSearch({ track: bare, artist: up }));
             track(MXM.find({ artist: up, track: bare, dur: meta.dur > 0 ? meta.dur : 0 }));
             track(neteaseSearch((up + ' ' + bare).trim(), meta.dur));
+            track(qqSearch((up + ' ' + bare).trim(), meta.dur));
           }
           // last-ditch bare-title-only LRCLIB (catches single-word/odd titles)
           if (bare && bare.length > 2) track(lrcSearch({ q: bare }));
@@ -7042,7 +7137,7 @@
    *  8. UI
    * ------------------------------------------------------------------ */
 
-  const SRC_NAME = { genius: 'Genius', lrclib: 'LRCLIB', kugou: 'Kugou', netease: 'NetEase', mxm: 'Musixmatch', ovh: 'Lyrics.ovh', file: 'Your file', paste: 'Pasted', scdesc: 'SC description' };
+  const SRC_NAME = { genius: 'Genius', lrclib: 'LRCLIB', kugou: 'Kugou', netease: 'NetEase', qq: 'QQ Music', mxm: 'Musixmatch', ovh: 'Lyrics.ovh', file: 'Your file', paste: 'Pasted', scdesc: 'SC description' };
   // what was unavailable during a search, in plain words, for the "no lyrics" card
   function degradedReasons() {
     const r = [];
@@ -7292,6 +7387,110 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel.max .glow { height: 65%; top: -12%; }
 .panel.max.haz .glow { opacity: 0.42; }
 
+/* ── the stage: immersive mode while the Lyrics tab is up. Just the lyrics on the blurred artwork,
+   the cover beside them, a seek bar and transport along the bottom; the chrome fades when idle. ── */
+.stveil, .stage-art, .stage-bar, .stpop, .hbtn.stx { display: none; }
+.hbtn .ic-x, .hbtn .ic-c { display: grid; place-items: center; }
+.panel.max .hbtn .ic-x, .panel:not(.max) .hbtn .ic-c { display: none; }
+.panel.max.stage { --st-art: min(32vw, 58vh); --st-fs: clamp(26px, 3.1vw, 46px);
+  left: 0 !important; right: 0 !important; top: 0 !important; bottom: 0 !important; border-radius: 0; background: #0b0b0e; box-shadow: none; color: #fff; }
+.panel.max.stage.st-s { --st-fs: clamp(20px, 2.3vw, 34px); }
+.panel.max.stage.st-l { --st-fs: clamp(30px, 3.9vw, 58px); }
+.panel.max.stage.st-xl { --st-fs: clamp(34px, 4.8vw, 72px); }
+.panel.max.stage.st-noart, .panel.max.stage:not(.st-hasart) { --st-art: 0px; }
+.panel.max.stage::before { display: none; }
+.panel.max.stage .glow { top: -12vh; left: -12vw; right: -12vw; bottom: -12vh; height: auto; filter: blur(80px) saturate(170%) brightness(.62); opacity: 1 !important; transition: opacity 1s ease; }
+.panel.max.stage.st-dark .glow { opacity: .16 !important; }
+.panel.max.stage .stveil { display: block; position: absolute; inset: 0; z-index: 0; background: linear-gradient(180deg, rgba(8,8,11,.34) 0%, rgba(8,8,11,.2) 38%, rgba(8,8,11,.72) 100%); }
+.panel.max.stage .tabs, .panel.max.stage .grip, .panel.max.stage .nxt, .panel.max.stage .prog, .panel.max.stage .tm, .panel.max.stage .hdr::after { display: none !important; }
+.panel.max.stage .hdr { position: absolute; top: 0; left: 0; right: 0; z-index: 4; padding: 22px 26px 14px; gap: 12px; cursor: default; background: linear-gradient(180deg, rgba(8,8,11,.55), rgba(8,8,11,0)); }
+.panel.max.stage .art { width: 44px; height: 44px; border-radius: 12px; box-shadow: 0 8px 24px -8px rgba(0,0,0,.8), inset 0 0 0 1px rgba(255,255,255,.1); }
+.panel.max.stage.st-hasart:not(.st-noart):not(.st-center) .art { display: none; }
+.panel.max.stage .tt { font-size: 15px; font-weight: 700; color: #fff; }
+.panel.max.stage .src { font-size: 12px; margin-top: 3px; color: rgba(255,255,255,.62); }
+.panel.max.stage .src.lk:hover { color: #fff; }
+.panel.max.stage .hbtn { width: 30px; height: 30px; color: rgba(255,255,255,.74); }
+.panel.max.stage .hbtn:hover { color: #fff; background: rgba(255,255,255,.12); }
+.panel.max.stage .hbtn.stx { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: auto; height: 30px; padding: 0 12px; margin-right: 6px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: rgba(255,255,255,.8); background: rgba(255,255,255,.09); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1); }
+.panel.max.stage .hbtn.stx:hover { background: rgba(255,255,255,.17); color: #fff; }
+.panel.max.stage .hbtn.stx.on { background: #fff; color: #111; box-shadow: none; }
+.panel.max.stage .hbtn.stx svg { width: 10px; height: 10px; }
+.panel.max.stage .body { padding: 22vh calc(var(--st-art) + 12vw) 46vh 7vw; margin: 0;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14%, #000 58%, transparent 80%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14%, #000 58%, transparent 80%); }
+.panel.max.stage .line, .panel.max.stage .sec, .panel.max.stage .tline, .panel.max.stage .rline, .panel.max.stage .dots { max-width: 30ch; }
+.panel.max.stage .line { font-size: var(--st-fs); line-height: 1.16; font-weight: 800; letter-spacing: -0.022em; padding: .28em 0; border-radius: 0; color: rgba(255,255,255,.5);
+  transform-origin: left center; transition: color .35s ease, opacity .35s ease, transform .45s cubic-bezier(.2,.7,.2,1); }
+.panel.max.stage .line.past { color: rgba(255,255,255,.26); }
+.panel.max.stage .line.sk-click:hover:not(.act) { color: rgba(255,255,255,.88); transform: none; }
+.panel.max.stage .line.act { color: transparent; font-weight: 800; filter: none; transform: scale(1.03);
+  background: linear-gradient(90deg, #fff 0%, #fff calc(var(--fill, 0%) - 1.2%), var(--acc2) var(--fill, 0%), rgba(255,255,255,.42) calc(var(--fill, 0%) + .6%), rgba(255,255,255,.42) 100%);
+  -webkit-background-clip: text; background-clip: text; }
+@supports not (-webkit-background-clip: text) { .panel.max.stage .line.act { color: #fff; background: none; } }
+.panel.max.stage .line.u { font-size: calc(var(--st-fs) * .8); font-weight: 600; color: rgba(255,255,255,.74); padding: .22em 0; }
+.panel.max.stage .sec { font-size: 12.5px; letter-spacing: .16em; color: rgba(255,255,255,.45); padding: 1.6em 0 .5em; opacity: 1; }
+.panel.max.stage .tline { font-size: calc(var(--st-fs) * .48); font-style: normal; color: rgba(255,255,255,.5); padding: 0 0 .5em; margin-top: -.1em; }
+.panel.max.stage .rline { font-size: calc(var(--st-fs) * .5); color: rgba(255,255,255,.55); padding: 0 0 .3em; margin-top: -.15em; }
+.panel.max.stage .line.act + .tline { color: rgba(255,255,255,.74); }
+.panel.max.stage .gap { height: 1em; }
+.panel.max.stage .dots { padding: .6em 0; gap: 9px; }
+.panel.max.stage .dots i { width: 8px; height: 8px; background: rgba(255,255,255,.32); }
+.panel.max.stage.st-center .body { text-align: center; padding-left: calc(var(--st-art) / 2 + 9vw); padding-right: calc(var(--st-art) / 2 + 9vw); }
+.panel.max.stage.st-center .line, .panel.max.stage.st-center .sec, .panel.max.stage.st-center .tline, .panel.max.stage.st-center .rline { margin-left: auto; margin-right: auto; transform-origin: center; }
+.panel.max.stage.st-center .dots { justify-content: center; margin-left: auto; margin-right: auto; }
+/* centred lines: the cover would sit in the column's way — the header thumb carries it instead */
+.panel.max.stage.st-center { --st-art: 0px; }
+.panel.max.stage.st-center .stage-art, .panel.max.stage.st-center #bArt { display: none; }
+.panel.max.stage.st-center .art { display: grid; }
+.panel.max.stage .stage-art { display: block; position: absolute; z-index: 1; right: 7vw; top: 50%; width: var(--st-art); height: var(--st-art); transform: translateY(-50%);
+  border-radius: 20px; background: rgba(255,255,255,.05) center/cover no-repeat; box-shadow: 0 40px 90px -30px rgba(0,0,0,.85), 0 0 0 1px rgba(255,255,255,.08); animation: stin .6s cubic-bezier(.2,.7,.2,1) both; }
+.panel.max.stage.st-noart .stage-art, .panel.max.stage:not(.st-hasart) .stage-art { display: none; }
+@keyframes stin { from { opacity: 0; transform: translateY(-50%) scale(.96); } }
+.panel.max.stage .stage-bar { display: flex; flex-direction: column; gap: 14px; position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; padding: 9vh 7vw 3.2vh;
+  background: linear-gradient(180deg, rgba(8,8,11,0), rgba(8,8,11,.5)); pointer-events: none; transition: opacity .45s ease; }
+.panel.max.stage .stage-bar > * { pointer-events: auto; }
+.st-seek { display: flex; align-items: center; gap: 12px; }
+.st-tm { font-size: 11.5px; font-weight: 600; color: rgba(255,255,255,.6); font-variant-numeric: tabular-nums; min-width: 34px; }
+.st-tm:last-child { text-align: right; }
+.st-track { position: relative; flex: 1; height: 4px; border-radius: 4px; background: rgba(255,255,255,.18); cursor: pointer; }
+.st-track::before { content: ''; position: absolute; left: 0; right: 0; top: -10px; bottom: -10px; }
+.st-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; background: #fff; }
+.st-track i::after { content: ''; position: absolute; right: -6px; top: 50%; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); transform: translateY(-50%) scale(0); transition: transform .15s ease; }
+.st-track:hover i::after, .st-track:focus-visible i::after { transform: translateY(-50%) scale(1); }
+.st-ctl { display: flex; align-items: center; justify-content: center; gap: 28px; }
+.st-btn { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: rgba(255,255,255,.78); transition: color .15s ease, transform .12s ease, background .15s ease; }
+.st-btn:hover { color: #fff; transform: scale(1.06); }
+.st-btn:active { transform: scale(.94); }
+.st-btn svg { width: 22px; height: 22px; }
+.st-btn.st-play { width: 58px; height: 58px; background: #fff; color: #0b0b0e; box-shadow: 0 14px 34px -12px rgba(0,0,0,.75); }
+.st-btn.st-play:hover { color: #000; }
+.st-btn.st-play svg { width: 24px; height: 24px; }
+.st-btn.st-play .ic-play, .st-btn.st-play .ic-pause { display: grid; place-items: center; }
+.st-btn.st-play .ic-pause, .panel.playing .st-btn.st-play .ic-play { display: none; }
+.panel.playing .st-btn.st-play .ic-pause { display: grid; }
+.panel.max.stage .stpop { position: absolute; z-index: 8; top: 64px; right: 26px; min-width: 268px; padding: 12px 14px 8px; border-radius: 18px; background: rgba(16,16,20,.94);
+  -webkit-backdrop-filter: blur(30px) saturate(160%); backdrop-filter: blur(30px) saturate(160%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 24px 60px -20px rgba(0,0,0,.8); }
+.panel.max.stage .stpop.on { display: block; animation: lin .15s ease both; }
+.stp-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 5px 0; }
+.stp-l { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.55); }
+.stp-seg { display: flex; gap: 2px; padding: 2px; border-radius: 99px; background: rgba(255,255,255,.08); }
+.stp-b { min-width: 34px; height: 26px; padding: 0 11px; border-radius: 99px; font-size: 11px; font-weight: 700; color: rgba(255,255,255,.72); transition: background .12s ease, color .12s ease; }
+.stp-b:hover { color: #fff; }
+.stp-b.on { background: #fff; color: #111; }
+.panel.max.stage .menu { top: 64px; right: 26px; }
+.panel.max.stage .toast { bottom: 16vh; }
+.panel.max.stage .chip { bottom: 19vh; }
+.panel.max.stage .wchip { bottom: 24vh; }
+.panel.max.stage .sharebar { z-index: 5; }
+.panel.max.stage.idle .stage-bar, .panel.max.stage.idle .stpop { opacity: 0; pointer-events: none; }
+@media (max-width: 760px), (max-height: 480px) {
+  .panel.max.stage { --st-art: 0px !important; }
+  .panel.max.stage .stage-art { display: none !important; }
+  .panel.max.stage .body, .panel.max.stage.st-center .body { padding: 16vh 6vw 36vh; }
+  .panel.max.stage .hbtn.stx { padding: 0 9px; }
+}
+
 /* ── hotkey cheat sheet ── */
 .keys { position: absolute; inset: 0; z-index: 8; background: rgba(10,10,12,0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   display: none; flex-direction: column; justify-content: center; padding: 18px 26px; cursor: pointer; }
@@ -7502,6 +7701,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .scell { background: rgba(255,255,255,0.035); border-radius: 13px; margin: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05); transition: background .15s ease; }
 .scell:hover { background: rgba(255,255,255,0.06); }
 .panel.max .hdr, .panel.max .tabs, .panel.max .nxt, .panel.max .grip { transition: opacity .45s ease; }
+.panel.max.stage.idle { cursor: none; }
 .panel.max.idle { cursor: none; }
 .panel.max.idle .hdr, .panel.max.idle .tabs, .panel.max.idle .nxt { opacity: 0; pointer-events: none; }
 .spark.hrs { height: 24px; gap: 1.5px; }
@@ -7631,6 +7831,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 /* ── R32 piece · focus-visible ring across the whole hub for keyboard a11y.
    Settings + shuffle popover already have their own focus rings; the hub
    itself shipped without any, so Tab through the panel was invisible. ── */
+.st-btn:focus-visible,
+.stp-b:focus-visible,
+.st-track:focus-visible,
 .hbtn:focus-visible,
 .tab:focus-visible,
 .mi:focus-visible,
@@ -7687,7 +7890,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 @media (prefers-reduced-motion: reduce) {
   .panel, .line, .hbtn, .btn, .toast, .fab, .go, .inp, .dots, .tab { transition: none !important; }
   .sk, .eq i, .dots i { animation: none !important; }
-  .line, .sec, .dots, .res, .menu.on, .chip.on, .keys.on, .mini.on { animation: none !important; }
+  .line, .sec, .dots, .res, .menu.on, .chip.on, .keys.on, .mini.on, .stage-art, .stpop.on { animation: none !important; }
 }
 /*!__SUITE_CSS_END__*/
 `;
@@ -7702,6 +7905,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     off: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M9 6l10-2v10"/><path d="M9 9.5V18.5"/><circle cx="6.6" cy="18.5" r="2.4"/></svg>',
     expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>',
+    collapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10h-6V4"/><path d="M4 14h6v6"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>',
+    chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+    play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.4-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.4" height="14" rx="1.3"/><rect x="13.6" y="5" width="4.4" height="14" rx="1.3"/></svg>',
+    prev: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="2.6" height="14" rx="1"/><path d="M19 6.3v11.4a1 1 0 0 1-1.53.85l-8.9-5.7a1 1 0 0 1 0-1.7l8.9-5.7A1 1 0 0 1 19 6.3z"/></svg>',
+    next: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="16.4" y="5" width="2.6" height="14" rx="1"/><path d="M5 6.3v11.4a1 1 0 0 0 1.53.85l8.9-5.7a1 1 0 0 0 0-1.7l-8.9-5.7A1 1 0 0 0 5 6.3z"/></svg>',
+    open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
   };
 
   const UI = (() => {
@@ -7717,6 +7927,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let chapToldFor = '';        // the track whose chapter count was announced
     let uiMeta = null;           // the header's metadata (title, uploader, artwork), for the share card
     let maxOn = false;           // immersive fullscreen
+    let stageOn = false, stPopOn = false;   // the stage (immersive + Lyrics tab) and its Style popover
+    let stArtEl, stFillEl, stTmEl, stDurEl, stPopEl, stTrackEl, stFillLast = '', stTmLast = -1;
+    let stagePref = { fs: 'm', al: 'l', art: 1, bg: 'art' };   // size · lines left/centred · cover · backdrop
+    try { const sp = GM_getValue('sl:stage', null); if (sp && typeof sp === 'object') stagePref = Object.assign(stagePref, sp); } catch (e) {}
+    let vocalGuided = false;     // est mode: the timeline is bent to the voice (App.getAnchors() carries .auto)
     let menuOn = false, keysOn = false, keysBuilt = false;
     let chipShown = false, lastTm = -1;
     let lastSearchDur = 0;       // playing track's duration during manual search
@@ -7853,6 +8068,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       panel.setAttribute('aria-label', 'SoundCloud Suite — lyrics & player hub');
       panel.innerHTML = `
         <div class="glow" id="glow" aria-hidden="true"></div>
+        <div class="stveil" aria-hidden="true"></div>
         <div class="hdr" id="hdr">
           <div class="art" id="art" aria-hidden="true">${ICONS.note}</div>
           <div class="meta">
@@ -7862,7 +8078,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           <div class="hactions">
             <span class="tm" id="tm" aria-hidden="true"></span>
             <button class="hbtn" id="bSearch" type="button" title="Search lyrics manually (S)" aria-label="Search lyrics manually">${ICONS.search}</button>
-            <button class="hbtn" id="bMax" type="button" title="Immersive mode (F)" aria-label="Immersive (full-screen) mode" aria-pressed="false">${ICONS.expand}</button>
+            <button class="hbtn stx" id="bStyle" type="button" title="Stage style: size, alignment, cover, backdrop" aria-haspopup="dialog" aria-expanded="false">Style ${ICONS.chev}</button>
+            <button class="hbtn stx" id="bArt" type="button" title="Show or hide the cover" aria-pressed="true">Art</button>
+            <button class="hbtn" id="bMax" type="button" title="Stage — full-screen lyrics (F)" aria-label="Stage: full-screen lyrics" aria-pressed="false"><span class="ic-x">${ICONS.expand}</span><span class="ic-c">${ICONS.collapse}</span></button>
             <button class="hbtn" id="bMenu" type="button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded="false">${ICONS.more}</button>
             <button class="hbtn" id="bClose" type="button" title="Close (Esc)" aria-label="Close lyrics hub">${ICONS.close}</button>
           </div>
@@ -7881,6 +8099,20 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         <div class="body" id="ebody" role="region" aria-label="Tweaks" style="display:none"></div>
         <div class="body" id="abody" role="region" aria-label="Audio" style="display:none"></div>
         <div class="nxt" id="nxt"></div>
+        <div class="stage-art" id="stArt" aria-hidden="true"></div>
+        <div class="stage-bar" id="stBar">
+          <div class="st-seek">
+            <span class="st-tm" id="stTm">0:00</span>
+            <div class="st-track" id="stTrack" role="slider" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><i id="stFill"></i></div>
+            <span class="st-tm" id="stDur">0:00</span>
+          </div>
+          <div class="st-ctl">
+            <button class="st-btn" id="stPrev" type="button" title="Previous track" aria-label="Previous track">${ICONS.prev}</button>
+            <button class="st-btn st-play" id="stPlay" type="button" title="Play / pause (Space)" aria-label="Play or pause"><span class="ic-play">${ICONS.play}</span><span class="ic-pause">${ICONS.pause}</span></button>
+            <button class="st-btn" id="stNext" type="button" title="Next track" aria-label="Next track">${ICONS.next}</button>
+          </div>
+        </div>
+        <div class="stpop" id="stPop" role="dialog" aria-label="Stage style"></div>
         <button class="chip" id="chip" type="button">↓ Back to live</button>
         <button class="wchip" id="wiz" type="button"></button>
         <div class="menu" id="menu" role="menu"></div>
@@ -7890,6 +8122,23 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         <!-- R32: hidden live region — screen readers announce the active lyric line as it changes -->
         <div class="srl" id="srl" aria-live="polite" aria-atomic="true"></div>`;
       root.appendChild(panel);
+
+      stArtEl = panel.querySelector('#stArt'); stFillEl = panel.querySelector('#stFill'); stTmEl = panel.querySelector('#stTm'); stDurEl = panel.querySelector('#stDur');
+      stPopEl = panel.querySelector('#stPop'); stTrackEl = panel.querySelector('#stTrack');
+      const cmd = (n) => { try { if (SUITE.command) SUITE.command(n); } catch (e) {} };
+      panel.querySelector('#stPrev').addEventListener('click', () => cmd('prev-track'));
+      panel.querySelector('#stNext').addEventListener('click', () => cmd('next-track'));
+      panel.querySelector('#stPlay').addEventListener('click', () => cmd('play-pause'));
+      stTrackEl.addEventListener('click', (e) => {   // the seek bar: a click lands the track there
+        const m = uiMeta; if (!m || !(m.dur > 0)) return;
+        const r = stTrackEl.getBoundingClientRect(); if (!(r.width > 0)) return;
+        Media.seek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * m.dur);
+        pauseScrollUntil = 0;
+      });
+      panel.querySelector('#bStyle').addEventListener('click', (e) => { e.stopPropagation(); stagePop(!stPopOn); });
+      panel.querySelector('#bArt').addEventListener('click', () => setStagePref('art', stagePref.art ? 0 : 1));
+      panel.addEventListener('pointerdown', (e) => { if (stPopOn && !stPopEl.contains(e.target) && !(e.target.closest && e.target.closest('#bStyle'))) stagePop(false); }, true);
+      applyStagePref();
 
       body = panel.querySelector('#body');
       // during tap-along calibration, a click ANYWHERE in the lyrics = advance to the
@@ -8115,29 +8364,31 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * worker ticker so it keeps moving while the SoundCloud tab is hidden. The sung line and the next one, the
      * artwork, a progress bar and prev / play / next; the lines come from the same synced sheet the mini bar reads. */
     let pip = null, pipT = null, miniKind = '';   // miniKind: what the follow list is (synced · estimated · text)
-    const PIP_CSS = 'html,body{margin:0;height:100%;background:#09090c;color:#f4f4f6;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}'
-      + '.w{position:absolute;inset:0;display:flex;flex-direction:column;padding:14px 16px 12px;box-sizing:border-box;gap:6px;isolation:isolate}'
-      + '.bg{position:absolute;inset:-48px;z-index:-2;background:#14141a center/cover no-repeat;filter:blur(40px) saturate(1.35) brightness(.5);transform:scale(1.15);transition:background-image .6s ease}'
-      + '.veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(9,9,12,.18) 0%,rgba(9,9,12,.62) 55%,rgba(9,9,12,.9) 100%)}'
-      + '.top{display:flex;align-items:center;gap:12px;min-height:52px}.art{width:52px;height:52px;border-radius:13px;background:#1c1c22 center/cover no-repeat;flex:none;box-shadow:0 10px 24px -8px rgba(0,0,0,.9),inset 0 0 0 1px rgba(255,255,255,.08)}'
-      + '.meta{min-width:0;flex:1}.t{font-weight:800;font-size:14px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}.a{font-size:12px;color:#b9b9c2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}'
-      + '.a .k{color:#ff8a3d;font-weight:600}.a .k:empty{display:none}'
-      + '.open{width:30px;height:30px;border:0;border-radius:50%;background:rgba(255,255,255,.09);color:#e8e8ee;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}.open:hover{background:rgba(255,255,255,.18)}'
-      + '.ln{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;gap:5px;padding:2px 0}'
-      + '.pv,.nx{font-size:12.5px;line-height:1.3;color:#a3a3ad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.3em}.pv{opacity:.55}.nx{opacity:.8}'
-      + '.cur{font-size:21px;font-weight:800;letter-spacing:-.3px;line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%;'
-      + 'background:linear-gradient(90deg,#fff var(--fill),rgba(255,255,255,.36) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}'
-      + '.cur.idle{-webkit-text-fill-color:#c9c9d2;color:#c9c9d2;background:none;font-weight:600;font-size:15px;letter-spacing:0}.cur.idle::before{content:"♪  ";color:#ff8a3d}'
-      + '.bot{display:flex;align-items:center;gap:10px}.tm{font-size:11px;color:#b9b9c2;font-variant-numeric:tabular-nums;flex:none;min-width:34px}.tm.r{text-align:right}'
-      + '.bar{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.14);overflow:hidden}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ff5500,#ff8a3d);border-radius:2px;box-shadow:0 0 10px rgba(255,110,0,.55)}'
-      + '.ctl{display:flex;align-items:center;gap:6px;margin-left:4px}.ctl button{border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#f2f2f6;background:rgba(255,255,255,.09);width:32px;height:32px;border-radius:50%;font-size:13px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}'
-      + '.ctl button:hover{background:rgba(255,255,255,.18)}.ctl button:focus-visible{outline:2px solid #ff8a3d;outline-offset:2px}'
-      + '.ctl .pp{width:40px;height:40px;background:linear-gradient(135deg,#ff5500,#ff8a3d);color:#fff;font-size:15px;box-shadow:0 10px 22px -8px rgba(255,90,0,.8),inset 0 0 0 1px rgba(255,255,255,.14)}.ctl .pp:hover{filter:brightness(1.08)}';
+    const PIP_CSS = 'html,body{margin:0;height:100%;background:#0a0a0d;color:#f4f4f6;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}'
+      + 'button{font:inherit;border:0;background:none;color:inherit;cursor:pointer;padding:0}svg{display:block}'
+      + '.w{position:absolute;inset:0;display:flex;flex-direction:column;padding:14px 18px;box-sizing:border-box;gap:8px;isolation:isolate}'
+      + '.bg{position:absolute;inset:-60px;z-index:-2;background:#15151b center/cover no-repeat;filter:blur(46px) saturate(1.4) brightness(.46);transform:scale(1.12);transition:background-image .6s ease}'
+      + '.veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(10,10,13,.1) 0%,rgba(10,10,13,.55) 58%,rgba(10,10,13,.88) 100%)}'
+      + '.top{display:flex;align-items:center;gap:12px;min-height:50px}.art{width:50px;height:50px;border-radius:12px;background:#1c1c22 center/cover no-repeat;flex:none;box-shadow:0 10px 24px -8px rgba(0,0,0,.9),inset 0 0 0 1px rgba(255,255,255,.1)}'
+      + '.meta{min-width:0;flex:1}.t{font-weight:800;font-size:14px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}'
+      + '.a{display:flex;align-items:center;gap:7px;font-size:11.5px;color:rgba(255,255,255,.66);white-space:nowrap;overflow:hidden;margin-top:3px}.a .an{overflow:hidden;text-overflow:ellipsis}'
+      + '.a .k{flex:none;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:99px;background:rgba(255,255,255,.13);color:#fff}.a .k:empty{display:none}'
+      + '.open{width:30px;height:30px;border-radius:50%;color:rgba(255,255,255,.72);display:flex;align-items:center;justify-content:center;flex:none;transition:background .15s,color .15s}.open:hover{background:rgba(255,255,255,.12);color:#fff}.open svg{width:15px;height:15px}'
+      + '.ln{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;gap:4px}'
+      + '.pv,.nx{font-size:12.5px;line-height:1.3;color:rgba(255,255,255,.58);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.3em}.pv{opacity:.6}'
+      + '.cur{font-size:22px;font-weight:800;letter-spacing:-.35px;line-height:1.16;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%;'
+      + 'background:linear-gradient(90deg,#fff var(--fill),rgba(255,255,255,.34) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}'
+      + '.cur.idle{-webkit-text-fill-color:rgba(255,255,255,.7);color:rgba(255,255,255,.7);background:none;font-weight:600;font-size:15px;letter-spacing:0}'
+      + '.bot{display:flex;align-items:center;gap:12px}.tm{font-size:11px;font-weight:600;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums;flex:none;min-width:32px}.tm.r{text-align:right}'
+      + '.bar{flex:1;height:4px;border-radius:4px;background:rgba(255,255,255,.16);overflow:hidden}.bar i{display:block;height:100%;width:0;background:#fff;border-radius:4px}'
+      + '.ctl{display:flex;align-items:center;gap:4px;margin-left:6px}.ctl button{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.8);transition:background .15s,color .15s,transform .1s}'
+      + '.ctl button:hover{background:rgba(255,255,255,.12);color:#fff}.ctl button:active{transform:scale(.92)}.ctl button:focus-visible,.open:focus-visible{outline:2px solid #fff;outline-offset:2px}.ctl button svg{width:18px;height:18px}'
+      + '.ctl .pp{width:40px;height:40px;background:#fff;color:#0a0a0d;box-shadow:0 8px 20px -6px rgba(0,0,0,.7)}.ctl .pp:hover{background:#fff;color:#000;transform:scale(1.05)}.ctl .pp svg{width:20px;height:20px}';
     const PIP_HTML = '<div class="w"><div class="bg"></div><div class="veil"></div>'
-      + '<div class="top"><div class="art"></div><div class="meta"><div class="t"></div><div class="a"><span class="an"></span><span class="k"></span></div></div><button class="open" title="Show the SoundCloud tab">↗</button></div>'
+      + '<div class="top"><div class="art"></div><div class="meta"><div class="t"></div><div class="a"><span class="an"></span><span class="k"></span></div></div><button class="open" title="Show the SoundCloud tab" aria-label="Show the SoundCloud tab">' + ICONS.open + '</button></div>'
       + '<div class="ln"><div class="pv"></div><div class="cur idle">Waiting for lyrics…</div><div class="nx"></div></div>'
       + '<div class="bot"><span class="tm">0:00</span><div class="bar"><i></i></div><span class="tm r">0:00</span>'
-      + '<div class="ctl"><button class="prev" title="Previous track">⏮</button><button class="pp" title="Play / pause">⏸</button><button class="next" title="Next track">⏭</button></div></div></div>';
+      + '<div class="ctl"><button class="prev" title="Previous track" aria-label="Previous track">' + ICONS.prev + '</button><button class="pp" title="Play / pause" aria-label="Play or pause">' + ICONS.pause + '</button><button class="next" title="Next track" aria-label="Next track">' + ICONS.next + '</button></div></div></div>';
     function floatSupported() { try { return !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow); } catch (e) { return false; } }
     function floatOn() { return !!pip; }
     function pipStop() { if (pipT) { try { pipT.stop(); } catch (e) {} pipT = null; } pip = null; }
@@ -8179,10 +8430,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const art = m && m.art ? 'url("' + m.art.replace(/-t\d+x\d+\./, '-t500x500.').replace(/["')]/g, '') + '")' : '';
           P.art.style.backgroundImage = art; P.bg.style.backgroundImage = art;
         }
-        const kind = miniData ? (miniKind === 'estimated' ? ' · estimated timing' : ' · synced') : '';
+        const kind = miniData ? (miniKind === 'estimated' ? 'Estimated' : 'Synced') : '';
         if (kind !== P.kind) { P.kind = kind; P.k.textContent = kind; }
         const playing = Media.playing();
-        if (playing !== P.lastPlaying) { P.lastPlaying = playing; P.pp.textContent = playing ? '⏸' : '▶'; P.pp.title = playing ? 'Pause' : 'Play'; }
+        if (playing !== P.lastPlaying) { P.lastPlaying = playing; P.pp.innerHTML = playing ? ICONS.pause : ICONS.play; P.pp.title = playing ? 'Pause' : 'Play'; P.pp.setAttribute('aria-label', P.pp.title); }
         const now = Media.time(), dur = m && m.dur > 0 ? m.dur : 0;
         const pct = dur ? Math.max(0, Math.min(100, now / dur * 100)) : 0;
         const w = pct.toFixed(1) + '%'; if (w !== P.lastFill) { P.lastFill = w; P.fill.style.width = w; }
@@ -8761,6 +9012,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['▣', 'The stage: just the lyrics, full screen', 'F, the ⤢ button or a double-click on the artwork now fills the screen with the lyrics alone: the artwork blurred behind them, the sung line lit with its wipe, the cover on the right, a seek bar and prev / play / next along the bottom, and the chrome fading after three quiet seconds. Style picks the size (S – XL), left or centred lines, the cover on or off and an artwork or plain-dark backdrop, and remembers. The other tabs keep the roomy immersive panel.'],
+          ['♪', 'Text sheets that follow the voice', 'On a sheet without timing (Genius), the aligner now listens for the voice coming in after a pause and pins the next line to it — starting with the first line after the intro, the guess that used to be wrong by the most. The source line says Vocal-guided; a tap-along still wins, 0 clears it for the track, and Lyrics ⋯ → Vocal-guided timing turns it off. QQ Music joins as a fifth synced catalog, so more tracks get real timing in the first place.'],
+          ['⧉', 'A cleaner floating window', 'Real icons instead of emoji, a white play button, the kind of timing as a small pill, tighter spacing. The ✓ that marked played tracks in lists is gone — it was stamped over and over on some pages.'],
           ['⊘', 'No more audio ads', 'The ad calls fail the way an ad blocker fails them, so the player never has an ad to play and goes straight to the track. Nothing is ever muted. On by default — Tweaks → Declutter → Skip audio ads turns it off.'],
           ['🌐', 'In your language', 'The suite’s own text in German, French, Spanish, Portuguese, Italian, Dutch, Polish, Turkish, Russian, Japanese or Korean, following your browser; Tweaks → Appearance → Language picks one. SoundCloud itself and the lyrics stay as they are.'],
           ['⧉', 'Lyrics that float above everything', 'Press P in the hub (or ⋯ → Floating lyrics window) for a small window that stays on top of every app: the artwork behind a soft blur, the line before, the sung line with its wipe, the line after, a glowing progress bar and prev / play / next. It follows estimated timing on text sheets just like the hub, and keeps moving while the SoundCloud tab is hidden. Chrome 116 or newer.'],
@@ -8771,7 +9025,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ['◐', 'Loudness that ignores the volume slider', 'Loudness normalize measures the source at unity, so a track played at 50 % is no longer read as quiet and pushed back up. Parameter ramps start from the true current value, and the reverb tail now has a pre-delay, damped highs and no mud below 140 Hz.'],
           ['♫', 'The Audio tab in the same clothes', 'Five chips (EQ, Play, Tone, Level, Space) stay pinned while you scroll and follow where you are. Every pill, select and slider row matches the Tweaks tab; the Stats pills too, and they read on the light panel now.'],
           ['⚙', 'A cleaner Tweaks tab', 'Six groups (Shuffle, Look, Hide, Player, More, Data) behind a strip of chips that stays put while you scroll. Themes are cards you can read before you pick one, the search reaches every setting, and backup, restore and reset live under Data.'],
-          ['⌥', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists, Enter plays, O opens, L likes. Tracks you already played carry a small ✓. Four more Chrome-wide commands (seek, mute, jump to the playing tab) wait for keys at chrome://extensions/shortcuts.'],
+          ['⌥', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists, Enter plays, O opens, L likes. Four more Chrome-wide commands (seek, mute, jump to the playing tab) wait for keys at chrome://extensions/shortcuts.'],
           ['文', 'Lyrics in your language, pronounced', 'Lyrics ⋯ menu → Translation language & romanization: twenty languages to pick from, and a romanized line under Japanese, Korean, Chinese, Cyrillic, Arabic, Greek, Hebrew, Thai or Hindi lyrics. Text-only sheets are quietly re-checked for a synced version once a week.'],
           ['◈', 'Audio scenes, quiet hours', 'Save the whole Audio tab under a name and recall it from the tab or the palette. Quiet hours switch Night mode and the −18 LUFS target on between two hours and back off after (Tweaks → Player).'],
           ['✎', 'Notes, history, playlist tools', 'A private note on any track in the track-info popover, searchable from Ctrl+K. The Stats tab has a history browser grouped by day with a CSV export. Playlist pages get Copy links and Export CSV. Tweaks → Your data shows what the suite stores, with a Clear for each.'],
@@ -8889,7 +9143,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function setTab(t) {
       if (t !== 'lyrics' && t !== 'queue' && t !== 'stats' && t !== 'tweaks' && t !== 'audio') return;
       tab = t;
-      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(); }   // find bar / manual search must not float over other tabs; a result found meanwhile gets painted
+      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(); }
+      syncStage();   // find bar / manual search must not float over other tabs; a result found meanwhile gets painted
       try { GM_setValue('sl:tab', t); } catch (e) {}
       tabsEl.querySelectorAll('.tab').forEach((b) => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
       body.style.display = t === 'lyrics' ? '' : 'none';
@@ -9447,6 +9702,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         App.setLatency(parseInt(v, 10) || 0);
       });
       mi('Highlight timing: ' + (App.leadMs() === 0 ? 'exact' : App.leadMs() === 250 ? 'early' : 'standard'), () => App.cycleLead());
+      mi('Vocal-guided timing: ' + (SUITE.autoTap && SUITE.autoTap.on() ? 'on' : 'off'), () => { if (SUITE.autoTap) SUITE.autoTap.toggle(); });
       mi('Reset learned sync memory', () => { try { GM_setValue('sl:soff', {}); } catch (e) {} toast('Sync memory cleared'); });
       sep();
       mi('Theme: ' + themeMode, () => { cycleTheme(); }, 'T');
@@ -9614,11 +9870,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!maxOn) return;
       panel.classList.remove('idle');
       clearTimeout(idleT);
-      idleT = setTimeout(() => { if (maxOn && open) panel.classList.add('idle'); }, 3000);
+      idleT = setTimeout(() => { if (maxOn && open && !stPopOn) panel.classList.add('idle'); }, 3000);
     }
     function toggleMax(force, silent) {
       maxOn = force != null ? !!force : !maxOn;
       panel.classList.toggle('max', maxOn);
+      syncStage();
       // keep #bMax aria-pressed in sync with the visible state (was declared
       // but never wired when ARIA attributes shipped in Sprint 3).
       try { const b = panel && panel.querySelector('#bMax'); if (b) b.setAttribute('aria-pressed', maxOn ? 'true' : 'false'); } catch (e) {}
@@ -9638,6 +9895,63 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       pauseScrollUntil = 0;
     }
 
+    /* ---------- the stage: immersive mode while the Lyrics tab is up ----------
+     * Just the lyrics on the blurred artwork, the cover beside them, a seek bar and prev / play /
+     * next along the bottom; the chrome fades after three idle seconds. Size, alignment, cover and
+     * backdrop are the listener's (Style), kept in sl:stage. The other tabs keep the roomy panel. */
+    function syncStage() {
+      const want = maxOn && tab === 'lyrics' && !searchMode;
+      if (want === stageOn) return;
+      stageOn = want;
+      panel.classList.toggle('stage', stageOn);
+      if (!stageOn) stagePop(false);
+      stFillLast = ''; stTmLast = -1;
+      activeI = -1; lastFrameNow = -1;   // the seek bar repaints, the sung line recentres
+    }
+    function applyStagePref() {
+      panel.classList.toggle('st-s', stagePref.fs === 's');
+      panel.classList.toggle('st-l', stagePref.fs === 'l');
+      panel.classList.toggle('st-xl', stagePref.fs === 'xl');
+      panel.classList.toggle('st-center', stagePref.al === 'c');
+      panel.classList.toggle('st-noart', !+stagePref.art);
+      panel.classList.toggle('st-dark', stagePref.bg === 'dark');
+      try { const b = panel.querySelector('#bArt'); if (b) { b.classList.toggle('on', !!+stagePref.art); b.setAttribute('aria-pressed', +stagePref.art ? 'true' : 'false'); } } catch (e) {}
+    }
+    function setStagePref(k, v) {
+      stagePref[k] = v;
+      try { GM_setValue('sl:stage', Object.assign({}, stagePref)); } catch (e) {}
+      applyStagePref();
+      if (stPopOn) buildStagePop();
+      activeI = -1; lastFrameNow = -1;   // a new size or column: recentre
+    }
+    function buildStagePop() {
+      const el = stPopEl; el.replaceChildren();
+      const row = (label, key, opts) => {
+        const r = document.createElement('div'); r.className = 'stp-row';
+        const l = document.createElement('span'); l.className = 'stp-l'; l.textContent = label; r.appendChild(l);
+        const seg = document.createElement('div'); seg.className = 'stp-seg'; seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', label);
+        for (const [v, name] of opts) {
+          const on = String(stagePref[key]) === String(v);
+          const b = document.createElement('button'); b.type = 'button'; b.className = 'stp-b' + (on ? ' on' : ''); b.textContent = name;
+          b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', on ? 'true' : 'false');
+          b.addEventListener('click', () => setStagePref(key, v));
+          seg.appendChild(b);
+        }
+        r.appendChild(seg); el.appendChild(r);
+      };
+      row('Size', 'fs', [['s', 'S'], ['m', 'M'], ['l', 'L'], ['xl', 'XL']]);
+      row('Lines', 'al', [['l', 'Left'], ['c', 'Centred']]);
+      if (stagePref.al !== 'c') row('Cover', 'art', [[1, 'Show'], [0, 'Hide']]);   // centred lines carry the cover in the header
+      row('Backdrop', 'bg', [['art', 'Artwork'], ['dark', 'Dark']]);
+    }
+    function stagePop(v) {
+      stPopOn = !!v;
+      if (stPopOn) buildStagePop();
+      stPopEl.classList.toggle('on', stPopOn);
+      try { const b = panel.querySelector('#bStyle'); if (b) b.setAttribute('aria-expanded', stPopOn ? 'true' : 'false'); } catch (e) {}
+      if (maxOn) wakeChrome();   // open: the chrome stays; closed: the idle clock starts again
+    }
+
     /* ---------- hotkey cheat sheet ---------- */
     function showKeys(v) {
       if (v && !keysBuilt) {
@@ -9646,7 +9960,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         h.textContent = 'Keyboard shortcuts';
         keysEl.appendChild(h);
         [['Alt+L', 'Toggle this panel'], ['Alt+S', 'Shuffle your Likes'], ['Alt+B', 'Block current track'],
-         ['F', 'Immersive fullscreen'], ['K', 'Focus (karaoke) mode'], ['S', 'Search lyrics manually'],
+         ['F', 'Stage: full-screen lyrics'], ['K', 'Focus (karaoke) mode'], ['S', 'Search lyrics manually'],
          ['/', 'Find in lyrics'], ['C', 'Jump to chorus'], ['↑ / ↓', 'Seek previous / next line'],
          ['R', 'Replay current line'], ['A', 'Calibrate sync (tap along)'], ['1 – 5', 'Lyrics · Queue · Stats · Audio · Tweaks'],
          ['Space', 'Play / pause'], ['J / L', 'Seek ∓10 s'], ['← / →', 'Seek ∓5 s'],
@@ -9655,9 +9969,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
          ['M', 'Accent mood'], ['G', 'Backdrop density'], ['N', 'Mini lyric bar'], ['P', 'Floating lyrics window (stays on top)'],
          ['Audio tab', 'A hold = compare · N night · , . speed (with Global hotkeys on)'],
          ['Click a line', 'Seek there'], ['2× click a line', 'On guessed timing: pin that line as an anchor'], ['Alt+click a line', 'Copy quote + timestamp'], ['Right-click a line', 'Copy that line'],
-         ['2× click artwork', 'Immersive fullscreen'], ['Click title', 'Copy track link'], ['Click the clock', 'Time left ↔ elapsed'],
+         ['2× click artwork', 'Stage: full-screen lyrics'], ['Click title', 'Copy track link'], ['Click the clock', 'Time left ↔ elapsed'],
          ['Alt+Shift+P / N / B / L', 'From any Chrome tab: play/pause · next · back · like (change at chrome://extensions/shortcuts)'],
-         ['Esc', 'Back out (sheet → menu → find → fullscreen → search → close)'], ['?', 'This sheet']]
+         ['Esc', 'Back out (sheet → menu → find → stage → search → close)'], ['?', 'This sheet']]
           .forEach(([k, d]) => {
             const r = document.createElement('div'); r.className = 'krow';
             const b = document.createElement('b');
@@ -9684,6 +9998,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (findWrap) { closeFind(); return true; }
       if (shareBar) { shareClose(); return true; }
       if (SUITE.abState && SUITE.abState().on && SUITE.abState().hub) { loopOff(); return true; }   // the lyric-card picker sits under the menu and the sheets
+      if (stPopOn) { stagePop(false); return true; }
       if (maxOn) { toggleMax(false); return true; }
       return false;
     }
@@ -9721,6 +10036,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         img.src = hi;
         glowEl.style.backgroundImage = `url("${cssSafe(hi)}")`;
         panel.classList.add('haz');
+        if (stArtEl) { stArtEl.style.backgroundImage = `url("${cssSafe(orig.replace(/-t\d+x\d+(\.\w+)/, '-t500x500$1'))}")`; panel.classList.add('st-hasart'); }
         art.innerHTML = eqHtml;
         art.insertBefore(img, art.firstChild);
         // dynamic accent: a second CORS image feeds the tint sampler so a
@@ -9736,6 +10052,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         art.innerHTML = ICONS.note + (meta ? eqHtml : '');
         glowEl.style.backgroundImage = '';
         panel.classList.remove('haz');
+        if (stArtEl) { stArtEl.style.backgroundImage = ''; panel.classList.remove('st-hasart'); }
         applyArtAccent(null);
       }
       applyPanelTheme();
@@ -9760,7 +10077,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const srcFor = (lyr) => {
       if (!lyr) return ['', false];
       const name = SRC_NAME[lyr.src] || 'Lyrics';
-      const kind = lyr.synced ? (lyr.scaled ? 'Scaled sync' : 'Synced') : (estMode ? (App.anchorCount() > 0 ? 'Calibrated sync' : 'Est. sync') : 'Text');
+      const kind = lyr.synced ? (lyr.scaled ? 'Scaled sync' : 'Synced') : (estMode ? (App.anchorCount() > 0 ? 'Calibrated sync' : vocalGuided ? 'Vocal-guided' : 'Est. sync') : 'Text');
       const qc = lyr.synced ? '#3ddc84' : (estMode ? '#ffb454' : '#8b8b92');
       let s = `<span class="qdot" style="background:${qc};box-shadow:0 0 6px ${qc}66"></span>${name}<span class="dot"> · </span>${kind}`;
       // a persisted nudge silently re-applies on every future play — show it
@@ -9771,6 +10088,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       else if (lyr.low) { s += '<span class="dot"> · </span>Low match — tap to fix'; lk = true; }
       return [s, lk];
     };
+
+    // est mode, live: the voice (or a tap) moved an anchor — bend the rendered times, the source line,
+    // the mini bar and the floating window to it without a re-render
+    function rewarp(result, dur, anchors) {
+      vocalGuided = !!(anchors && anchors.auto);
+      if (estBaseTimes && estMode) {
+        times = warpTimes(estBaseTimes, anchors || []);
+        activeI = -1; lastFrameNow = -1;
+        try { if (curLyr) { const sl = srcFor(curLyr); setSrcLine(sl[0], sl[1]); } } catch (e) {}
+      }
+      try { const fl = followList(result, dur, anchors || []); setMini(fl && fl.lines, fl && fl.kind); } catch (e) {}
+    }
 
     function stateEl(icon, h, p, buttons) {
       const d = document.createElement('div');
@@ -9848,7 +10177,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (shareBar) shareClose();
       closeFind();   // stale hits over the next track's state would point at detached lines
       lineEls = []; times = []; lineWords = []; activeI = -1; isSynced = false; estMode = false;
-      estBaseTimes = null;
+      estBaseTimes = null; vocalGuided = false;
       ++transToken;   // invalidate any in-flight translation so it can't decorate the next track's lines
       if (tapOn) endTapAlign(false);
       hideWizard();
@@ -10015,7 +10344,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           lineWords.push(null);   // estimated lines have no word data — keep lockstep with lineEls/times
         }
         estBaseTimes = baseTimes;   // kept so tap-along can re-warp live
-        times = warpTimes(baseTimes, App.getAnchors());
+        const al = App.getAnchors();
+        vocalGuided = !!(al && al.auto);
+        times = warpTimes(baseTimes, al);
         if (!estTip && lineEls.length) {
           estTip = true;   // once per session (no synced lyrics exist for this track \u2014 timing is a guess)
           setTimeout(() => toast('Timing is a guess \u2014 press A to tap along'), 900);
@@ -10189,6 +10520,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           : (now > 0 ? fmtClock(now) : '');
       }
 
+      if (stageOn) {   // the stage's own seek bar and clock
+        const w = meta && meta.dur > 0 ? (Math.round(Math.min(now / meta.dur, 1) * 1000) / 10) + '%' : '0%';
+        if (w !== stFillLast) { stFillLast = w; stFillEl.style.width = w; stTrackEl.setAttribute('aria-valuenow', String(Math.round(parseFloat(w)))); }
+        if (sCur !== stTmLast) { stTmLast = sCur; const d2 = meta && meta.dur > 0 ? meta.dur : 0; stTmEl.textContent = fmtClock(now); stDurEl.textContent = d2 ? fmtClock(d2) : ''; }
+      }
+
       if (playing !== lastPlaying) { lastPlaying = playing; panel.classList.toggle('playing', playing); }
 
       // back-to-live chip while manual scrolling holds the auto-follow
@@ -10256,7 +10593,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         el.setAttribute('aria-current', 'true');
         announceLine(el.textContent || '');
         if (performance.now() > pauseScrollUntil) {
-          const top = el.offsetTop - body.clientHeight * 0.38;
+          const top = el.offsetTop - body.clientHeight * (stageOn ? 0.42 : 0.38);   // the stage sits the sung line nearer the middle
           body.scrollTo({ top, behavior: 'smooth' });
         }
       }
@@ -10308,6 +10645,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (tapOn) endTapAlign(false);   // the tap-along click capture would swallow every result click
       closeFind();
       searchMode = true;
+      syncStage();   // the results list gets the plain panel, the stage comes back with the sheet
       const meta = App.meta();
       const c = meta ? cleanTitle(meta.title) : { title: '', artist: '' };
       let artist = c.artist || '';
@@ -10342,6 +10680,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!searchMode) return;
       searchMode = false;
       searchSeq++;
+      syncStage();
       if (srchWrap) { srchWrap.remove(); srchWrap = null; }
       const bs = panel.querySelector('#bSearch');
       bs.innerHTML = ICONS.search;
@@ -10359,6 +10698,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const badge = it.src === 'genius' ? '<span class="badge">GENIUS</span>'
           : it.src === 'kugou' ? '<span class="badge sync">KUGOU</span>'
           : it.src === 'netease' ? '<span class="badge sync">NETEASE</span>'
+          : it.src === 'qq' ? '<span class="badge sync">QQ</span>'
             : it.synced ? '<span class="badge sync">SYNC</span>' : '<span class="badge">TXT</span>';
         // duration agreement with the playing track = the strongest "right
         // version" signal a human can read at a glance — color it
@@ -10399,6 +10739,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ...all.filter((x) => x.src === 'lrclib' && x.synced),
           ...all.filter((x) => x.src === 'mxm'),
           ...all.filter((x) => x.src === 'netease'),
+          ...all.filter((x) => x.src === 'qq'),
           ...all.filter((x) => x.src === 'kugou'),
           ...all.filter((x) => x.src === 'genius' && x.fromLyric),
           ...all.filter((x) => x.src === 'lrclib' && !x.synced && (x.plain || x.instrumental)),
@@ -10437,6 +10778,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           .then((r) => (curDur > 0 && !(r && r.songs && r.songs.length) ? kugouSearch(q, 0) : r))
           .then(handle).catch(() => {}),
         neteaseSearch(q, curDur).then(handle).catch(() => {}),
+        qqSearch(q, curDur).then(handle).catch(() => {}),
         MXM.find({ artist: mArtist, track: mTrack, dur: 0 }).then(handle).catch(() => {}),
         webSearch(q).then((r) => { if (r && r.songs && r.songs.length) gFail = false; handle(r); }).catch(() => {}),
         geniusApiSearch(q).then((r) => { if (r && r.songs && r.songs.length) gFail = false; handle(r); }).catch(() => {}),
@@ -10627,7 +10969,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       add('▤', 'Stats tab', 'View', () => { setOpen(true); setTab('stats'); });
       add('🎛', 'Audio tab', 'View', () => { setOpen(true); setTab('audio'); });
       add('⚙', 'Tweaks tab', 'View', () => { setOpen(true); setTab('tweaks'); });
-      add('⛶', 'Immersive mode', 'View', () => { setOpen(true); toggleMax(true); });
+      add('⛶', 'Stage — full-screen lyrics', 'View', () => { setOpen(true); setTab('lyrics'); toggleMax(true); });
       add('◑', 'Toggle focus mode', 'View', () => { setOpen(true); toggleFocus(); });
       add('⧉', (floatOn() ? 'Close the' : 'Open a') + ' floating lyrics window', 'View', () => toggleFloat());
       add('▭', 'Toggle mini lyric bar', 'View', () => toggleMini());
@@ -10853,7 +11195,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
       shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
-      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, cycleTheme,
+      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, rewarp, cycleTheme,
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
@@ -10871,6 +11213,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let lyr = null;
     let off = 0;
     let anch = [];
+    let autoAnch = [];        // vocal-guided anchors for this play of a text sheet (never stored): a line pinned to the voice that started it
+    let autoHold = false;     // 0 pressed: no more vocal-guided anchors until the next track
+    let onsetLog = [];        // voices heard before the sheet arrived, replayed when it does
+    let estBase = null, estKey = '';
+    let autoOn = true;        // Lyrics ⋯ → Vocal-guided timing
+    try { autoOn = GM_getValue('sl:autotap', 1) != 0; } catch (e) {}
     let token = 0;
     let prefetchT = null, warmT = null, warmT2 = null;   // Ticker handles: background-tab-proof
     const stopT = (h) => { if (h) { try { h.stop(); } catch (e) {} } };
@@ -10961,6 +11309,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           paused: () => !Media.playing(),
           playbackRate: () => { try { return (SUITE.audioRate && SUITE.audioRate()) || 1; } catch (e) { return 1; } },
           windowSec: 90,
+          onOnset: onVocalOnset,   // a voice after a pause: a text sheet bends its guess to it
         });
         alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[0]);
       } catch (e) { aligner = null; }
@@ -10970,7 +11319,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         if (!aligner) return;
         const again = () => { if (++alignTries < AUTO_ALIGN_AT_MS.length) alignT = Ticker.after(alignRun, AUTO_ALIGN_AT_MS[alignTries]); else alignStop(); };   // out of looks: the tap goes too
-        if (!lyr || !lyr.synced || lyr.instr) { again(); return; }   // the sheet may still be on its way: look again later instead of giving up for this play
+        if (!lyr || !lyr.synced || lyr.instr) {
+          if (onsetWanted(lyr)) { alignTries = AUTO_ALIGN_AT_MS.length; return; }   // a text sheet: no looks, but the tap stays up for the voice
+          again(); return;   // the sheet may still be on its way: look again later instead of giving up for this play
+        }
         const starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
         // an unscaled sheet timed to a longer or shorter master: the extra (or missing) part is usually at the start, so
         // the lag can be as large as the duration difference — search that far and prefer lags near 0 or ±that difference
@@ -11123,6 +11475,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         (result.src === lyr.src && !!result.synced === !!lyr.synced && sameLines(result.lines, lyr.lines)));
       const swapped = !!lyr && !same;   // a different sheet replacing one already shown (a pick, an import, an upgrade), not the first to arrive
       lyr = result;
+      if (swapped || !result) { autoAnch = []; estBase = null; estKey = ''; }   // the voice pins lines of THIS sheet
       const synced = !!(result && result.synced && !result.instr);
       if (swapped && synced) {
         // the lag measured on the old sheet is not this one's: the auto offset goes (a manual nudge stays — it is
@@ -11131,9 +11484,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         SyncAuto.last = null;
         try { persistSync(); } catch (e) {}
       }
-      if (!aligner && synced) alignStart();   // the source arrived after the track change
+      const wantTap = synced || onsetWanted(result);   // a text sheet keeps the tap: the voice guides its timing
+      if (!aligner && wantTap) alignStart();   // the source arrived after the track change
       else if (aligner && swapped && synced) { alignHist = []; alignTries = 0; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
-      else if (aligner && !synced && !(meta && Inflight.has(meta.key))) alignStop();   // nothing to align and nothing still coming: the tap's 20 ms tick has no reader
+      else if (aligner && !wantTap && !(meta && Inflight.has(meta.key))) alignStop();   // nothing to align and nothing still coming: the tap's 20 ms tick has no reader
+      if (onsetWanted(result) && onsetLog.length) { const heard = onsetLog; onsetLog = []; heard.forEach(onVocalOnset); }   // the voices heard before the sheet landed
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
       // (e.g. left by an older version) so they can't linger in storage / diagnostics
       if (result && result.synced && anch.length) { anch = []; try { persistSync(); } catch (e) {} }
@@ -11144,7 +11499,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       warmT = Ticker.after(warmNext, 6000);
       refreshNext();
       try { UI.syncTabs(); } catch (e) {}   // live Queue/Stats tabs follow track changes
-      try { const fl = UI.followList(result, meta && meta.dur, anch); UI.setMini(fl && fl.lines, fl && fl.kind); } catch (e) {}   // synced lines, or the estimated timing a text sheet gets
+      try { const fl = UI.followList(result, meta && meta.dur, anchorsNow()); UI.setMini(fl && fl.lines, fl && fl.kind); } catch (e) {}   // synced lines, or the estimated timing a text sheet gets
       if (UI.inSearch && UI.inSearch()) return;   // the search view stays; Back paints the sheet
       // auto-open: real lyrics just landed and the user opted in → reveal them
       try {
@@ -11382,6 +11737,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       off = 0;
       SyncAuto.ms = 0; SyncAuto.conf = 0;
       anch = [];
+      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = '';
       alignStart();
       UI.setReady(false);
       UI.setHeader(meta);
@@ -11653,8 +12009,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (item.src === 'genius') {
           const lines = await geniusLyrics(item.url);
           if (lines && lines.length) result = { src: 'genius', synced: false, lines, a: item.a, t: item.t, picked: true };
-        } else if (item.src === 'kugou' || item.src === 'netease') {
-          const raw = item.src === 'netease' ? await neteaseLyric(item.nid) : await kugouLyric(item.kid, item.kkey);
+        } else if (item.src === 'kugou' || item.src === 'netease' || item.src === 'qq') {
+          const raw = item.src === 'netease' ? await neteaseLyric(item.nid) : item.src === 'qq' ? await qqLyric(item.qmid) : await kugouLyric(item.kid, item.kkey);
           const nm = SRC_NAME[item.src] || item.src;
           if (!raw) why = nm + ' didn’t answer — its lyric service may be blocked from your network';
           if (raw) {
@@ -11701,9 +12057,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
       };
       if (deltaMs === 0) {
-        const hadAnchors = anch.length > 0;
+        const hadAnchors = anch.length > 0 || autoAnch.length > 0;
         off = 0; SyncAuto.ms = 0; SyncAuto.conf = 0;
         anch = [];
+        autoAnch = []; autoHold = true;   // the listener's word: the voice stops guiding this track
         persistSync();
         UI.toast(hadAnchors ? 'Sync + anchors reset' : 'Sync reset');
         if (hadAnchors) rerender(); else refreshSrc();
@@ -11731,6 +12088,65 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!meta) { UI.showIdle(); return; }
       if (lyr) { lyr.instr ? UI.showInstrumental() : UI.renderLyrics(lyr); }
       else ensure(false);
+    }
+
+    /* ---------- vocal-guided timing: a text sheet follows the voice ----------
+     * The aligner reports each voice that comes in after a pause. On a sheet without timing the
+     * estimate is bent to those moments: the first voice of the track pins the first line (the
+     * intro guess is the biggest error a text sheet carries); a later one pins the line the timing
+     * has lit when its voice came late, or the next line when it came early and the lit one is
+     * mostly over. Bounded moves only, never stored, and a tap-along always wins. */
+    function onsetWanted(r) {
+      return autoOn && !autoHold && !!r && !r.synced && !r.instr && Array.isArray(r.lines) && r.lines.length >= 8
+        && !!meta && meta.dur > 20 && meta.dur < 1200;
+    }
+    function estBaseFor() {
+      const k = (meta && meta.key) || '';
+      if (estBase && estKey === k) return estBase;
+      const b = [];
+      for (const en of estimateTimes(lyr.lines, meta.dur)) { if (en.gap || en.sec) continue; b.push(en.t); }
+      estBase = b; estKey = k;
+      return b;
+    }
+    function anchorsNow() {   // what bends the timeline right now: the listener's taps, else the voice's pins (flagged)
+      if (anch.length) return anch.slice();
+      const a = autoAnch.slice();
+      if (a.length) a.auto = true;
+      return a;
+    }
+    function onVocalOnset(t) {
+      try {
+        if (!(t >= 0)) return;
+        if (!lyr) { onsetLog.push(t); if (onsetLog.length > 40) onsetLog.shift(); return; }   // the sheet is still on its way
+        if (!onsetWanted(lyr) || anch.length) return;
+        const base = estBaseFor();
+        if (base.length < 8) return;
+        const cur = warpTimes(base, autoAnch);
+        let i = 0; while (i < cur.length && cur[i] <= t) i++;   // i: the first line the timing still has ahead; i − 1: the one it says is sung now
+        const prev = i - 1;
+        let target = -1;
+        if (!autoAnch.length && prev <= 1 && t > cur[0] - 6 && t < cur[0] + 14) target = 0;   // the first voice of the track
+        else if (prev >= 0 && i < cur.length) {
+          const span = Math.max(0.3, cur[i] - cur[prev]);
+          const into = (t - cur[prev]) / span;
+          if (into < 0.5 && t - cur[prev] < 4) target = prev;         // the lit line's voice came late
+          else if (into >= 0.45 && cur[i] - t < 3.5) target = i;      // the next line, early
+        } else if (prev < 0 && i < cur.length && cur[i] - t < 3.5) target = i;
+        if (target < 0) return;
+        const last = autoAnch[autoAnch.length - 1];
+        if (last && (target <= last.i || t <= last.t + 0.2)) return;   // anchors ascend in both line and time
+        autoAnch.push({ i: target, t: Math.max(0, t - 0.1) });   // the level rises a beat after the voice starts
+        if (autoAnch.length > 120) autoAnch.shift();
+        try { UI.rewarp(lyr, meta.dur, anchorsNow()); } catch (e) {}
+      } catch (e) {}
+    }
+    function toggleAutoTap() {
+      autoOn = !autoOn;
+      try { GM_setValue('sl:autotap', autoOn ? 1 : 0); } catch (e) {}
+      if (!autoOn && autoAnch.length) { autoAnch = []; try { UI.rewarp(lyr, meta && meta.dur, anchorsNow()); } catch (e) {} }
+      if (autoOn && !aligner && onsetWanted(lyr)) alignStart();
+      else if (!autoOn && aligner && !(lyr && lyr.synced)) alignStop();
+      UI.toast(autoOn ? 'Vocal-guided timing on — text sheets follow the voice' : 'Vocal-guided timing off');
     }
 
     function addAnchor(i, t) {
@@ -11913,12 +12329,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       },
       rerender,
       retry() { ensure(true); },
-      getAnchors: () => anch.slice(),
+      getAnchors: anchorsNow,
       anchorCount: () => anch.length,
+      autoTapOn: () => autoOn,
+      toggleAutoTap,
       addAnchor,
       pick, nudge, watch,
     };
   })();
+  try { SUITE.autoTap = { on: App.autoTapOn, toggle: App.toggleAutoTap }; } catch (e) {}   // the hub menu's switch
   // lyric engine debug accessor — only when the user opted into debug (localStorage 'scss:debug' = '1')
   try { if (W.localStorage.getItem('scss:debug') === '1') { SUITE.lyricDebug = () => App.lyricDebug(); W.__sceLyricDebug = SUITE.lyricDebug; } } catch (e) {}
 
@@ -12181,7 +12600,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     smartRewind: true,      // a long pause on a long track resumes a few seconds back
     laterAutoClear: true,   // Listen later: 30 s of playing a saved track takes it off the shelf
     listKeys: true,         // J / K walk the tracks of a list, Enter plays, O opens, L likes
-    heardMarks: true,       // a ✓ on tracks in lists you already played
     commentNoise: false,    // hide emoji-only, promo and duplicate comments
     quietHours: false,      // Night mode and the quiet loudness target on a schedule
     quietFrom: '22',        // hour the quiet window starts
@@ -12720,7 +13138,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       css += (f[3] === 'hide') ? (f[4] + '{display:none !important}') : f[4];
     }
     css += '\n.sce-row{outline:2px solid #ff5500 !important;outline-offset:-2px;border-radius:8px}'
-      + '.sce-heard{display:inline-block;margin-left:6px;font-size:10px;line-height:1;padding:2px 5px;border-radius:99px;background:rgba(255,85,0,.16);color:#ff5500;vertical-align:middle}'
       + '.sce-skip a{position:fixed;left:8px;top:-60px;z-index:2147483300;background:#ff5500;color:#fff;font:600 13px/1 system-ui,sans-serif;padding:10px 14px;border-radius:8px;text-decoration:none;transition:top .12s}.sce-skip a:focus{top:8px;outline:2px solid #fff}';
     try { if (CFG.motionOs && W.matchMedia && W.matchMedia('(prefers-reduced-motion: reduce)').matches) css += '\n.l-container *,.playControls *{transition-duration:.01s !important;animation-duration:.01s !important}'; } catch (e) {}
     if (CFG.customCss) css += '\n/* your CSS */\n' + CFG.customCss;
@@ -14790,7 +15207,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try { if (CFG.fadeOn) fadeCtl.onTimeUpdate(activeMedia()); } catch (e) {}   // backstop for a missed timeupdate
       try { linkTimestamps(); } catch (e) {}
       try { playlistRuntime(); } catch (e) {}
-      try { paintHeard(); } catch (e) {}
       try { quietTick(); } catch (e) {}
       try { skipLinks(); } catch (e) {}
       const m = activeMedia();
@@ -15076,21 +15492,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     return false;
   }
   try { W.addEventListener('keydown', (e) => { try { if (rowKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); } } catch (er) {} }, true); } catch (e) {}
-  // ✓ on tracks in lists you already played (the played memory the feed rule reads)
-  function paintHeard() {
-    if (!CFG.heardMarks) return;
-    const rows = D.querySelectorAll(ROW_SEL + ':not([data-sce-heard])');
-    let n = 0;
-    for (const r of rows) {
-      if (++n > 120) break;
-      const a = r.querySelector('a.soundTitle__title, .trackItem__trackTitle, a.sc-link-primary'); const href = a && a.getAttribute('href');
-      if (!href) continue;
-      r.setAttribute('data-sce-heard', '1');
-      if (!playedPath(href.split('?')[0])) continue;
-      const host = r.querySelector('.soundTitle__titleContainer, .trackItem__content, .soundTitle') || r;
-      const m = D.createElement('span'); m.className = 'sce-heard'; m.textContent = '✓'; m.title = 'You played this'; host.appendChild(m);
-    }
-  }
   /* ── Chrome-wide keyboard commands (manifest "commands", set at chrome://extensions/shortcuts): the
    * background picks a tab and bridge.js posts the command in here; a broadcast (no tab was known to be
    * playing or in front) is taken only by a tab that is visible or already playing, so it never starts
@@ -16691,7 +17092,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
     ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['listKeys', 'toggle', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists · Enter plays · O opens · L likes'],
-    ['heardMarks', 'toggle', 'Mark tracks you played', 'A small ✓ on tracks in lists you played for 30 s or more in the last month'],
     ['quietHours', 'toggle', 'Quiet hours', 'Night mode and the −18 LUFS loudness target between the hours below; both go back at the end'],
     ['quietFrom', 'select', 'Quiet from', 'When the quiet window starts', [['20', '8 pm'], ['21', '9 pm'], ['22', '10 pm'], ['23', '11 pm'], ['0', 'Midnight']]],
     ['quietTo', 'select', 'Quiet until', 'When it ends', [['5', '5 am'], ['6', '6 am'], ['7', '7 am'], ['8', '8 am'], ['9', '9 am']]],

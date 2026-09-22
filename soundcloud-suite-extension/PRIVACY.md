@@ -21,8 +21,8 @@ Tweaks) for a track whose link you hover over, so its lyrics are ready before
 you press play. Every request goes over HTTPS.
 
 - lrclib.net, genius.com, api.genius.com, itunes.apple.com,
-  apic-desktop.musixmatch.com, music.163.com, lyrics.kugou.com, krcs.kugou.com,
-  api.lyrics.ovh — lyric and metadata lookups
+  apic-desktop.musixmatch.com, music.163.com, c.y.qq.com, u.y.qq.com,
+  lyrics.kugou.com, krcs.kugou.com, api.lyrics.ovh — lyric and metadata lookups
 - html.duckduckgo.com, www.bing.com, www.mojeek.com — web search used to find
   the correct lyric page
 - web.archive.org, api.allorigins.win, api.codetabs.com — read-only mirrors

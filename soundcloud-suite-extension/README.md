@@ -69,7 +69,7 @@ never plays.
   link; Shift+C (with global hotkeys on) copies the link at the current time.
 - **Keyboard in lists** — J and K walk the tracks of the feed, search and
   playlists with a visible ring; Enter plays, O opens, L likes, Escape clears
-  (Tweaks → Player). Tracks you played for 30 s or more carry a small ✓.
+  (Tweaks → Player).
 - **More Chrome-wide commands** — Back 10 s, Forward 10 s, Mute and Jump to the
   SoundCloud tab that is playing, unbound until you give them keys at
   `chrome://extensions/shortcuts`.
@@ -110,6 +110,20 @@ never plays.
   file the background worker hands over through the relay, and English is an
   exact no-op. The store listing itself carries a name and summary in twelve
   languages.
+- **The stage** — **F**, the ⤢ button or a double-click on the artwork fills the
+  screen with the lyrics alone: the artwork blurred behind them, the sung line
+  lit with its wipe, the cover beside them, a seek bar and prev / play / next
+  along the bottom; the chrome fades after three quiet seconds. Style picks
+  the size (S–XL), left or centred lines, the cover on or off and an artwork
+  or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
+  other tabs immersive mode is the roomy panel it was.
+- **Text sheets that follow the voice** — on a sheet without timing (Genius),
+  the aligner listens for a voice coming in after a pause (the vocal-band
+  level steady for 500 ms, then a rise of 4 dB that holds — a drum hit does
+  not) and pins the next line to it, starting with the first line after the intro; the
+  source line says "Vocal-guided". A tap-along still wins, 0 clears it for the
+  track, and Lyrics ⋯ → Vocal-guided timing turns it off. QQ Music is a fifth
+  synced catalog (c.y.qq.com, u.y.qq.com), in every wave and the manual search.
 - **Floating lyrics window** — **P** in the hub, ⋯ → Floating lyrics window,
   or Ctrl+K: a small always-on-top window (Document Picture-in-Picture,
   Chrome 116+) with the artwork behind a soft blur, the line before, the sung

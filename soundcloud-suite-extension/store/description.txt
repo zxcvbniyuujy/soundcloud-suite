@@ -5,12 +5,14 @@ Everything runs in your browser. Nothing is sent to us.
 
 Lyrics
 
-Open the hub and the words are right there, line by line, moving with the vocals. Sped-up upload? Edited version? It still lands on the beat.
+Open the hub and the words are right there, line by line, moving with the vocals. Sped-up upload? Edited version? It still lands on the beat. Press F and the screen is nothing but the lyrics.
 
-• Six lyric sources, searched for you
-• Two taps fix the timing on anything unsynced
+• Seven lyric sources, searched for you — five of them with real timing
+• The stage: full-screen lyrics on the blurred artwork, the cover beside them, a seek bar and transport, your choice of size and layout
+• A text-only sheet follows the voice: the first line pins itself to the moment the vocal comes in
+• Two taps fix the timing on anything still off
 • Translate in place, copy a quote with its timestamp, export .lrc
-• A small floating line while the hub is closed
+• A floating lyrics window that stays on top of every app, and a small floating line while the hub is closed
 • Share a lyric card: pick up to six lines, get an image for your story
 • Remember three words? Find the song across every lyric sheet you have seen
 • Loop one line until you have it
@@ -60,13 +62,15 @@ Look
 
 Eleven dark themes. A light one. Zen mode for when you want nothing but the music.
 
+• Audio ads never play — the player goes straight to the track
+• The suite in twelve languages, following your browser
 • Hide the upsells, the sidebar, the footer, the noise
 • Mute words, hide over-long mixes or tracks you already liked or played, straight from the feed
 • Hide comment noise: emoji-only, promo and duplicates
 • Open on the page you choose
 • Title, artwork and seek on your media keys and the system now-playing panel
 • Play, skip and like from any tab with Alt+Shift+P, N, B and L
-• J and K walk any list, Enter plays, and the tracks you heard carry a ✓
+• J and K walk any list, Enter plays
 • Lose your audio output and playback pauses instead of switching to the speakers
 • Speed, an A–B loop and a sleep timer in the player bar
 • Track info, timecodes, a waveform timeline

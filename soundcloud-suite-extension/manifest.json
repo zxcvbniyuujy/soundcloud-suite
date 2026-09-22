@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "4.64.2",
+  "version": "4.65.0",
   "description": "__MSG_extDesc__",
   "minimum_chrome_version": "111",
   "icons": {
@@ -63,6 +63,8 @@
     "https://krcs.kugou.com/*",
     "https://lyrics.kugou.com/*",
     "https://music.163.com/*",
+    "https://c.y.qq.com/*",
+    "https://u.y.qq.com/*",
     "https://api.listenbrainz.org/*",
     "https://translate.googleapis.com/*"
   ],
