@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.66.0
+// @version      4.67.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.66.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.67.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -5689,6 +5689,121 @@
     }
     return ls.length >= 4 ? { lrc: ls.join('\n'), wt: Object.keys(wt).length ? wt : null } : null;
   }
+  /* ----- QQ MUSIC QRC: the word-timed sheet. It comes encrypted with the DES that QQMusicCommon.dll ships — Brad Conte's
+   * DES with two S-box typos and little-endian word order — as 3DES under the client's 24-byte key, then zlib. The cipher
+   * below is that code transliterated line for line and checked byte-exact against the compiled original on a real
+   * sheet. `[lineStart,dur]word(start,dur)…` per line becomes LRC lines plus a word map in the shape Musixmatch's
+   * richsync and NetEase's yrc use, so the karaoke wipe runs word by word. ----- */
+  const QRC = (() => {
+  function qqDes() {
+    const sbox1 = [14,4,13,1,2,15,11,8,3,10,6,12,5,9,0,7, 0,15,7,4,14,2,13,1,10,6,12,11,9,5,3,8, 4,1,14,8,13,6,2,11,15,12,9,7,3,10,5,0, 15,12,8,2,4,9,1,7,5,11,3,14,10,0,6,13];
+    const sbox2 = [15,1,8,14,6,11,3,4,9,7,2,13,12,0,5,10, 3,13,4,7,15,2,8,15,12,0,1,10,6,9,11,5, 0,14,7,11,10,4,13,1,5,8,12,6,9,3,2,15, 13,8,10,1,3,15,4,2,11,6,7,12,0,5,14,9];
+    const sbox3 = [10,0,9,14,6,3,15,5,1,13,12,7,11,4,2,8, 13,7,0,9,3,4,6,10,2,8,5,14,12,11,15,1, 13,6,4,9,8,15,3,0,11,1,2,12,5,10,14,7, 1,10,13,0,6,9,8,7,4,15,14,3,11,5,2,12];
+    const sbox4 = [7,13,14,3,0,6,9,10,1,2,8,5,11,12,4,15, 13,8,11,5,6,15,0,3,4,7,2,12,1,10,14,9, 10,6,9,0,12,11,7,13,15,1,3,14,5,2,8,4, 3,15,0,6,10,10,13,8,9,4,5,11,12,7,2,14];
+    const sbox5 = [2,12,4,1,7,10,11,6,8,5,3,15,13,0,14,9, 14,11,2,12,4,7,13,1,5,0,15,10,3,9,8,6, 4,2,1,11,10,13,7,8,15,9,12,5,6,3,0,14, 11,8,12,7,1,14,2,13,6,15,0,9,10,4,5,3];
+    const sbox6 = [12,1,10,15,9,2,6,8,0,13,3,4,14,7,5,11, 10,15,4,2,7,12,9,5,6,1,13,14,0,11,3,8, 9,14,15,5,2,8,12,3,7,0,4,10,1,13,11,6, 4,3,2,12,9,5,15,10,11,14,1,7,6,0,8,13];
+    const sbox7 = [4,11,2,14,15,0,8,13,3,12,9,7,5,10,6,1, 13,0,11,7,4,9,1,10,14,3,5,12,2,15,8,6, 1,4,11,13,12,3,7,14,10,15,6,8,0,5,9,2, 6,11,13,8,1,4,10,7,9,5,0,15,14,2,3,12];
+    const sbox8 = [13,2,8,4,6,15,11,1,10,9,3,14,5,0,12,7, 1,15,13,8,10,3,7,4,12,5,6,11,0,14,9,2, 7,11,4,1,9,12,14,2,0,6,10,13,15,3,5,8, 2,1,14,7,4,10,8,13,15,12,9,0,3,5,6,11];
+    const BITNUM = (a, b, c) => (((a[((b / 32) | 0) * 4 + 3 - (((b % 32) / 8) | 0)] >> (7 - (b % 8))) & 1) << c) >>> 0;
+    const BITNUMINTR = (a, b, c) => (((a >>> (31 - b)) & 1) << c) >>> 0;
+    const BITNUMINTL = (a, b, c) => ((((a << b) >>> 0) & 0x80000000) >>> c) >>> 0;
+    const SBOXBIT = (a) => (a & 0x20) | ((a & 0x1f) >> 1) | ((a & 0x01) << 4);
+    const IPo = [57,49,41,33,25,17,9,1,59,51,43,35,27,19,11,3,61,53,45,37,29,21,13,5,63,55,47,39,31,23,15,7];   // state[0]: bits, from c=31 down to 0
+    const IPe = [56,48,40,32,24,16,8,0,58,50,42,34,26,18,10,2,60,52,44,36,28,20,12,4,62,54,46,38,30,22,14,6];   // state[1]
+    function IP(inp) {
+      let s0 = 0, s1 = 0;
+      for (let i = 0; i < 32; i++) { s0 = (s0 | BITNUM(inp, IPo[i], 31 - i)) >>> 0; s1 = (s1 | BITNUM(inp, IPe[i], 31 - i)) >>> 0; }
+      return [s0, s1];
+    }
+    function InvIP(s0, s1, out) {   // out[3] = R7 L7 R15 L15 R23 L23 R31 L31 … (as the shipped code writes them)
+      const map = [[3, 7], [2, 6], [1, 5], [0, 4], [7, 3], [6, 2], [5, 1], [4, 0]];   // byte, base bit
+      for (const [bi, b] of map) {
+        out[bi] = (BITNUMINTR(s1, b, 7) | BITNUMINTR(s0, b, 6) | BITNUMINTR(s1, b + 8, 5) | BITNUMINTR(s0, b + 8, 4)
+          | BITNUMINTR(s1, b + 16, 3) | BITNUMINTR(s0, b + 16, 2) | BITNUMINTR(s1, b + 24, 1) | BITNUMINTR(s0, b + 24, 0)) & 0xff;
+      }
+    }
+    function f(state, key) {
+      let t1 = (BITNUMINTL(state, 31, 0) | ((state & 0xf0000000) >>> 1) | BITNUMINTL(state, 4, 5) | BITNUMINTL(state, 3, 6) | ((state & 0x0f000000) >>> 3) | BITNUMINTL(state, 8, 11)
+        | BITNUMINTL(state, 7, 12) | ((state & 0x00f00000) >>> 5) | BITNUMINTL(state, 12, 17) | BITNUMINTL(state, 11, 18) | ((state & 0x000f0000) >>> 7) | BITNUMINTL(state, 16, 23)) >>> 0;
+      let t2 = (BITNUMINTL(state, 15, 0) | ((state & 0x0000f000) << 15) | BITNUMINTL(state, 20, 5) | BITNUMINTL(state, 19, 6) | ((state & 0x00000f00) << 13) | BITNUMINTL(state, 24, 11)
+        | BITNUMINTL(state, 23, 12) | ((state & 0x000000f0) << 11) | BITNUMINTL(state, 28, 17) | BITNUMINTL(state, 27, 18) | ((state & 0x0000000f) << 9) | BITNUMINTL(state, 0, 23)) >>> 0;
+      const L = [(t1 >>> 24) & 0xff, (t1 >>> 16) & 0xff, (t1 >>> 8) & 0xff, (t2 >>> 24) & 0xff, (t2 >>> 16) & 0xff, (t2 >>> 8) & 0xff];
+      for (let i = 0; i < 6; i++) L[i] ^= key[i];
+      state = ((sbox1[SBOXBIT(L[0] >> 2)] << 28) | (sbox2[SBOXBIT(((L[0] & 0x03) << 4) | (L[1] >> 4))] << 24) | (sbox3[SBOXBIT(((L[1] & 0x0f) << 2) | (L[2] >> 6))] << 20)
+        | (sbox4[SBOXBIT(L[2] & 0x3f)] << 16) | (sbox5[SBOXBIT(L[3] >> 2)] << 12) | (sbox6[SBOXBIT(((L[3] & 0x03) << 4) | (L[4] >> 4))] << 8)
+        | (sbox7[SBOXBIT(((L[4] & 0x0f) << 2) | (L[5] >> 6))] << 4) | sbox8[SBOXBIT(L[5] & 0x3f)]) >>> 0;
+      const Pt = [15,6,19,20,28,11,27,16,0,14,22,25,4,17,30,9,1,7,23,13,31,26,2,8,18,12,29,5,21,10,3,24];
+      let o = 0; for (let i = 0; i < 32; i++) o = (o | BITNUMINTL(state, Pt[i], i)) >>> 0;
+      return o;
+    }
+    function keySetup(key, decrypt) {
+      const shift = [1,1,2,2,2,2,2,2,1,2,2,2,2,2,2,1];
+      const pc = [56,48,40,32,24,16,8,0,57,49,41,33,25,17,9,1,58,50,42,34,26,18,10,2,59,51,43,35];
+      const pd = [62,54,46,38,30,22,14,6,61,53,45,37,29,21,13,5,60,52,44,36,28,20,12,4,27,19,11,3];
+      const comp = [13,16,10,23,0,4,2,27,14,5,20,9,22,18,11,3,25,7,15,6,26,19,12,1,40,51,30,36,46,54,29,39,50,44,32,47,43,48,38,55,33,52,45,41,49,35,28,31];
+      let C = 0, D = 0;
+      for (let i = 0, j = 31; i < 28; i++, j--) C = (C | BITNUM(key, pc[i], j)) >>> 0;
+      for (let i = 0, j = 31; i < 28; i++, j--) D = (D | BITNUM(key, pd[i], j)) >>> 0;
+      const sched = [];
+      for (let i = 0; i < 16; i++) {
+        C = (((C << shift[i]) | (C >>> (28 - shift[i]))) & 0xfffffff0) >>> 0;
+        D = (((D << shift[i]) | (D >>> (28 - shift[i]))) & 0xfffffff0) >>> 0;
+        const to = decrypt ? 15 - i : i; const k = [0, 0, 0, 0, 0, 0];
+        let j = 0; for (; j < 24; j++) k[(j / 8) | 0] |= BITNUMINTR(C, comp[j], 7 - (j % 8));
+        for (; j < 48; j++) k[(j / 8) | 0] |= BITNUMINTR(D, comp[j] - 27, 7 - (j % 8));
+        sched[to] = k;
+      }
+      return sched;
+    }
+    function crypt(inp, out, sched) {
+      let [s0, s1] = IP(inp);
+      for (let r = 0; r < 15; r++) { const t = s1; s1 = (f(s1, sched[r]) ^ s0) >>> 0; s0 = t; }
+      s0 = (f(s1, sched[15]) ^ s0) >>> 0;
+      InvIP(s0, s1, out);
+    }
+    return {
+      // 3DES as the shipped code sets it up for decryption: key[16..24) decrypt, key[8..16) encrypt, key[0..8) decrypt
+      decrypt3(buf, key24) {
+        const s = [keySetup(key24.subarray(16, 24), true), keySetup(key24.subarray(8, 16), false), keySetup(key24.subarray(0, 8), true)];
+        const out = new Uint8Array(buf.length); const blk = new Uint8Array(8);
+        for (let i = 0; i + 8 <= buf.length; i += 8) { crypt(buf.subarray(i, i + 8), blk, s[0]); crypt(blk, blk, s[1]); crypt(blk, blk, s[2]); out.set(blk, i); }
+        return out;
+      },
+    };
+  }
+    const des = qqDes();
+    const KEY = new Uint8Array(Array.from('!@#)(*$%123ZXC!@!@#)(NHL', (c) => c.charCodeAt(0)));
+    async function inflate(bytes) {
+      const ab = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer();
+      return new TextDecoder('utf-8').decode(ab);
+    }
+    async function decode(hex) {
+      const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '');
+      if (h.length < 16 || h.length % 2) return null;
+      const bytes = new Uint8Array(h.length / 2);
+      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(h.substr(i * 2, 2), 16);
+      return inflate(des.decrypt3(bytes, KEY));
+    }
+    function parse(xml) {
+      const m = String(xml || '').match(/LyricContent="([\s\S]*?)"\s*\/?>/);
+      if (!m) return null;
+      const content = m[1].replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      const ls = [], wt = {};
+      const fmt = (ms) => { const cs = Math.max(0, Math.round(ms / 10)); return '[' + String(Math.floor(cs / 6000)).padStart(2, '0') + ':' + String(Math.floor((cs % 6000) / 100)).padStart(2, '0') + '.' + String(cs % 100).padStart(2, '0') + ']'; };
+      for (const line of content.split(/\r?\n/)) {
+        const lm = line.match(/^\[(\d+),(\d+)\](.*)$/); if (!lm) continue;
+        const start = +lm[1], dur = +lm[2]; const words = []; let text = '';
+        const re = /(.*?)\((\d+),(\d+)\)/g; let w;
+        while ((w = re.exec(lm[3]))) { const wtxt = w[1]; if (!wtxt.length) continue; words.push([+((+w[2]) / 1000).toFixed(3), wtxt.length]); text += wtxt; }
+        text = text.trim(); if (!text) continue;
+        ls.push(fmt(start) + text);
+        if (words.length) { words.sort((a, b) => a[0] - b[0]); wt[String(Math.round(start / 10))] = { e: dur > 0 ? +((start + dur) / 1000).toFixed(3) : null, w: words }; }
+      }
+      return ls.length >= 4 ? { lrc: ls.join('\n'), wt: Object.keys(wt).length ? wt : null } : null;
+    }
+    return { decode, parse };
+  })();
+  const QQ_WORDS = new Map();   // songmid → word map of the last QRC decoded this session
   const NE_WORDS = new Map();   // nid → word map of the last body fetched this session (the lyric cache keeps the line text only)
   function neteaseLyric(nid) {
     return cachedBody('n:' + nid, async () => {
@@ -5747,19 +5862,35 @@
   function qqLyric(mid) {
     return cachedBody('q:' + mid, async () => {
       if (HostPark.parked('qq')) return null;
-      const data = JSON.stringify({ comm: { ct: 24 }, lyric: { module: 'music.musichallSong.PlayLyricInfo', method: 'GetPlayLyricInfo', param: { songMID: mid } } });
-      let j;
-      try { j = await gmJSON('https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=' + encodeURIComponent(data), { timeout: 8000, prio: true }); HostPark.ok('qq'); }
-      catch (e) { HostPark.fail('qq', e); throw e; }
-      const body = j && j.lyric && j.lyric.data && j.lyric.data.lyric;
-      if (!body) return j && j.lyric && j.lyric.data ? '' : null;   // answered with nothing: no sheet for this entry (code 24001)
+      const ask = async (qrc) => {
+        const data = JSON.stringify({ comm: { ct: 24 }, lyric: { module: 'music.musichallSong.PlayLyricInfo', method: 'GetPlayLyricInfo', param: qrc ? { songMID: mid, qrc: 1, trans: 0, roma: 0 } : { songMID: mid } } });
+        let j;
+        try { j = await gmJSON('https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=' + encodeURIComponent(data), { timeout: 8000, prio: true }); HostPark.ok('qq'); }
+        catch (e) { HostPark.fail('qq', e); throw e; }
+        return j && j.lyric && j.lyric.data ? j.lyric.data : null;
+      };
       const timed = (x) => /\[\d{1,2}:\d{2}/.test(x);
-      let raw = String(body);
-      if (!timed(raw)) {   // the sheet comes base64-encoded; a plain one is taken as it is
-        try { raw = atob(raw.replace(/\s+/g, '')); } catch (e) { return null; }
-        try { raw = decodeURIComponent(escape(raw)); } catch (e) {}
+      const fromB64 = (b) => {   // the line sheet comes base64-encoded; a plain one is taken as it is
+        let raw = String(b);
+        if (!timed(raw)) { try { raw = atob(raw.replace(/\s+/g, '')); } catch (e) { return null; } try { raw = decodeURIComponent(escape(raw)); } catch (e) {} }
+        return raw && timed(raw) ? raw : null;
+      };
+      // the word-timed sheet first: its lines feed the panel, its words the karaoke wipe
+      const d1 = await ask(true);
+      if (!d1) return null;
+      if (!d1.lyric) return '';   // answered with nothing: no sheet for this entry (code 24001)
+      if (+d1.qrc === 1) {
+        try {
+          const q = QRC.parse(await QRC.decode(d1.lyric));
+          if (q) { if (q.wt) { QQ_WORDS.set(mid, q.wt); if (QQ_WORDS.size > 40) QQ_WORDS.delete(QQ_WORDS.keys().next().value); } return q.lrc; }
+        } catch (e) {}
+      } else {
+        const raw = fromB64(d1.lyric);
+        if (raw) return raw;
       }
-      return raw && timed(raw) ? raw : null;
+      const d2 = await ask(false);   // a sheet that would not decode: the plain line sheet
+      if (!d2) return null;
+      return d2.lyric ? fromB64(d2.lyric) : '';
     });
   }
 
@@ -6152,6 +6283,11 @@
       if (t > 3) return true;
       if (selfTitle && sameTitle(text, selfTitle)) return false;
       if (selfArtist && selfTitle && sim(text, selfArtist + ' ' + selfTitle) > 0.85) return false;
+      // "Title (Explicit) - Artist" / "Artist - Title" as the first stamped line: the header QQ and Kugou sheets carry
+      if (t <= 15 && selfTitle) {
+        const m = text.match(/^(.{1,80}?)\s+[-–—]\s+(.{1,80})$/);
+        if (m && ((sameTitle(m[1], selfTitle) && (!selfArtist || sim(m[2], selfArtist) > 0.6)) || (sameTitle(m[2], selfTitle) && (!selfArtist || sim(m[1], selfArtist) > 0.6)))) return false;
+      }
       return true;
     });
   }
@@ -6496,7 +6632,7 @@
           : c.src === 'netease'
             ? neteaseLyric(c.nid).then((raw) => { const b = fromLrcRaw(raw); if (b && NE_WORDS.has(c.nid)) b.wt = NE_WORDS.get(c.nid); return b; })
             : c.src === 'qq'
-              ? qqLyric(c.qmid).then(fromLrcRaw)
+              ? qqLyric(c.qmid).then((raw) => { const b = fromLrcRaw(raw); if (b && QQ_WORDS.has(c.qmid)) b.wt = QQ_WORDS.get(c.qmid); return b; })
               : kugouLyric(c.kid, c.kkey).then(fromLrcRaw);
         // a STRONG match whose lyric download dies must not end the search —
         // its artist+title are confirmed evidence: pivot them into exact
@@ -9034,6 +9170,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['◔', 'QQ Music, word by word', 'QQ Music’s word-timed sheets (QRC) are decrypted in the hub — the cipher its own client ships, transliterated and checked byte-exact — so a QQ sheet lights each word as it is sung, like Musixmatch richsync and NetEase yrc. The manual search now shows up to four rows per catalog, so QQ, NetEase and Kugou are never crowded out by LRCLIB’s duplicates.'],
+          ['◐', 'A line that lights a beat early', 'The highlight now leads the voice by 100 ms by default. Broadcasting’s own standard (ITU-R BT.1359) finds a picture that trails its sound noticed from 45 ms on, but one that leads it only from 125 ms — and the flip itself costs a frame or two, so “exact” read as late. Lyrics ⋯ → Highlight timing keeps exact and early. The diagnostics report now lists each voice’s offset from the sheet.'],
           ['≡', 'Synced sheets, one-to-one with the voice', 'On a synced sheet the aligner now hears each voice that comes in after a pause and matches it to its line. Three of them set a provisional auto offset within the first verse — no more waiting 35 s for two looks — and a look on a dozen lines then confirms or replaces it. When a voice comes a beat before its line’s timestamp, that line lights on the voice. The karaoke wipe runs over the sung part of a line and holds, instead of crawling through the silence after it. The detector’s own lag was measured against a right LRCLIB sheet and taken off.'],
           ['⌕', 'Honest trails', 'A catalog that answers with no sheet for an entry (QQ Music, NetEase, Kugou) is told apart from one that cannot be reached: the trail says “no sheet there”, a pick says the catalog has no lyrics for that one, and the same query no longer reaches a catalog three times from one search.'],
           ['▣', 'The stage: just the lyrics, full screen', 'F, the ⤢ button or a double-click on the artwork now fills the screen with the lyrics alone: the artwork blurred behind them, the sung line lit with its wipe, the cover on the right, a seek bar and prev / play / next along the bottom, and the chrome fading after three quiet seconds. Style picks the size (S – XL), left or centred lines, the cover on or off and an artwork or plain-dark backdrop, and remembers. The other tabs keep the roomy immersive panel.'],
@@ -9814,7 +9952,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             'lines: ' + lineCount,
             'clock: source=' + srcClk + '  media=' + (elem != null ? elem : '?') + 's  SC-timeline=' + (aria >= 0 ? aria : '?') + 's  delta=' + (drift != null ? drift : '?') + 's  rate=' + rate,
             'usedTime: ' + Media.time().toFixed(2) + 's',
-            'offsets: global=' + (App.latencyMs() || 0) + 'ms  track=' + (App.offsetMs() || 0) + 'ms  auto=' + (SyncAuto.ms | 0) + 'ms' + (SyncAuto.last ? ' (conf ' + (+SyncAuto.last.confidence).toFixed(2) + (SyncAuto.last.reason ? ', ' + SyncAuto.last.reason : '') + ')' : '') + '  anchors=' + (App.anchorCount() || 0) + '  lead=' + (App.leadMs() || 0) + 'ms  autoLat=' + (App.autoLatencyMs() || 0) + 'ms',
+            'offsets: global=' + (App.latencyMs() || 0) + 'ms  track=' + (App.offsetMs() || 0) + 'ms  auto=' + (SyncAuto.ms | 0) + 'ms' + (SyncAuto.last ? ' (conf ' + (+SyncAuto.last.confidence).toFixed(2) + (SyncAuto.last.reason ? ', ' + SyncAuto.last.reason : '') + ')' : '') + '  anchors=' + (App.anchorCount() || 0) + '  lead=' + (App.leadMs() || 0) + 'ms  autoLat=' + (App.autoLatencyMs() || 0) + 'ms' + (SyncAuto.voice && SyncAuto.voice.length ? '  voice−sheet=' + SyncAuto.voice.map((x) => (x > 0 ? '+' : '') + x.toFixed(2)).join(',') + 's' + (SyncAuto.prov ? ' (provisional)' : '') : ''),
             'active line #' + activeI + ': "' + act + '"',
             'voice: ' + snapN + ' line' + (snapN === 1 ? '' : 's') + ' lit on the voice' + (SyncAuto.prov ? ' · provisional auto offset' : ''),
             'sample lines (effective time -> text):',
@@ -10777,7 +10915,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let gFail = false;
 
       const order = () => {
-        const all = [...got.values()];
+        // one row per version: a catalog answering the same title, artist and length four times over (LRCLIB does)
+        // would crowd the other catalogs out of the fourteen rows
+        const seenV = new Set(), perSrc = new Map();
+        const all = [...got.values()].filter((x) => { const k = x.src + '|' + normKey(x.t || '') + '|' + normKey(x.a || '') + '|' + Math.round(x.dur || 0); if (seenV.has(k)) return false; seenV.add(k); return true; });
         // Genius first — best catalog and naming authority; synced sources follow
         return [
           ...all.filter((x) => x.src === 'genius' && !x.fromLyric),
@@ -10788,7 +10929,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           ...all.filter((x) => x.src === 'kugou'),
           ...all.filter((x) => x.src === 'genius' && x.fromLyric),
           ...all.filter((x) => x.src === 'lrclib' && !x.synced && (x.plain || x.instrumental)),
-        ].slice(0, 14);
+        ].filter((x) => { const c = (perSrc.get(x.src) || 0) + 1; perSrc.set(x.src, c); return c <= 4; }).slice(0, 14);   // four per catalog: every catalog gets a say
       };
       let painted = false, paintT = null;
       const handle = (res) => {
@@ -11283,12 +11424,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // highlight lead: how early a line lights up before it's actually sung.
     // 120ms reads as "on time" to most people; 'early' suits singing along;
     // 'exact' is for purists checking sync against the waveform.
-    let lead = 0;   // default: highlight EXACTLY on the heard vocal (was +120 ms early)
-    try { lead = Math.min(400, Math.max(0, GM_getValue('sl:lead', 0) | 0)); } catch (e) {}
+    // default 100 ms ahead of the voice. ITU-R BT.1359: a picture that trails its sound is noticed from 45 ms on, one that
+    // leads it only from 125 ms — and the flip itself costs a frame or two. 'exact' (0) is there for checking a sheet.
+    let lead = 100;
+    try { lead = Math.min(400, Math.max(0, GM_getValue('sl:lead', 100) | 0)); } catch (e) {}
     function cycleLead() {
-      lead = lead === 120 ? 250 : lead === 250 ? 0 : 120;
+      lead = lead === 100 ? 250 : lead === 250 ? 0 : 100;
       try { GM_setValue('sl:lead', lead); } catch (e) {}
-      UI.toast('Highlight timing: ' + (lead === 0 ? 'exact' : lead === 250 ? 'early (sing-along)' : 'standard'));
+      UI.toast('Highlight timing: ' + (lead === 0 ? 'exact' : lead === 250 ? 'early (sing-along)' : 'standard (100 ms ahead)'));
     }
 
     // smart sync memory: every manual nudge / tap-to-sync teaches the engine
@@ -11791,7 +11934,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       off = 0;
       SyncAuto.ms = 0; SyncAuto.conf = 0;
       anch = [];
-      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = ''; onsetPairs = []; SyncAuto.prov = false; SyncAuto.auto = false;
+      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = ''; onsetPairs = []; SyncAuto.prov = false; SyncAuto.auto = false; SyncAuto.voice = null;
       alignStart();
       UI.setReady(false);
       UI.setHeader(meta);
@@ -12078,7 +12221,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               // same ladder as the automatic path: scale to the upload's length,
               // or render text when the version is too far off to trust.
               const fit = fitSync(lines, item.dur, wantDur, (meta && meta.title) ? cleanTitle(meta.title).flags : {});
-              const wt = (fit && !fit.scaled && item.src === 'netease' && NE_WORDS.has(item.nid)) ? NE_WORDS.get(item.nid) : null;
+              const wt = !(fit && !fit.scaled) ? null : item.src === 'netease' && NE_WORDS.has(item.nid) ? NE_WORDS.get(item.nid) : item.src === 'qq' && QQ_WORDS.has(item.qmid) ? QQ_WORDS.get(item.qmid) : null;
               result = fit
                 ? { src: item.src, synced: true, scaled: fit.scaled, lines: fit.lines, a: item.a, t: item.t, srcDur: item.dur || 0, picked: true, wt }
                 : { src: item.src, synced: false, lines: lines.map((l) => l[1]), a: item.a, t: item.t, picked: true };
@@ -12215,6 +12358,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       if (best < 0 || bd > 0.7 || second < 1.2) return;   // no line, or two lines, this voice could be
       onsetPairs.push(t - (+L[best][0] - manual));   // > 0: the voice came after the sheet said (the sheet is early)
+      SyncAuto.voice = onsetPairs;   // the report shows them
       if (onsetPairs.length > 24) onsetPairs.shift();
       if (onsetPairs.length < 3 || SyncAuto.auto) return;   // a look on a dozen lines is the better instrument once it has spoken
       const sorted = onsetPairs.slice().sort((a, b) => a - b), h = sorted.length >> 1;
@@ -12364,7 +12508,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     return {
       meta: () => meta,
-      lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
+      lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, words: !!(lyr && lyr.wt && Object.keys(lyr.wt).length), envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
       offsetMs: () => off,
       syncOffS: () => ((off || 0) + (goff || 0) + (SyncAuto.ms || 0)) / 1000,
       autoAlignMs: () => SyncAuto.ms,

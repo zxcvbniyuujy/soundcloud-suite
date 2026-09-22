@@ -117,6 +117,19 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **QQ Music word by word** — QQ's word-timed QRC sheets are decrypted in the
+  page: the DES its client ships (Brad Conte's, two S-box typos and little-endian
+  word order included) transliterated line for line and checked byte-exact
+  against the compiled original, 3DES under the client's key, zlib via
+  DecompressionStream. Each word carries its start and length, so the karaoke
+  wipe runs word by word, as it does on Musixmatch richsync and NetEase yrc.
+  The manual search shows up to four rows per catalog.
+- **A line that lights a beat early** — the default highlight lead is 100 ms.
+  ITU-R BT.1359 puts the detectability of a picture trailing its sound at
+  45 ms and of one leading it at 125 ms, and the flip costs a frame or two, so
+  an "exact" flip read as late. Lyrics ⋯ → Highlight timing keeps exact (0)
+  and early (250 ms). The diagnostics report lists each voice's offset from
+  the sheet.
 - **Synced sheets, one-to-one with the voice** — the aligner's onset detector
   (a steady 300 ms of the vocal band, then a rise of 4 dB that holds 160 ms;
   its own 0.3 s lag measured against a right LRCLIB sheet and taken off)
