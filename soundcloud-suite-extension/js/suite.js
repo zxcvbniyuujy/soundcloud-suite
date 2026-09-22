@@ -17270,11 +17270,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
   }
   let onbEl = null, onbEsc = null;
-  function closeOnboarding() {
+  function closeOnboarding(withTour) {
     if (onbEsc) { try { D.removeEventListener('keydown', onbEsc, true); } catch (e) {} onbEsc = null; }
     if (onbEl) { try { onbEl.remove(); } catch (e) {} onbEl = null; }
-    // the first thing after the setup choice: three spotlights on the real buttons (once; the palette repeats it)
-    try { if (!GET('sce:toured', 0)) setTimeout(() => { try { startTour(); } catch (e) {} }, 500); } catch (e) {}
+    // after a setup choice (not a backdrop click or Esc, which brush the card off): three spotlights on the real
+    // buttons, once; the palette repeats it
+    try { if (withTour && !GET('sce:toured', 0)) setTimeout(() => { try { startTour(); } catch (e) {} }, 500); } catch (e) {}
   }
 
   /* ───────── the tour: three spotlights on the suite's own buttons in the player bar ─────────
@@ -17391,10 +17392,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     rec.style.cssText = 'display:block;width:100%;border:0;border-radius:13px;padding:13px;font:800 13px inherit;cursor:pointer;background:linear-gradient(135deg,#f50,#ff8a3d);color:#fff;box-shadow:0 10px 26px -8px rgba(255,90,0,.6);transition:filter .14s';
     rec.addEventListener('mouseenter', () => { rec.style.filter = 'brightness(1.08)'; });
     rec.addEventListener('mouseleave', () => { rec.style.filter = ''; });
-    rec.addEventListener('click', () => { try { applyRecommended(); } catch (e) {} SET('sce:onboarded', 1); closeOnboarding(); });
+    rec.addEventListener('click', () => { try { applyRecommended(); } catch (e) {} SET('sce:onboarded', 1); closeOnboarding(true); });
     const man = D.createElement('button'); man.type = 'button'; man.textContent = 'I’ll set it up myself';
     man.style.cssText = 'display:block;width:100%;border:0;border-radius:13px;padding:12px;margin-top:9px;font:700 12px inherit;cursor:pointer;background:rgba(255,255,255,.08);color:#cfcfd6';
-    man.addEventListener('click', () => { SET('sce:onboarded', 1); toast('You can tune everything in the Audio & Tweaks tabs'); closeOnboarding(); });
+    man.addEventListener('click', () => { SET('sce:onboarded', 1); toast('You can tune everything in the Audio & Tweaks tabs'); closeOnboarding(true); });
     const hint = D.createElement('div'); hint.textContent = 'Open the suite anytime from the ♪ button in the player bar'; hint.style.cssText = 'font-size:10px;color:#6a6a72;margin-top:14px';
     card.append(rec, man, hint);
     onbEl.appendChild(card);

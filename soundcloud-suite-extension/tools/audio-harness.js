@@ -159,7 +159,7 @@ const FIXTURE_SRC = `
   });
   // debug accessor on; the "What's new" card (fires once per minor version and opens the hub) pre-seeded as seen
   const minor = (() => { try { return JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8')).version.split('.').slice(0, 2).join('.'); } catch (e) { return ''; } })();
-  await ctx.addInitScript((mv) => { try { localStorage.setItem('scss:debug', '1'); if (window.top === window && mv && !localStorage.getItem('scssgm:sl:ver')) localStorage.setItem('scssgm:sl:ver', JSON.stringify(mv)); } catch (e) {} }, minor);
+  await ctx.addInitScript((mv) => { try { localStorage.setItem('scss:debug', '1'); if (window.top === window && mv && !localStorage.getItem('scssgm:sl:ver')) localStorage.setItem('scssgm:sl:ver', JSON.stringify(mv)); localStorage.setItem('scssgm:sce:onboarded', '1'); localStorage.setItem('scssgm:sce:toured', '1'); } catch (e) {} }, minor);   // no welcome card, no tour: their overlays would take the real mouse and Enter events the scenarios send
   const page = ctx.pages()[0] || await ctx.newPage();
   const logs = [], pageerrors = [];
   const wire = (p) => {
