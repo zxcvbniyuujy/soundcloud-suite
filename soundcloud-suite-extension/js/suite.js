@@ -9567,7 +9567,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (t !== 'lyrics' && t !== 'queue' && t !== 'stats' && t !== 'tweaks' && t !== 'audio') return;
       tab = t;
       lastTm = -1; lastFrameNow = -1;   // the clock's shape follows the tab: repaint once even while paused
-      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(); }
+      if (t !== 'lyrics') { closeFind(); if (searchMode) exitSearch(); hideWizard(); }   // the timing hint belongs to the sheet: it must not sit over another tab's controls
       syncStage();   // find bar / manual search must not float over other tabs; a result found meanwhile gets painted
       try { GM_setValue('sl:tab', t); } catch (e) {}
       tabsEl.querySelectorAll('.tab').forEach((b) => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
@@ -11145,7 +11145,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function enterSearch(pre0) {   // pre0: a query to start from (a refused same-title stranger); anything else keeps the track's own
       if (searchMode) return;
       if (tapOn) endTapAlign(false);   // the tap-along click capture would swallow every result click
-      closeFind();
+      closeFind(); hideWizard();   // the timing hint is about the sheet, not the results list
       searchMode = true;
       syncStage();   // the results list gets the plain panel, the stage comes back with the sheet
       const meta = App.meta();
