@@ -16,8 +16,8 @@
       if (msg && msg.scss === 'cmd' && typeof msg.name === 'string') {
         const id = ++cmdSeq;
         let done = false;
-        const finish = (handled, info) => { if (done) return; done = true; window.removeEventListener('message', onAck); try { sendResponse(info && typeof info === 'object' ? { handled: handled === true, info } : handled === true); } catch (e) {} };
-        const onAck = (e) => { const d = e.data; if (e.source === window && d && d.scss === 'cmd-ack' && d.id === id) finish(d.handled, d.info); };
+        function finish(handled, info) { if (done) return; done = true; window.removeEventListener('message', onAck); try { sendResponse(info && typeof info === 'object' ? { handled: handled === true, info } : handled === true); } catch (e) {} }
+        function onAck(e) { const d = e.data; if (e.source === window && d && d.scss === 'cmd-ack' && d.id === id) finish(d.handled, d.info); }
         window.addEventListener('message', onAck);
         setTimeout(() => finish(false), 1500);   // a busy player tab (a shuffle load rendering, a lyric sheet painting) needs more than a frame
         try { window.postMessage({ scss: 'cmd', id, name: msg.name, broadcast: !!msg.broadcast }, location.origin); } catch (e) { finish(false); }
@@ -40,27 +40,36 @@
   window.addEventListener('focus', () => tell({ focus: true }));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tell({ focus: true }); });
 
+  /* page → background: the shim's cross-origin requests. The channel is a detached element the shim made at
+   * document_start and showed this script once, through a bubbling event, before any page script ran: nothing
+   * on the page can reach it afterwards, so a request arriving on it came from the shim and nowhere else. Should
+   * the handshake ever fail, the shim falls back to window.postMessage, accepted only while no channel exists. */
+  let chan = null;
+  const relay = (req, reply) => {
+    let responded = false;
+    const once = (res) => { if (responded) return; responded = true; reply(res); };
+    try {
+      chrome.runtime.sendMessage({ scss: 'xhr', req }, (res) => {
+        if (chrome.runtime.lastError || !res) once({ ok: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'no response from background' });
+        else once(res);
+      });
+    } catch (err) { once({ ok: false, error: String((err && err.message) || err) }); }
+  };
+  const adopt = (el) => {
+    if (chan || !el || typeof el.addEventListener !== 'function') return;   // the first channel offered is the shim's; a later one is not
+    chan = el;
+    el.addEventListener('scss-xhr', (e) => {
+      let d = null; try { d = JSON.parse(String(e.detail)); } catch (err) { d = null; }
+      if (!d || !d.req) return;
+      relay(d.req, (res) => { try { el.dispatchEvent(new CustomEvent('scss-xhr-res', { detail: JSON.stringify(Object.assign({ id: d.id }, res)) })); } catch (err) {} });
+    });
+    try { el.dispatchEvent(new CustomEvent('scss-chan!')); } catch (e) {}   // linked: the shim stops offering
+  };
+  document.addEventListener('scss-chan', (e) => adopt(e.target), true);
+  try { document.dispatchEvent(new CustomEvent('scss-chan?')); } catch (e) {}   // the shim may have offered before this script listened: ask it to offer again
   window.addEventListener('message', (e) => {
     const d = e.data;
-    if (e.source !== window || !d || d.scss !== 'xhr-req' || !d.req) return;
-    let responded = false;
-    const reply = (res) => {
-      if (responded) return;
-      responded = true;
-      try {
-        window.postMessage(Object.assign({ scss: 'xhr-res', id: d.id }, res), location.origin);
-      } catch (e2) {}
-    };
-    try {
-      chrome.runtime.sendMessage({ scss: 'xhr', req: d.req }, (res) => {
-        if (chrome.runtime.lastError || !res) {
-          reply({ ok: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'no response from background' });
-        } else {
-          reply(res);
-        }
-      });
-    } catch (err) {
-      reply({ ok: false, error: String((err && err.message) || err) });
-    }
+    if (e.source !== window || !d || d.scss !== 'xhr-req' || !d.req || chan) return;
+    relay(d.req, (res) => { try { window.postMessage(Object.assign({ scss: 'xhr-res', id: d.id }, res), location.origin); } catch (e2) {} });
   });
 })();

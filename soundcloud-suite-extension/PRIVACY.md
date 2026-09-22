@@ -38,6 +38,12 @@ These requests contain only the song's title and artist (or the URL you are
 viewing). Requests to third-party hosts are made **without cookies**. No
 personal identifiers are added.
 
+The extension's own background script performs these requests. It accepts
+them only from the extension's content script on a soundcloud.com tab, over a
+private channel that scripts on the page cannot reach, and only for the hosts
+listed above. Nothing else running on soundcloud.com can use the extension to
+fetch on its behalf.
+
 ## Optional tokens you provide
 
 A **Genius API token** and a **ListenBrainz token** are optional, stored

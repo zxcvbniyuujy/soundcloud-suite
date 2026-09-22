@@ -28,7 +28,7 @@ EXT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DST="$EXT_DIR/js/suite.js"
 MANIFEST="$EXT_DIR/manifest.json"
 SHIM="$EXT_DIR/js/gm-shim.js"
-SCRIPTS=(js/gm-shim.js js/bridge.js js/background.js js/suite.js)
+SCRIPTS=(js/i18n.js js/gm-shim.js js/bridge.js js/background.js js/suite.js)
 
 fail() { echo "✗ $*" >&2; exit 1; }
 note() { echo "• $*"; }
@@ -111,7 +111,8 @@ fi
 note "syntax check:"
 for f in "${SCRIPTS[@]}"; do
   if command -v node >/dev/null 2>&1; then
-    node --check "$EXT_DIR/$f" && echo "    $f → OK"
+    node --check "$EXT_DIR/$f" || fail "syntax error in $f"   # under set -e a failing left operand of && is exempt: fail explicitly
+    echo "    $f → OK"
   elif command -v osascript >/dev/null 2>&1; then
     osascript -l JavaScript -e "ObjC.import('Foundation');
       const c = ObjC.unwrap(\$.NSString.stringWithContentsOfFileEncodingError('$EXT_DIR/$f', \$.NSUTF8StringEncoding, null));

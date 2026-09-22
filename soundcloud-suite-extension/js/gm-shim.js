@@ -22,7 +22,7 @@
 
   // GM_info: the suite reads GM_info.script.version as its single source of truth
   // for the displayed version. build.sh keeps this in lockstep with the manifest.
-  window.GM_info = { script: { name: 'SoundCloud Suite', version: '4.74.0' } };
+  window.GM_info = { script: { name: 'SoundCloud Suite', version: '4.75.0' } };
 
   window.GM_getValue = function (key, fallback) {
     try {
@@ -86,13 +86,35 @@
 
   let seq = 0;
   const pending = new Map();
-  window.addEventListener('message', (e) => {
-    const d = e.data;
-    if (e.source !== window || !d || d.scss !== 'xhr-res') return;
-    const cb = pending.get(d.id);
+  const settle = (d) => {
+    const cb = d && pending.get(d.id);
     if (!cb) return;
     pending.delete(d.id);
     cb(d);
+  };
+  // The relay channel: a detached element only this closure and bridge.js hold. It is appended and shown to the
+  // bridge through one bubbling event at document_start, before any page script runs, then taken out again; from
+  // then on requests and answers are events on that element, which nothing on the page can reach. The bridge
+  // acknowledges on the element, and the shim answers its query only until then. Without a link (a handshake
+  // that never completed) requests go by window.postMessage, which the bridge accepts only while it has no channel
+  let chan = null, linked = false;
+  try {
+    chan = document.createElement('span');
+    chan.addEventListener('scss-xhr-res', (e) => { let d = null; try { d = JSON.parse(String(e.detail)); } catch (err) { d = null; } settle(d); });
+    chan.addEventListener('scss-chan!', () => { linked = true; });
+    const offer = () => {
+      const root = document.documentElement || document.head || document.body;
+      if (linked || !root) return;
+      try { root.appendChild(chan); chan.dispatchEvent(new CustomEvent('scss-chan', { bubbles: true })); } catch (e) {}
+      try { chan.remove(); } catch (e) {}
+    };
+    document.addEventListener('scss-chan?', offer);
+    offer();
+  } catch (e) { chan = null; }
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (e.source !== window || !d || d.scss !== 'xhr-res' || linked) return;
+    settle(d);
   });
 
   window.GM_xmlhttpRequest = function (opts) {
@@ -125,7 +147,7 @@
       }
     });
     try {
-      window.postMessage({
+      const msg = {
         scss: 'xhr-req',
         id,
         req: {
@@ -136,7 +158,9 @@
           timeout,
           anonymous: !!opts.anonymous,
         },
-      }, location.origin);
+      };
+      if (linked && chan) chan.dispatchEvent(new CustomEvent('scss-xhr', { detail: JSON.stringify(msg) }));
+      else window.postMessage(msg, location.origin);
     } catch (e) {
       clearTimeout(guard);
       settle(opts.onerror, e);

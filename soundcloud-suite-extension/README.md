@@ -126,6 +126,28 @@ never plays.
   tempo change in the track wins within half a minute. On eight recorded uploads
   with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and
   an 87 BPM track with a triplet feel reads its 130 BPM pulse.
+- **Lyrics in the comments** — when nothing else has a sheet, the upload's own
+  comments are scanned for one: a long multi-line comment that reads like
+  lyrics, or a run of timestamped one-line comments by one listener (the
+  artist first of all), delivered as text for the aligner to time.
+- **The relay answers to the suite alone** — the extension's background worker
+  fetches lyrics with the extension's own host permissions, and any script on
+  soundcloud.com used to be able to ask it to. Requests now travel over a private
+  channel: a detached element the shim shows the isolated-world bridge once, at
+  `document_start` before any page script runs, and keeps in its closure; the
+  bridge relays nothing that arrives any other way (window.postMessage is
+  accepted only while no channel exists, i.e. a handshake that never completed),
+  and the suite takes `GM_xmlhttpRequest` off the window as soon as it holds it.
+  Verified live: an inline script first in `<head>` sees no offer, its
+  postMessage request gets no answer, its own channel is never adopted, and
+  lyrics still arrive.
+- **Five more from the review** — listening stats kept in two tabs add up
+  instead of overwriting each other (each tab merges its deltas into storage);
+  another profile's cached library is cleared a week after its last shuffle
+  (yours is kept); the clip guard's bypass is a detector input, so the level
+  never steps when the guard engages or lets go (bypass is exact within a
+  quarter second, by a 20 ms release); a chain the player has abandoned tells
+  its limiter and onset worklets to stop instead of rendering silence forever.
 - **Tap the tempo yourself** — when the reading is wrong, the Tap button beside
   the readout takes over: eight taps (or four and a pause) set this track's tempo
   from the median interval, remembered as tapped and never replaced by the

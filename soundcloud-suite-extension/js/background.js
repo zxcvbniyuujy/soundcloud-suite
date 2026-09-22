@@ -135,7 +135,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       method: req.method || 'GET',
       headers: req.headers || {},
       body: req.data != null ? req.data : undefined,
-      credentials: (!req.anonymous && SC_FRAME.test(req.url)) ? 'include' : 'omit',   // cookies only ever go to soundcloud.com, whatever the page asks
+      credentials: (!req.anonymous && /^https:\/\/(api-v2\.)?soundcloud\.com\//.test(req.url)) ? 'include' : 'omit',   // cookies only ever go to the two SoundCloud hosts the suite reads as the listener, whatever the page asks
       redirect: 'follow',
       signal: ctrl.signal,
     }).then((r) => {

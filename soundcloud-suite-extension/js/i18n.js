@@ -9,7 +9,7 @@
   if (window.__scsI18n) return;
   const LANGS = ['de', 'fr', 'es', 'pt', 'it', 'nl', 'pl', 'tr', 'ru', 'ja', 'ko'];
   const NUM = /\d[\d.,:]*/g;
-  const SKIP_CLASS = /(^|\s)(line|rline|tline|lines|res|qrow|qtitle|qart|hist|hrow|tt|nxt|mini|cur|nx|pv|ln|t|a|sce-mini-title|sce-mini-artist|bhx-track|bhx-artist|cmdkl|cmdki)(\s|$)/;   // pv · ln: the floating window's previous line and its line block
+  const SKIP_CLASS = /(^|\s)(line|rline|tline|lines|res|qrow|qtitle|qart|hist|hrow|tt|nxt|mini|cur|nx|pv|ln|t|a|sce-mini-title|sce-mini-artist|bhx-nowmeta|cmdkl|cmdki)(\s|$)/;   // pv · ln: the floating window's previous line and its line block
   const SKIP_TAG = /^(SCRIPT|STYLE|TEXTAREA|INPUT|CODE|PRE)$/;
   const ATTRS = ['title', 'placeholder', 'aria-label'];
   const norm = (s) => String(s).replace(/\s+/g, ' ').trim();

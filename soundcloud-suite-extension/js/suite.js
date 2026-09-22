@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.74.0
+// @version      4.75.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -85,6 +85,19 @@
         clientId: null, nextUp: null, libByUrl: null,
     };
     try { if (SUITE.W.__SCSUITE__) return; SUITE.W.__SCSUITE__ = true; } catch (e) {}
+    // The extension's relay leaves the window as soon as the suite holds it: from here on only this closure can
+    // send through bridge.js (which relays nothing the shim did not send), so a script on the page finds no way to
+    // fetch with the extension's host permissions. Under a userscript manager the sandbox's own GM_xmlhttpRequest
+    // serves as it is (sceRelay stays null)
+    const sceRelay = (() => {
+        try {
+            const w = SUITE.W;
+            if (!w.__SCSS_SHIM__ || typeof w.GM_xmlhttpRequest !== 'function') return null;
+            const f = w.GM_xmlhttpRequest;
+            try { delete w.GM_xmlhttpRequest; } catch (e) {}
+            return f;
+        } catch (e) { return null; }
+    })();
     // shared "is the page dark?" sniff. A transparent body (rgba(…,0)) used to
     // read as black → dark; walk up to <html>, then fall back to the OS scheme.
     SUITE.pageIsDark = () => {
@@ -104,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.74.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.75.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -471,6 +484,30 @@
     const allTime = Object.assign({ listenMs: 0, played: 0 }, LS.get('bh_sc_alltime', {}));
     const daily = LS.get('bh_sc_daily', {});   // 'YYYY-MM-DD' → listened ms (last ~3 weeks)
     const hourly = LS.get('bh_sc_hours', {});  // '0'..'23' → lifetime listened ms per hour of day
+    // listening counted since the last write: every tab keeps its own copy of the three objects above, so a
+    // write of the copy would clobber what another tab listened to. The deltas are added onto a fresh read
+    // of storage instead, and the copies take the merged result
+    const pend = { ms: 0, played: 0, day: {}, hour: {} };
+    function flushStats() {
+        if (!pend.ms && !pend.played) return;
+        const obj = (k) => { const v = LS.get(k, {}); return v && typeof v === 'object' ? v : {}; };
+        const at = obj('bh_sc_alltime');
+        allTime.listenMs = Math.max(0, +at.listenMs || 0) + pend.ms;
+        allTime.played = Math.max(0, at.played | 0) + pend.played;
+        LS.set('bh_sc_alltime', allTime);
+        const dd = obj('bh_sc_daily');
+        for (const k of Object.keys(pend.day)) dd[k] = (+dd[k] || 0) + pend.day[k];
+        const dks = Object.keys(dd).sort();
+        while (dks.length > 35) delete dd[dks.shift()];   // 35 days kept: the streak counter looks back 30
+        Object.keys(daily).forEach((k) => delete daily[k]); Object.assign(daily, dd);
+        LS.set('bh_sc_daily', daily);
+        const hh = obj('bh_sc_hours');
+        for (const k of Object.keys(pend.hour)) hh[k] = (+hh[k] || 0) + pend.hour[k];
+        Object.assign(hourly, hh);
+        LS.set('bh_sc_hours', hourly);
+        pend.ms = 0; pend.played = 0; pend.day = {}; pend.hour = {};
+    }
+    window.addEventListener('pagehide', () => { try { flushStats(); } catch (e) {} });
     function localDayKey(offsetDays) {
         const d = new Date(Date.now() - (offsetDays || 0) * 86400000);
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -567,7 +604,7 @@
     function lbSubmit(listens) {
         return new Promise((resolve, reject) => {
             try {
-                GM_xmlhttpRequest({
+                (sceRelay || GM_xmlhttpRequest)({
                     method: 'POST',
                     url: 'https://api.listenbrainz.org/1/submit-listens',
                     headers: { 'Content-Type': 'application/json', Authorization: 'Token ' + lbToken() },
@@ -1523,11 +1560,11 @@
             const pc = q('playControl');
             const playing = pc && pc.classList.contains('playing');
             if (playing) {
-                sess.listenMs += dt; allTime.listenMs += dt; W.curMs += dt;
+                sess.listenMs += dt; allTime.listenMs += dt; W.curMs += dt; pend.ms += dt;
                 const dk = localDayKey(0);
-                daily[dk] = (daily[dk] || 0) + dt;
+                daily[dk] = (daily[dk] || 0) + dt; pend.day[dk] = (pend.day[dk] || 0) + dt;
                 const hr = new Date().getHours();
-                hourly[hr] = (hourly[hr] || 0) + dt;
+                hourly[hr] = (hourly[hr] || 0) + dt; pend.hour[hr] = (pend.hour[hr] || 0) + dt;
                 dirty = true;
             }
 
@@ -1540,7 +1577,7 @@
                     const lmPrev = getLibMap();
                     const hitPrev = lmPrev && lmPrev.get(prevUrl);
                     const needMs = Math.min(CFG.playThresholdSec * 1000, hitPrev && hitPrev[2] > 0 ? hitPrev[2] * 0.8 : Infinity);
-                    if (W.curMs >= needMs) { sess.played++; allTime.played++; bumpPlay(prevUrl, 'p'); lbScrobble(prevUrl, Date.now() - W.curMs); }
+                    if (W.curMs >= needMs) { sess.played++; allTime.played++; pend.played++; bumpPlay(prevUrl, 'p'); lbScrobble(prevUrl, Date.now() - W.curMs); }
                     else if (W.curMs >= 2000) {
                         sess.skipped++; bumpPlay(prevUrl, 's');
                         // chronic skipper? close the loop: offer to block it
@@ -1655,14 +1692,7 @@
             }
 
             if (dirty) SS.set('bh_sc_sess', sess);
-            if (++W.saveTick % 5 === 0 && dirty) {
-                LS.set('bh_sc_alltime', allTime);
-                const dks = Object.keys(daily).sort();
-                while (dks.length > 35) delete daily[dks.shift()];   // 35 days kept: the streak counter looks back 30
-                LS.set('bh_sc_daily', daily);
-                LS.set('bh_sc_hours', hourly);
-                dirty = false;
-            }
+            if (++W.saveTick % 5 === 0 && dirty) { flushStats(); dirty = false; }
         }, 2000);
     }
 
@@ -1840,9 +1870,34 @@
             get: key => op('readonly', s => s.get(key)),
             set: (key, val) => op('readwrite', s => s.put(val, key)),
             del: key => op('readwrite', s => s.delete(key)),
+            keys: () => op('readonly', s => s.getAllKeys()),
             clear: () => op('readwrite', s => s.clear()),
         };
     })();
+    // Every profile whose likes were shuffled leaves its full library in the store, and the freshness window only
+    // decides whether a key is fetched again, never whether it is kept: a key not written for a week goes, your
+    // own stays. Keys are stamped in a small localStorage index at each write (the values are too big to read
+    // back just for their time), so the sweep costs a key listing and the deletes
+    const LIB_IDX = 'bh_sc_libidx';
+    let libSwept = false;
+    function idbPruneLib(keepKey) {
+        const idx0 = LS.get(LIB_IDX, {}), idx = idx0 && typeof idx0 === 'object' ? idx0 : {};
+        const now = Date.now();
+        idx[keepKey] = now;
+        if (libSwept) { LS.set(LIB_IDX, idx); return; }
+        libSwept = true;
+        LibCache.keys().then((keys) => {
+            const own = ownLibKey(), next = {}, gone = [];
+            for (const k of (keys || [])) {
+                if (typeof k !== 'string') continue;
+                if (k === own || k === keepKey) { next[k] = now; continue; }
+                const t = +idx[k] || now;   // a key written before the index existed starts its week now
+                if (now - t > 7 * 86400000) gone.push(k); else next[k] = t;
+            }
+            LS.set(LIB_IDX, next);
+            return Promise.all(gone.map((k) => LibCache.del(k)));
+        }).catch((e) => swallow(e, 'idbPruneLib'));
+    }
     async function idbLoadLib(libKey) {
         try {
             // the cache is best-effort: a wedged IndexedDB (storage pressure, a stuck profile) must not hold the run
@@ -1851,9 +1906,9 @@
         } catch (e) { swallow(e, 'idbLoadLib'); return null; }
     }
     function idbSaveLib(libKey, items, t) {
-        LibCache.set(libKey, { t: t || Date.now(), items }).catch(e => swallow(e, 'idbSaveLib'));
+        LibCache.set(libKey, { t: t || Date.now(), items }).then(() => idbPruneLib(libKey)).catch(e => swallow(e, 'idbSaveLib'));
     }
-    function idbClearLib() { libGen++; LibCache.clear().catch(e => swallow(e, 'idbClearLib')); }
+    function idbClearLib() { libGen++; LS.del(LIB_IDX); LibCache.clear().catch(e => swallow(e, 'idbClearLib')); }
 
     /* Background delta-sync: walk the newest pages and merge anything you
      * liked since the cache was written. Never blocks playback; new likes
@@ -1906,8 +1961,10 @@
         bgRefreshing = true;
         try {
             await waitFor(() => (S.tpl || S.clientId) && (S.auth || cookieAuth() || pageType === 'GenericLikes'), T.authWait, 200);
+            const gen0 = libGen;
             const fresh = await fetchLibrary(pageType, null, { detached: true });
             if (!fresh || fresh.length < 3) return;
+            if (gen0 !== libGen) return;   // "Forget" ran meanwhile: a cleared cache stays cleared
             if (S.sessionLibKey === libKey) { S.sessionLib = fresh; S.sessionLibAt = Date.now(); }
             if (pageType !== 'GenericLikes') saveCompactCache(fresh);
             idbSaveLib(libKey, fresh);
@@ -2329,6 +2386,7 @@
 
         toggleQueue('open');
         await waitFor(() => q('queueScrollable'), T.queueAppear);
+        if (S.cancelled) return;   // cancelled while the queue was appearing: no loader, no hidden panel left behind
         hideQueuePanel(true);
 
         if (!startLoader(onLoaderDone)) throw new Error('queue not available');
@@ -2445,6 +2503,8 @@
      *      well past startup,
      *   5. long hard stall (last resort). */
     function startLoader(onDone) {
+        if (S.cancelled || !S.active) return false;
+        stopLoader();   // a ticker and observer from an earlier start must never be orphaned
         const scrollable = q('queueScrollable');
         const heights = q('queueHeights');
         if (!scrollable || !heights) { return false; }
@@ -2812,8 +2872,10 @@
             showToast('Full backup downloaded', 'Shuffle + lyrics + enhancer settings');
         } catch (e) { swallow(e, 'export'); showToast('Export failed'); }
     }
-    function importData(file) {
+    function importData(file, onDone) {   // onDone: called once the file has been read and applied (or refused), so a host tab can rebuild itself from the new state
         const r = new FileReader();
+        let told = false;
+        const tell = () => { if (told) return; told = true; try { if (typeof onDone === 'function') onDone(); } catch (e) {} };
         r.onload = () => {
             try {
                 const d = JSON.parse(r.result);
@@ -2857,11 +2919,13 @@
                     Object.assign(daily, d.daily);
                     LS.set('bh_sc_daily', daily);
                 }
+                pend.ms = 0; pend.played = 0; pend.day = {}; pend.hour = {};   // the backup's numbers stand as restored
                 showToast('Backup imported — settings, history and stats restored');
                 closeCard();
             } catch (e) { swallow(e, 'import'); showToast('That file doesn’t look like a SoundCloud Suite backup'); }
+            tell();
         };
-        r.onerror = () => showToast('Couldn’t read that file');
+        r.onerror = () => { showToast('Couldn’t read that file'); tell(); };
         r.readAsText(file);
     }
 
@@ -3270,9 +3334,9 @@
                 const nowRow = el('div', 'bhx-now');
                 nowRow.appendChild(el('span', 'bhx-eq' + (live ? '' : ' paused'), '<span></span><span></span><span></span>'));
                 const meta = el('div', 'bhx-nowmeta');
-                const t1 = el('div', 'bhx-nowtitle'); t1.textContent = info.title;
+                const t1 = el('div', 'bhx-nowtitle'); t1.textContent = info.title; t1.setAttribute('data-i18n-skip', '');   // a title is never translated
                 meta.appendChild(t1);
-                if (info.artist) { const t2 = el('div', 'bhx-sub'); t2.textContent = info.artist; meta.appendChild(t2); }
+                if (info.artist) { const t2 = el('div', 'bhx-sub'); t2.textContent = info.artist; t2.setAttribute('data-i18n-skip', ''); meta.appendChild(t2); }
                 nowRow.appendChild(meta);
                 const ng = el('div', 'bhx-btnrow');
                 const nb = el('button', 'bhx-btn sm', 'Block');
@@ -3374,7 +3438,7 @@
                 if (next.length) {
                     next.forEach(x => {
                         const r = el('div', 'bhx-row');
-                        const l = el('div', 'bhx-lab');
+                        const l = el('div', 'bhx-lab'); l.setAttribute('data-i18n-skip', '');   // a track title and its artist are never translated
                         l.textContent = x.t || x.u;
                         if (x.a) { const s2 = el('span', 'bhx-sub'); s2.textContent = x.a; l.appendChild(s2); }
                         r.appendChild(l);
@@ -3720,7 +3784,7 @@
     // the standalone card only if the lyrics module isn't present
     SUITE.openShuffleSettings = (a) => { try { if (SUITE.openLyricsTweaks) SUITE.openLyricsTweaks(); else openSettings(a); } catch (e) { try { openSettings(a); } catch (e2) {} } };
     SUITE.backupAll = () => { try { exportData(); } catch (e) {} };          // whole-suite export
-    SUITE.restoreAll = (file) => { try { importData(file); } catch (e) {} };  // whole-suite import
+    SUITE.restoreAll = (file, onDone) => { try { importData(file, onDone); } catch (e) { try { if (typeof onDone === 'function') onDone(); } catch (e2) {} } };  // whole-suite import; onDone once it has been applied
     SUITE.openShuffleStats = (a) => { try { openStats(a); } catch (e) {} };
     // v2 hub bridges: the lyrics panel hosts Queue and Stats tabs now
     SUITE.queueList = () => (S.poolList && S.poolList.length ? S.poolList : null);
@@ -4562,9 +4626,9 @@
     // different song; the unguarded shortcut rendered exactly that
     if (sa.length > 3 && sb.length > 3 && (sa.includes(sb) || sb.includes(sa))
         && Math.min(sa.length, sb.length) / Math.max(sa.length, sb.length) >= 0.4) best = 0.93;
-    if (!best && sa.length > 8 && Math.abs(sa.length - sb.length) <= 2) {
+    if (!best && sa.length > 5 && Math.abs(sa.length - sb.length) <= 2) {   // six letters and up: at five, one edit is another word (lover / loved)
       const d = lev(sa, sb);
-      if (d <= Math.max(1, Math.floor(sa.length / 12))) best = 0.93; // Demons vs Demonz etc.
+      if (d <= Math.max(1, Math.floor(sa.length / 10))) best = 0.93; // Demons vs Demonz etc.
     }
     const ta = [...new Set(a.split(' '))], tb = [...new Set(b.split(' '))];
     const inter = ta.filter((t) => tb.includes(t)).length;
@@ -4658,7 +4722,7 @@
     junkBracket: new RegExp('[\\(\\[\\{][^\\)\\]\\}]*\\b(?:' + JUNK + ')\\b[^\\)\\]\\}]*[\\)\\]\\}]', 'gi'),
     bareProd: /(^|[\s\-–—])prod(?:\.|uced)?\s*(?:by)?\s+[^\-\(\[\)\]]{1,50}/gi,
     feat: /[\(\[\{]\s*(?:feat\.?|ft\.?|featuring|with|w\/)\s+([^\)\]\}]+)[\)\]\}]/i,
-    featTrail: /(?:^|\s)(?:feat\.?|ft\.?|featuring)\s+(.+)$/i,
+    featTrail: /(?:^|\s)(?:feat\.?|ft\.?|featuring)\s+(.+?)(?=\s+[-–—]\s+|$)/i,   // stops at a dash: "A ft. B - Song" keeps its song
     trailJunk: new RegExp('\\s*[\\-–—|/•·]+\\s*\\(?(?:cdq|hq|lq|leak(?:ed)?|unreleased|snippet|og|rip|full|final|v\\d+|wav|mp3|flac|320|free\\s*dl|exclusive|tag(?:ged)?|untagged|remaster(?:ed)?)\\)?\\s*$', 'i'),
     // bare version / format words with no bracket or dash around them, only at the tail (a real title keeps its words)
     bareJunk: new RegExp('(?:\\s+(?:sped\\s*up|sped-up|slowed(?:\\s*(?:\\+|and|&|n|x)?\\s*(?:reverb(?:ed)?|down))?|reverb(?:ed)?|nightcore|daycore|official(?:\\s*(?:music|lyrics?))?\\s*(?:video|audio|visuali[sz]er)|lyrics?(?:\\s*video)?|visuali[sz]er|hq|hd|4k|cdq|full\\s*(?:version|song|track)|out\\s*now|free\\s*(?:dl|download)|download|unreleased|leak(?:ed)?|snippet|tiktok(?:\\s*version)?))+\\s*$', 'i'),
@@ -4840,6 +4904,7 @@
    * (both normalized); '' means "must be empty". */
   const TITLE_CASES = [
     { in: 'MajinBlxxdy - Walkin Lick (Prod. Plague)', a: 'majinblxxdy', t: 'walkin lick' },
+    { in: 'Lil Tracy ft. Lil Peep - Like A Farmer', a: 'lil tracy', t: 'like a farmer' },
     { in: 'Children of the Corn - Chronic Time', a: 'children of the corn', t: 'chronic time' },
     { in: 'SLYMM_MUDDYY_1 - SLY GOFF [PROD SPLURCETTI]', a: 'slymm muddyy 1', t: 'sly goff' },
     { in: 'Knzck x Hi-c (Drown)', t: 'drown' },
@@ -4902,7 +4967,7 @@
     let done = false;
     const finish = (fn, v) => { if (!done) { done = true; fn(v); } };
     try {
-      GM_xmlhttpRequest({
+      (sceRelay || GM_xmlhttpRequest)({
         method: 'GET', url, headers, timeout,
         // never attach the user's cookies to third-party lyric hosts — a
         // logged-in Genius/Bing session must not be tied to lyric lookups
@@ -4967,6 +5032,9 @@
         out.push({ t, name: name.slice(0, 100), src: 'desc' });
       }
       if (out.length < 3) return [];
+      // a real tracklist runs in time order; a list of per-track lengths ("1. Song (3:45)") does not, and sorted it would
+      // become chapters at the wrong times under the wrong names
+      for (let i = 1; i < out.length; i++) if (out[i].t < out[i - 1].t) return [];
       out.sort((a, b) => a.t - b.t);
       const seen = new Set();
       return out.filter((c) => { if (seen.has(c.t)) return false; seen.add(c.t); return true; });
@@ -5087,7 +5155,7 @@
   function gmPostJSON(url, bodyObj, headers) {
     return new Promise((resolve, reject) => {
       try {
-        GM_xmlhttpRequest({
+        (sceRelay || GM_xmlhttpRequest)({
           method: 'POST', url, timeout: 12000, anonymous: true,
           headers: Object.assign({ 'Content-Type': 'application/json' }, LRC_HEADERS, headers || {}),
           data: bodyObj == null ? '' : JSON.stringify(bodyObj),
@@ -5324,13 +5392,12 @@
   const geniusApiSearch = (q) => {
     if (!Gtok.has() || !q) return Promise.resolve({ songs: [] });
     return SearchMemo.wrap('ga', q, async () => {
-      try {
-        const j = await gmJSON('https://api.genius.com/search?q=' + encodeURIComponent(q),
-          { headers: { Authorization: 'Bearer ' + Gtok.get(), Accept: 'application/json' }, timeout: 8000 });
-        const r = parseGeniusSearch(j);
-        if (r.songs.length) { GH.ok++; if (Gmode.get() === 'proxy') Gmode.set('direct'); }
-        return r;
-      } catch (e) { return { songs: [] }; }
+      // a network failure rejects (the memo keeps no rejection) rather than reading as "no results" for five minutes
+      const j = await gmJSON('https://api.genius.com/search?q=' + encodeURIComponent(q),
+        { headers: { Authorization: 'Bearer ' + Gtok.get(), Accept: 'application/json' }, timeout: 8000 });
+      const r = parseGeniusSearch(j);
+      if (r.songs.length) { GH.ok++; if (Gmode.get() === 'proxy') Gmode.set('direct'); }
+      return r;
     });
   };
 
@@ -5544,10 +5611,11 @@
           const html = await gmFetch(pageUrl, { timeout: 10000, prio: true });
           const r = viaHtml(html);
           if (r) { GH.ok++; if (Gmode.get() === 'proxy') Gmode.set('direct'); return r; }
-          GH.bad++; if (GH.ok === 0 && GH.bad >= 2) Gmode.set('proxy');
+          // only a Cloudflare challenge counts against the direct route: a page without a lyrics container is that page's own problem
+          if (/just a moment|cf-chl|challenge-platform/i.test(String(html || '').slice(0, 3000))) { GH.bad++; if (GH.ok === 0 && GH.bad >= 2) Gmode.set('proxy'); }
           return null;
         } catch (e) {
-          GH.bad++; if (GH.ok === 0 && GH.bad >= 2) Gmode.set('proxy');
+          if (/^HTTP (403|503)\b|^html$/i.test(String((e && e.message) || ''))) { GH.bad++; if (GH.ok === 0 && GH.bad >= 2) Gmode.set('proxy'); }
           return null;
         }
       };
@@ -6141,6 +6209,36 @@
     return body.split('\n').map((x) => x.trim());
   }
 
+  // lyrics typed into the comments of this very upload: one long multi-line comment that reads like a sheet, or a run of
+  // timestamped one-line comments by one listener (the artist first of all), in time order. Text, not timing — a comment's
+  // stamp is where the listener was, not where the line starts; the aligner does the timing.
+  function commentLyricsFrom(list, uploaderId, dur) {
+    if (!Array.isArray(list) || !list.length) return null;
+    let long = null; const runs = new Map();
+    for (const c of list) {
+      if (!c || typeof c.body !== 'string') continue;
+      const uid = c.user && c.user.id, up = uploaderId != null && uid === uploaderId;
+      const dl = descLyricsFrom(c.body);
+      if (dl && (!long || (up && !long.up) || (up === long.up && dl.length > long.lines.length))) long = { lines: dl, up };
+      const line = c.body.replace(/\s+/g, ' ').trim();
+      if (typeof c.timestamp === 'number' && c.timestamp >= 0 && line.length >= 2 && line.length <= 90 && !DESC_JUNK.test(line) && (line.match(/\p{L}/gu) || []).length >= line.length * 0.5) {
+        const key = uid == null ? 'anon' : String(uid);
+        if (!runs.has(key)) runs.set(key, { up, items: [] });
+        runs.get(key).items.push({ t: c.timestamp, line });
+      }
+    }
+    let run = null;
+    for (const r of runs.values()) {
+      if (r.items.length < 8) continue;
+      r.items.sort((p, q) => p.t - q.t);
+      if (dur > 0 && r.items[r.items.length - 1].t - r.items[0].t < 0.3 * dur * 1000) continue;   // a few lines in one spot are a quote, not a sheet
+      if (!run || (r.up && !run.up) || (r.up === run.up && r.items.length > run.items.length)) run = r;
+    }
+    if (long && (!run || (long.up && !run.up) || (long.up === run.up && long.lines.length >= run.items.length))) return { lines: long.lines, up: long.up, kind: 'long' };
+    if (run) return { lines: run.items.map((x) => x.line), up: run.up, kind: 'run' };
+    return null;
+  }
+
   /* ----- DIAGNOSTICS — tests every route against a known song ----- */
 
   const DIAG_URL = 'https://genius.com/Kendrick-lamar-humble-lyrics';
@@ -6239,7 +6337,7 @@
   }
 
   function parseLRC(raw, selfArtist, selfTitle) {
-    const tagRe = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+    const tagRe = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;   // three-digit minutes: long sets and mixes
     let offset = 0;
     const out = [];
     for (const lineRaw of String(raw || '').split(/\r?\n/)) {
@@ -6252,7 +6350,7 @@
       if (om) { offset = parseInt(om[1], 10) || 0; if (!/\[\d{1,2}:\d{2}/.test(lineRaw)) continue; }
       const tags = [...lineRaw.matchAll(tagRe)];
       if (!tags.length) continue;
-      const text = lineRaw.replace(tagRe, '').replace(/<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g, '').replace(/\s{2,}/g, ' ').trim();   // enhanced-LRC word tags too
+      const text = lineRaw.replace(tagRe, '').replace(/<\d{1,3}:\d{2}(?:[.:]\d{1,3})?>/g, '').replace(/\s{2,}/g, ' ').trim();   // enhanced-LRC word tags too
       if (!text) continue;
       for (const m of tags) {
         const mm = parseInt(m[1], 10), ss = parseInt(m[2], 10);
@@ -6584,6 +6682,7 @@
     } catch (e) {}
     const banTag = (it) => (it.src || '') + '|' + normKey((it.a || '') + ' ' + (it.t || ''));
     const descBanned = () => !!(banned && banned.includes('scdesc|' + normKey((meta.uploader || '') + ' ' + (meta.title || ''))));
+    const commentBanned = () => !!(banned && banned.includes('sccomment|' + normKey((meta.uploader || '') + ' ' + (meta.title || ''))));
     const nearRun = (meta.nearRun = (meta.nearRun || 0) + 1);   // only the newest run for this track may write meta.near
     Trail.add(`find "${meta.title}" · up:${meta.uploader} · dur:${meta.dur || '?'} · gmode:${Gmode.get()}`);
     return new Promise((resolve, reject) => {
@@ -6594,6 +6693,7 @@
       let resolved = null;   // what finish() delivered — a late result may only replace it when clearly better
       const lateOk = (score, synced) => !resolved || ((score || 0) > (resolved.score || 0) + 0.1 && (!resolved.synced || !!synced));
       let partialFired = false;   // provisional render: best-ready result shown while verification continues
+      let partialCand = null;     // the candidate behind that render, retracted if the cross-check later rejects it
       const pool = [], lyricPool = [], reserve = [];
       const bodies = new Map(); // cand.id → { state:'p'|'ok'|'bad', synced, lines }
       const timers = [];
@@ -6635,7 +6735,11 @@
         } catch (e) { return true; }
       };
       const finish = (v) => {
-        if (v && !xcheck(v)) { pool.sort((a, b) => b.score - a.score); judge(); return; }
+        if (v && !xcheck(v)) {
+          // the sheet on screen was this one: take it back, or the caller would keep and cache what the cross-check refused
+          if (partialCand && v.src === partialCand.src && v.t === partialCand.t && v.a === partialCand.a) { partialCand = null; try { if (opts && opts.onPartial) opts.onPartial(null); } catch (e) {} }
+          pool.sort((a, b) => b.score - a.score); judge(); return;
+        }
         if (!done) {
           done = true; resolved = v || null; stop();
           // the strangers that fit the title and nothing else: the "no lyrics" card names them, and Search starts from the first
@@ -6693,10 +6797,13 @@
           bodies.set(c.id, body ? { state: 'ok', synced: body.synced, lines: body.lines, wt: body.wt || null } : { state: 'bad' });
           Trail.add(`body ${c.src} "${c.t}" (${(c.score || 0).toFixed(2)}) → ${body ? 'ok' : noSheet ? 'no sheet there' : 'FAILED on every route'}`);
           if (!body) pivot();
-          if (done && body && !lateFired && c.score >= 0.55 && typeof onLate === 'function' && lateOk(c.score, body.synced)) {
-            lateFired = true;
-            Trail.add('late delivery → rendering now');
-            try { onLate(mkBody(c, { state: 'ok', synced: body.synced, lines: body.lines, wt: body.wt || null })); } catch (e) {}
+          if (done && body && !lateFired && c.score >= 0.55 && typeof onLate === 'function') {
+            const r = readyResult(c);   // the gates every other render passes: the title floor, the confirmation
+            if (r && !r.instr && lateOk(c.score, r.synced)) {
+              lateFired = true;
+              Trail.add('late delivery → rendering now');
+              try { onLate(r); } catch (e) {}
+            }
           }
           judge();
         }).catch(() => {
@@ -6814,6 +6921,12 @@
           finish({ src: 'scdesc', synced: false, lines: meta.descLyrics, a: meta.uploader || '', t: meta.title || '', low: true });
           return;
         }
+        // the sheet a listener typed into this upload's comments: the identity is the upload's own, so it is cached like any sheet
+        if (!lite && !commentBanned() && meta.commentLyrics && meta.commentLyrics.filter(Boolean).length >= 8) {
+          Trail.add('→ falling back to the lyrics in the comments');
+          finish({ src: 'sccomment', synced: false, lines: meta.commentLyrics, a: meta.uploader || '', t: meta.title || '' });
+          return;
+        }
         finish(null);
       }
 
@@ -6860,7 +6973,7 @@
           if (lead && lead.src !== 'ovh' && (lead.score >= 0.70 || (tier >= 1 && lead.score >= 0.64))) {
             const rp = readyResult(lead);
             if (rp && !rp.instr && (rp.synced || lead.src === 'genius')) {
-              partialFired = true;
+              partialFired = true; partialCand = lead;
               try { opts.onPartial(rp); } catch (e) {}
             }
           }
@@ -6896,7 +7009,8 @@
         // found at 1.07 but rendered nothing" bug: it arrived just post-done.
         if (done) {
           if (lateFired || typeof onLate !== 'function') return;
-          for (const it of (res.songs || [])) {
+          for (const it0 of (res.songs || [])) {
+            const it = Object.assign({}, it0);   // a copy: the memos hand every run the same objects, and a run's scores are its own
             if (banned && banned.includes(banTag(it))) continue;
             if (pool.some((p) => p.id === it.id)) continue;
             it.score = scoreCand(it, G, meta.dur); spreadSure([it], pool);
@@ -6912,7 +7026,8 @@
           return;
         }
         const wantLatin = latinish(G.clean.title) > 0.7;
-        for (const it of res.songs || []) {
+        for (const it0 of res.songs || []) {
+          const it = Object.assign({}, it0);   // a copy (see the late branch): scores, flags and the cross-check verdict never leak between runs
           // language gate: a Latin-titled track never matches a CJK/Cyrillic candidate
           // a CJK-catalogue entry whose length matches this upload to the second is evidence, not noise: keep it
           const durHit = meta.dur > 0 && it.dur > 0 && Math.abs(it.dur - meta.dur) <= 1.5 && (it.synced || it.src === 'kugou' || it.src === 'netease' || it.src === 'qq');
@@ -6978,7 +7093,8 @@
           pool.sort((a, b) => b.score - a.score);
           if (pool[0] && pool[0].score >= 0.62) { stageFired = true; try { onStage(pool[0]); } catch (e) {} }
         }
-        for (const it of res.lyricHits || []) {
+        for (const it0 of res.lyricHits || []) {
+          const it = Object.assign({}, it0);
           if (lyricPool.some((p) => p.id === it.id) || pool.some((p) => p.id === it.id)) continue;
           it.score = scoreCand(it, G, meta.dur);
           lyricPool.push(it);
@@ -7034,6 +7150,18 @@
         }
       };
 
+      // the comments of the upload itself, scanned for a sheet when there are enough of them; a last resort behind the
+      // description, never on a lite pre-warm
+      const commentScan = async (d) => {
+        try {
+          const cid = SUITE.clientId ? SUITE.clientId() : null; if (!cid) return { songs: [] };
+          const j = await gmJSON('https://api-v2.soundcloud.com/tracks/' + encodeURIComponent(d.id) + '/comments?client_id=' + encodeURIComponent(cid) + '&threaded=0&filter_replies=0&limit=200', { timeout: 6000 }).catch(() => null);
+          if (done || !j) return { songs: [] };
+          const r = commentLyricsFrom(j.collection, d.user && d.user.id, meta.dur);
+          if (r) { meta.commentLyrics = r.lines; Trail.add(`sc comments: ${r.up ? 'the uploader’s' : 'a listener’s'} ${r.kind === 'run' ? 'timestamped lines' : 'sheet'} (${r.lines.filter(Boolean).length} lines)`); }
+        } catch (e) {}
+        return { songs: [] };
+      };
       const scEnrich = async () => {
         try {
           if (!meta.href) return { songs: [] };
@@ -7048,6 +7176,7 @@
               Trail.add(`library cache: artist "${lib.artist}"`);
               G.hints.unshift({ a: lib.artist, conf: 0.95 });
               rescoreAll(); judge();
+              if (done) return { songs: [] };   // the judge may have concluded: no more requests after the fact
               fireForArtist(lib.artist);
             }
           }
@@ -7059,6 +7188,7 @@
           // 3) fall back to the old HTML scrape only when both fast paths miss
           if (!d && !lib) d = await scTrackData(meta.href);
           if (!d || done) return { songs: [] };
+          if (!lite && d.id && (d.comment_count | 0) >= 8 && !meta.commentLyrics && !commentBanned()) track(commentScan(d), false, true);
           if (d.duration && (!(meta.dur > 0) || Math.abs(meta.dur - d.duration / 1000) > 2)) {
             meta.dur = Math.round(d.duration / 1000);
           }
@@ -7105,6 +7235,7 @@
           }
           if (newArtist && vouch(newArtist, 0.95, true)) {
             rescoreAll(); judge();
+            if (done) return { songs: [] };
             fireForArtist(newArtist);
           } else {
             rescoreAll(); judge();
@@ -7135,6 +7266,7 @@
             if (vouched) vouch(best.a, 0.9, false); else if (!G.hints.some((h) => normKey(h.a) === normKey(best.a))) G.hints.push({ a: best.a, conf: 0.9, d: 1 });
             if (!G.titles.some((t) => sameTitle(t, best.t))) G.titles.push(best.t);
             rescoreAll(); judge();
+            if (done) return { songs: [] };
             track(lrcGet({ track: best.t, artist: best.a, album: best.al, dur: best.dur }));
             track(lrcSearch({ track: best.t, artist: best.a }));
             track(MXM.find({ artist: best.a, track: best.t, dur: best.dur || meta.dur }));
@@ -7347,7 +7479,7 @@
    *  8. UI
    * ------------------------------------------------------------------ */
 
-  const SRC_NAME = { genius: 'Genius', lrclib: 'LRCLIB', kugou: 'Kugou', netease: 'NetEase', qq: 'QQ Music', mxm: 'Musixmatch', ovh: 'Lyrics.ovh', file: 'Your file', paste: 'Pasted', scdesc: 'SC description' };
+  const SRC_NAME = { genius: 'Genius', lrclib: 'LRCLIB', kugou: 'Kugou', netease: 'NetEase', qq: 'QQ Music', mxm: 'Musixmatch', ovh: 'Lyrics.ovh', file: 'Your file', paste: 'Pasted', scdesc: 'SC description', sccomment: 'SC comments' };
   // what was unavailable during a search, in plain words, for the "no lyrics" card
   function degradedReasons() {
     const r = [];
@@ -7619,6 +7751,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel.max.stage::before { display: none; }
 .panel.max.stage .glow { top: -12vh; left: -12vw; right: -12vw; bottom: -12vh; height: auto; filter: blur(80px) saturate(170%) brightness(.62); opacity: 1 !important; transition: opacity 1s ease; }
 .panel.max.stage.st-dark .glow { opacity: .16 !important; }
+.panel .stpulse { display: none; }
 .panel.max.stage .stpulse { display: none; position: absolute; top: -8vh; left: -8vw; width: calc(100% + 16vw); height: calc(100% + 16vh); pointer-events: none; filter: blur(34px) saturate(130%); opacity: 0; transition: opacity 1s ease; }
 .panel.max.stage.st-pulse .stpulse { display: block; opacity: .9; }
 .panel.max.stage.st-pulse .glow { opacity: .22 !important; }
@@ -9201,7 +9334,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = (tidy(e.t) || 'Unknown title') + (tidy(e.a) ? ' — ' + tidy(e.a) : '');
           const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = '“' + hit.slice(0, 60) + (hit.length > 60 ? '…' : '') + '”'; qa.style.maxWidth = '55%';
           r.append(qt, qa);
-          const href = k.indexOf('p:') === 0 ? k.slice(2) : '';
+          const href = (k.indexOf('p:') === 0 && /^\/[\w-]+\/[\w-]+/.test(k.slice(2))) ? k.slice(2) : '';   // a restored key is data: only a track path becomes a link
           const go = () => { wrap.remove(); if (href) { try { const a = document.createElement('a'); a.href = href; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); } catch (er) { try { location.assign(href); } catch (er2) {} } } else { try { window.open('https://soundcloud.com/search?q=' + encodeURIComponent(((e.a || '') + ' ' + (e.t || '')).trim()), '_blank'); } catch (er) {} } };
           r.title = href ? 'Open this track' : 'Search SoundCloud for it';
           r.addEventListener('click', go);
@@ -9268,6 +9401,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🔒', 'The relay answers to the suite alone', 'The extension fetches lyrics with its own permissions, and until now any script on soundcloud.com could ask it to. The request path is now a private channel the suite and the extension share before the page’s own scripts run, the request function leaves the window once the suite holds it, and a request from anywhere else is not relayed. Nothing changes for you; the privacy policy says how it works.'],
+          ['🧹', 'Five more from the review', 'Listening stats kept in two tabs no longer overwrite each other: each tab adds what it counted to what is stored. Another profile’s cached library is cleared a week after its last shuffle instead of staying forever (yours stays). The clip guard’s bypass is now part of the detector, so the level never steps when the guard engages or lets go, and a chain the player has abandoned stops its worklets instead of rendering silence.'],
+          ['🧰', 'Twenty-six fixes from a review of every module', 'Seven reviewers read the whole suite. The title parser read “A ft. B - Song” as a song called A by nobody, so every search for that common form went wrong — fixed, with a self-test. A stage backdrop set to Pulse leaked its canvas into the ordinary panel above the header. The player-bar pill now hides its least-used tools when the bar has no room, so the gear is never the one cut off. A lyric search that finished on a rejected sheet, a re-search that left the loading skeleton up, history rows with a doubled origin, digits 6–9 reaching SoundCloud’s seek, an Escape swallowed by the list ring, M muting twice, a shuffle loader orphaned by a cancel, “Forget” undone by a background refresh, “Clear settings” that cleared nothing, a tracklist of song lengths read as chapters, a Genius outage remembered for five minutes, per-track loudness measured on the next track’s audio, and an Enhance curve re-uploaded on every slider tick — all fixed.'],
           ['☝', 'Tap the tempo yourself', 'When the reading is wrong — a triplet feel the detector reads at its faster pulse, a track with two tempos — a Tap button beside the readout takes over: eight taps (or four and a pause) set this track’s tempo from the median interval, it is remembered as tapped, the detector leaves it alone, the beat dot follows it, and “Detect again” measures the track anew.'],
           ['▤', 'What’s new, one page', 'This panel shows the newest eight cards; the rest wait behind “Earlier releases”, so it reads as a page rather than a scroll of every release since 4.53.'],
           ['◉', 'A dot on the beat', 'Beside the tempo readout a dot blinks on each beat, and the stage’s pulse backdrop swells on it. The beat’s phase comes from the same onset envelope the tempo does: over the last 12 s, the comb that gathers the most onset strength at a period within 1.5 % of the published tempo, refitted every 2 s and trusted only once two fits in a row land on the same beat within 25 ms — a track whose beat the comb cannot hold shows no clock rather than a wrong one. The output latency is added, so the dot and the sound agree.'],
@@ -9883,7 +10019,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = e.t;
               const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = e.a || '';
               r.append(n, qt, qa);
-              const go = () => playHref('https://soundcloud.com' + e.u);
+              const go = () => playHref(e.u);   // the history stores full URLs
               r.addEventListener('click', go);
               r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); swallowNextKeyup(ev.key); go(); } });
               box.appendChild(r); shown++;
@@ -9905,7 +10041,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mk('Export history CSV', () => {
         const h = (SUITE.historyList && SUITE.historyList(5000)) || []; if (!h.length) { toast('No history yet'); return; }
         const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-        const csv = ['played_at,title,artist,url'].concat(h.map((e) => [e.ts ? new Date(e.ts).toISOString() : '', e.t, e.a, 'https://soundcloud.com' + e.u].map(esc).join(','))).join('\n');
+        const csv = ['played_at,title,artist,url'].concat(h.map((e) => [e.ts ? new Date(e.ts).toISOString() : '', e.t, e.a, e.u].map(esc).join(','))).join('\n');
         try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'soundcloud-history-' + new Date().toISOString().slice(0, 10) + '.csv'; (document.body || document.documentElement).appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1000); toast('History exported · ' + h.length + ' plays'); } catch (e) { toast('Export failed'); }
       });
       mk('Copy history', () => {
@@ -10734,7 +10870,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       return new Promise((res) => {
         try {
           const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(lang) + '&dt=t' + (rom ? '&dt=rm' : '') + '&q=' + encodeURIComponent(text);
-          GM_xmlhttpRequest({
+          (sceRelay || GM_xmlhttpRequest)({
             method: 'GET', url, timeout: 12000, anonymous: true,   // don't send the user's Google cookies
             onload: (r) => { try { const j = JSON.parse(r.responseText); const segs = (j && j[0]) || []; let out = '', ro = ''; for (const s of segs) { if (s && s[0] != null) out += s[0]; if (s && typeof s[3] === 'string') ro += s[3]; } res(rom ? { text: out, rom: ro } : out); } catch (e) { res(null); } },
             onerror: () => res(null), ontimeout: () => res(null),
@@ -11273,6 +11409,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try { clearAnnouncer(); } catch (e) {}   // drop the SR live-region + cancel any pending announce
         const ps = panel.querySelector('.keys.on');
         if (ps && ps !== keysEl && ps !== wnEl) ps.remove();
+        if (wnEl) wnEl.classList.remove('on');   // the What's-new card does not outlive a close
         if (maxOn) toggleMax(false, true);   // silent: closing must not forget the preference
       }
     }
@@ -11562,6 +11699,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mount, setOpen, isOpen: () => open, setNext,
       setHeader, setSrcLine, setReady, setBusy,
       showIdle, showLoading, showNone, showError, showInstrumental, showDiag, showWhatsNew,
+      hasSheet: () => !!(body && body.querySelector('.line')),   // a sheet is on screen (not the loading skeleton or a card)
+      swallowNextKeyup,   // the hub's key handler activates ARIA buttons with Space and must eat the keyup the same way rows do
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
       shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
@@ -11951,7 +12090,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!UI.isOpen()) return;
       if (!result) { UI.showNone(meta && meta.near); return; }
       if (result.instr) { UI.showInstrumental(); return; }
-      if (same) { const sl = UI.srcFor(result); UI.setSrcLine(sl[0], sl[1]); return; }
+      if (same && UI.hasSheet()) { const sl = UI.srcFor(result); UI.setSrcLine(sl[0], sl[1]); return; }   // the same sheet behind a loading skeleton (a re-search) is painted again
       UI.renderLyrics(result);
     }
 
@@ -12132,7 +12271,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
       }, {
         onPartial: (rp) => {
-          if (token !== myToken || partial) return;
+          if (token !== myToken) return;
+          if (!rp) { if (!partial) return; partial = null; if (UI.isOpen() && !UI.inSearch()) UI.showLoading(); return; }   // retracted: the cross-check refused the sheet on screen, the search goes on
+          if (partial) return;
           partial = rp;
           // lyrics on screen NOW, through the same door as a final result: the sheet shown before this one leaves
           // nothing behind (its looks, its auto offset, its voice pins — a banned sheet used to hand its state to the
@@ -12895,7 +13036,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // would double-toggle play or double-seek)
       // a focused panel button (switch, tab, chip) keeps Space for itself — and SoundCloud must not see it either
       if ((e.key === ' ' || e.key === 'Spacebar') && rt && rt.tagName === 'BUTTON' && !UI.tapActive()) { e.stopPropagation(); return; }
-      if ((e.key === ' ' || e.key === 'Spacebar') && rt && typeof rt.getAttribute === 'function' && rt.getAttribute('role') === 'button' && !UI.tapActive()) { own(); try { rt.click(); } catch (e2) {} return; }   // ARIA buttons (chapter rows) activate like real ones
+      if ((e.key === ' ' || e.key === 'Spacebar') && rt && typeof rt.getAttribute === 'function' && rt.getAttribute('role') === 'button' && !UI.tapActive()) { own(); UI.swallowNextKeyup(e.key); try { rt.click(); } catch (e2) {} return; }   // ARIA buttons (chapter rows) activate like real ones
       if (e.key === ' ' || e.key === 'Spacebar') { own(); if (UI.tapActive()) UI.tapAdvance(); else App.playPause(); return; }
       if (e.key === 'a' || e.key === 'A') { own(); UI.startTapAlign(); return; }
       if (e.key === 'j' || e.key === 'J') { own(); App.seekBy(-10); return; }
@@ -12916,6 +13057,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (e.key === '5') { own(); UI.setTab('tweaks'); return; }
       if (e.key === '-' || e.key === '=' || e.key === '+') { own(); UI.bumpFont(e.key === '-' ? -1 : 1); return; }
       if (e.key === '0') { own(); App.nudge(0); return; }
+      if (/^[6-9]$/.test(e.key)) { own(); return; }   // SoundCloud seeks on every digit: the hub owns them all while open
     }, true);
     // keyup: a held A (compare) on the Audio tab is released here, since the hub owns the keys while open
     window.addEventListener('keyup', (e) => { try { if (UI.isOpen() && SUITE.audioKey) SUITE.audioKey(e); } catch (e2) {} }, true);   // any tab: a release must always clear a held compare
@@ -13858,7 +14000,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   //   const lim = TP_LIMITER.create(ctx)   → AudioWorkletNode or null (if not loaded)
   //   lim.parameters.get('ceiling').value = -1     // dBTP  (default -1, range -40..0)
   //   lim.parameters.get('release').value = 0.08   // s     (default 0.08, range 0.005..2)
-  //   lim.parameters.get('bypass').value  = 1      // 1 = delayed dry signal, unchanged
+  //   lim.parameters.get('bypass').value  = 1      // 1 = delayed dry signal: the gain releases to exact unity (no step)
   //   lim.latencySamples / lim.latencyMs           // look-ahead delay (5 ms, rounded to samples)
   //   lim.gainReduction                            // dB of reduction (>= 0), refreshed <= 10×/s
   //   lim.port 'message' events: { gr: <dB of reduction, >= 0> }, at most 10 per second
@@ -13962,10 +14104,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       this.L1 = l1;                                       // max phase L1 norm (≈ 2.04): |FIR out| ≤ L1·max|x|
       this.ceilDb = NaN; this.C = 1; this.thr = 1;
       this.relS = NaN; this.tauMul = 0; this.alpha = 0;
+      this.alphaB = 1 - Math.exp(-1 / (0.02 * fs));    // release while bypassed: 20 ms, so the dry signal is exact within a quarter second
       this.idle = 0; this.zeros = null; this.scratch = null;
       this.repEvery = Math.max(1, Math.round(fs / 10)); this.repCount = 0; this.gMinRep = 1; this.lastGr = 0;
+      this.dead = false;
+      var self = this;
+      this.port.onmessage = function (e) { if (e && e.data && e.data.stop) self.dead = true; };   // an evicted chain's node stops rendering
     }
     process(inputs, outputs, params) {
+      if (this.dead) return false;
       var out = outputs[0];
       if (!out || !out.length) return true;
       var oL = out[0], N = oL.length;
@@ -13987,7 +14134,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       var tauMul = 1 + 3 * Math.min(1, this.hold / 0.3), relS = params.release[0];
       if (relS !== this.relS || tauMul !== this.tauMul) { this.relS = relS; this.tauMul = tauMul; this.alpha = 1 - Math.exp(-1 / (relS * tauMul * sampleRate)); }
       var bypass = params.bypass[0] >= 0.5;
-      var rL = this.rL, rR = this.rR, m = this.mask, D = this.D, G = this.G, W = this.W, A = this.A, C = this.C, thr = this.thr, alpha = this.alpha;
+      var rL = this.rL, rR = this.rR, m = this.mask, D = this.D, G = this.G, W = this.W, A = this.A, C = this.C, thr = this.thr, alpha = bypass ? this.alphaB : this.alpha;
       var h0 = this.h0, h1 = this.h1, h2 = this.h2, h3 = this.h3, qv = this.qv, qi = this.qi, qm = this.qm, box = this.box, invA = this.invA;
       var w = this.w, t = this.t, qh = this.qh, qt = this.qt, loud = this.loud, grel = this.grel, bi = this.bi, sum = this.sum, nBelow = this.nBelow, gMinRep = this.gMinRep;
       var limCount = 0;
@@ -13996,8 +14143,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         rL[w] = xL; rR[w] = xR;
         var aL = xL < 0 ? -xL : xL, aR = xR < 0 ? -xR : xR; if (aR > aL) aL = aR;
         if (aL > thr) loud = T; else if (loud > 0) loud--;  // FIR needed only while a loud sample is within its span
+        // bypass is a detector input, not an output switch: the target gain reads 1, so the release and the attack
+        // ramp carry the gain to exact unity and back with no step in the signal, whatever was being limited
         var tg = 1;
-        if (loud > 0) {
+        if (loud > 0 && !bypass) {
           var pk = rL[(w - G) & m]; if (pk < 0) pk = -pk;
           var s0 = 0, s1 = 0, s2 = 0, s3 = 0, i, v;
           for (i = 0; i < T; i++) { v = rL[(w - i) & m]; s0 += h0[i] * v; s1 += h1[i] * v; s2 += h2[i] * v; s3 += h3[i] * v; }
@@ -14032,7 +14181,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         sum += grel - old;
         var g;
         if (nBelow === 0) { g = 1; sum = A; } else { g = sum * invA; if (g > 1) g = 1; }
-        if (bypass) g = 1;
         if (g < gMinRep) gMinRep = g;
         var rp = (w - D) & m;
         oL[n] = rL[rp] * g; oR[n] = rR[rp] * g;
@@ -14072,6 +14220,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       this.edges = new Uint16Array(nb + 1); for (i = 0; i <= nb; i++) this.edges[i] = Math.max(1, Math.min(N / 2, Math.round(50 * Math.pow(160, i / nb) * N / sr)));
       this.prev = new Float32Array(nb); this.havePrev = false;
       this.acc = new Float32Array(16); this.k = 0;
+      this.dead = false;
+      var self = this;
+      this.port.onmessage = function (e) { if (e && e.data && e.data.stop) self.dead = true; };
     }
     frame() {
       var N = this.N, re = this.re, im = this.im, rev = this.rev, buf = this.buf, win = this.win, cs = this.cs, sn = this.sn;
@@ -14100,6 +14251,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (this.k >= 16) { this.port.postMessage({ e: this.acc.slice(0), fs: this.fs }); this.k = 0; }
     }
     process(inputs) {
+      if (this.dead) return false;
       var inp = inputs[0]; if (!inp || !inp.length || !inp[0]) return true;
       var L = inp[0], R = inp[1] || inp[0], n = L.length, buf = this.buf, N = this.N, hop = this.hop, D = this.D, i;
       for (i = 0; i < n; i++) {
@@ -14718,6 +14870,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try {
           const old = sceFx.values().next().value; sceFx.delete(old);
           old.routed = false; try { old.reroute(); } catch (e) {}
+          // a worklet node keeps its processor alive while process() returns true, connected or not: told to
+          // stop, the limiter and the onset feed of the evicted chain return false and are collected
+          for (const k of ['tpl', 'onset']) { try { const nd = old.chain && old.chain[k]; if (nd && nd.port) nd.port.postMessage({ stop: 1 }); } catch (e) {} }
           const walk = (v) => {
             if (!v || typeof v !== 'object' || ArrayBuffer.isView(v)) return;
             if (typeof v.disconnect === 'function' && typeof v.context === 'object') { try { v.disconnect(); } catch (e) {} return; }
@@ -14855,8 +15010,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         }
         setEnhanceParams(c, enhA, bank, enhTrack.off, w, db2g);
         try {
-          const curve = enhA > 0 ? satCurve(enhA) : null;
-          if (c.shaper.curve !== curve) c.shaper.curve = curve;
+          const curve = enhA > 0 ? satCurve(enhA) : null, satKey = enhA > 0 ? Math.round(enhA * 100) : -1;
+          // the curve getter returns a copy, so comparing arrays re-uploaded the curve on every applyFx (a lock the render
+          // thread can lose: a dropout per slider tick) — compare a key, and the node's own null-ness in case Compare cleared it
+          if (c.satKey !== satKey || !c.shaper.curve !== !curve) { c.satKey = satKey; c.shaper.curve = curve; }
           // the resamplers (and their 192-sample latency) follow the REAL toggle only: Compare
           // nulls the curve but leaves oversample, so the lyric clock stays put. Both shapers
           // switch together — the exciter leg must carry the same delay as the shaper it sums with.
@@ -14887,7 +15044,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         w(c.lim.threshold, !tp && L ? -3 : 0); w(c.lim.knee, 0); w(c.lim.ratio, !tp && L ? 20 : 1);
         try { c.lim.attack.value = 0.001; c.lim.release.value = 0.08; } catch (er) {}
         w(c.limTrim.gain, tp ? 1 : limTrimFor());
-        if (c.tpl) {   // bypass is a hard flip inside the worklet: engage at once, release 100 ms later so a ramping boost can settle first
+        if (c.tpl) {   // the worklet releases into bypass over its release time: engage at once, release 100 ms later so a ramping boost can settle first
           try {
             const bp = c.tpl.parameters.get('bypass'); c.tpl.parameters.get('ceiling').value = TP_CEIL;
             bp.cancelScheduledValues(0);
@@ -15002,7 +15159,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   //    source, so the value is the track's — ReplayGain semantics — whatever the chain does) ──
   const newestRouted = activeEntry;   // the audible chain (see activeEntry)
   function loudReset(href) {
-    lnorm.href = href; lnorm.blocks = []; lnorm.recent = []; lnorm.trackPeak = 0; lnorm.curGainDb = 0; lnorm.lint = NaN; lnorm.dur = NaN;
+    lnorm.href = href; lnorm.blocks = []; lnorm.recent = []; lnorm.trackPeak = 0; lnorm.curGainDb = 0; lnorm.lint = NaN; lnorm.dur = NaN; lnorm.el = null;
     lnorm.measuring = true; lnorm.src = ''; lnorm.pending = false; lnorm.lastWrite = 0;
     delete meter.m; delete meter.s; delete meter.i; delete meter.gainDb;
   }
@@ -15052,6 +15209,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       restoreTrackLoud();   // a track change, or a restore deferred until the duration is known
       const m = activeMedia();
       if (!m || m.paused || !(m.readyState > 0)) return;
+      if (lnorm.el && m !== lnorm.el) return;   // the next track on a fresh element before the badge caught up: not this track's audio
       if (isFinite(m.duration) && m.duration > 0) lnorm.dur = m.duration;
       if (!lnorm.measuring) return;   // a complete remembered value is applied — nothing to measure
       // SoundCloud's own volume slider sits before the capture point (the source node hears the attenuated signal):
@@ -15119,6 +15277,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (href !== lastLoudUrl) {
         rememberLoud(true);
         lastLoudUrl = href; loudReset(href);
+        lnorm.el = activeMedia();   // the element this measurement belongs to
         lnorm.pending = !!href;
       }
       if (!lnorm.pending) return;
@@ -16070,7 +16229,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         try {
           if (e.altKey || e.ctrlKey || e.metaKey) return;
           const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
-          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;   // a select's type-ahead is typing too
           if (SUITE.lyricsOpen && SUITE.lyricsOpen()) return;   // lyrics panel owns keys when open
           if (CFG.keySeek) {
             if (e.key >= '0' && e.key <= '9') { seekPct((+e.key) / 10); return; }
@@ -16084,7 +16243,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             if (e.repeat && k !== '=' && k !== '+' && k !== '-' && k !== '_') return;   // only the volume keys auto-repeat
             if (SUITE.audioKey && SUITE.audioKey(e)) { e.preventDefault(); return; }    // A compare · N night · , . speed
             if (k === '/') { const s = D.querySelector('input.headerSearch__input,.headerSearch__input,input[type="search"],.header__searchInput'); if (s) { e.preventDefault(); s.focus(); s.select && s.select(); } }
-            else if (k === 'm' || k === 'M') { toggleMute(); }
+            else if (k === 'm' || k === 'M') { e.preventDefault(); e.stopPropagation(); toggleMute(); }   // SoundCloud binds M too: one mute, not two that drift apart
             else if (k === '=' || k === '+') { bumpVol(0.05); }
             else if (k === '-' || k === '_') { bumpVol(-0.05); }
             else if (k === 'b' || k === 'B') { likeCurrent(); }
@@ -16194,7 +16353,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (k === 'Enter') return rowAct('play');
     if (k === 'o' || k === 'O') return rowAct('open');
     if (k === 'l' || k === 'L') return rowAct('like');
-    if (k === 'Escape') { rowRing(null); return true; }
+    if (k === 'Escape') { rowRing(null); return false; }   // the ring clears, and Escape still reaches whatever sheet is open
     return false;
   }
   try { W.addEventListener('keydown', (e) => { try { if (rowKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); } } catch (er) {} }, true); } catch (e) {}
@@ -16416,7 +16575,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function gmGetJSON(url) {
     return new Promise((res) => {
       try {
-        GM_xmlhttpRequest({
+        (sceRelay || GM_xmlhttpRequest)({
           method: 'GET', url, timeout: 9000,
           onload: (r) => { try { res(JSON.parse(r.responseText)); } catch (e) { res(null); } },
           onerror: () => res(null), ontimeout: () => res(null),
@@ -16511,8 +16670,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + '<div style="position:absolute;left:14px;right:14px;bottom:12px;display:flex;gap:11px;align-items:flex-end">'
       + '<div style="width:58px;height:58px;border-radius:12px;flex:none;background:#222 center/cover no-repeat' + (artUrl ? ' url(&quot;' + artUrl + '&quot;)' : '') + ';box-shadow:0 8px 22px -4px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.14)"></div>'
       + '<div style="min-width:0;flex:1;padding-bottom:2px">'
-      + '<div title="' + esc(d.title || '').replace(/"/g, '&quot;') + '" style="font-weight:800;font-size:14.5px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 10px rgba(0,0,0,.6)">' + esc(d.title || '') + '</div>'
-      + '<div title="' + esc(u).replace(/"/g, '&quot;') + '" style="font-size:11.5px;color:#cdcdd5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">' + esc(u) + '</div>'
+      + '<div data-i18n-skip="" title="' + esc(d.title || '').replace(/"/g, '&quot;') + '" style="font-weight:800;font-size:14.5px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 10px rgba(0,0,0,.6)">' + esc(d.title || '') + '</div>'
+      + '<div data-i18n-skip="" title="' + esc(u).replace(/"/g, '&quot;') + '" style="font-size:11.5px;color:#cdcdd5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">' + esc(u) + '</div>'
       + '</div></div></div>';
     html += '<div style="display:flex;gap:7px;margin-bottom:11px">' + statTile(d.playback_count, 'Plays') + statTile(d.likes_count || d.favoritings_count, 'Likes') + statTile(d.reposts_count, 'Reposts') + '</div>';
     if (chipHtml) html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:13px">' + chipHtml + '</div>';
@@ -16921,8 +17080,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       pRow.append(sel, delBtn, saveBtn, flatBtn); bodyEl.appendChild(pRow);
       nRow.append(nIn, okBtn, noBtn); bodyEl.appendChild(nRow);
       // auto-headroom (2.9) closes the EQ block
-      toggleRow('Auto-headroom', 'Lowers the volume by your biggest boost so nothing clips', 'eqAutoPre');
-      toggleRow('Remember EQ per track', 'Each track keeps the curve you last gave it', 'eqPerTrack');   // WP10
+      const ahR = toggleRow('Auto-headroom', 'Lowers the volume by your biggest boost so nothing clips', 'eqAutoPre');
+      const eptR = toggleRow('Remember EQ per track', 'Each track keeps the curve you last gave it', 'eqPerTrack');   // WP10
+      liveSync.push(() => { ahR.sw._paint(); eptR.sw._paint(); });   // a scene, a palette command or a debug write repaints them too
 
       // ── listening on (2.13): three chips, one tap applies a bundle; the lit one is only a
       //    memory of which bundle was tapped, cleared by any edit of what it set ──
@@ -17067,6 +17227,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const enhSw = makeSwitch(() => CFG.enhanceOn, () => { CFG.enhanceOn = !CFG.enhanceOn; save(); applyFx(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; }, 'Enhance audio');
       enhHead.append(enhTx, enhSw); bodyEl.appendChild(enhHead);
       intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; bodyEl.appendChild(intR.row);
+      liveSync.push(() => { enhSw._paint(); intR.row.style.opacity = CFG.enhanceOn ? '1' : '.45'; }, syncSlider(intR, () => CFG.enhanceAmt | 0));   // a scene or the palette flips Enhance: the switch and the slider follow
 
       // ── loudness & dynamics ──
       bodyEl.appendChild(sectionLabel('Loudness & dynamics'));
@@ -17082,6 +17243,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         (v) => { CFG.loudTarget = v | 0; if (!CFG.loudnessOn) { CFG.loudnessOn = true; loudRow.sw._paint(); } save(); applyFx(); paintTg(); });
       loudRow.sw.addEventListener('click', paintTg);
       tgRow.append(tgL, tgSel); paintTg(); bodyEl.appendChild(tgRow);
+      liveSync.push(() => { loudRow.sw._paint(); paintTg(); const v = String([-18, -14, -11].indexOf(CFG.loudTarget | 0) >= 0 ? CFG.loudTarget | 0 : -14); if (tgSel.value !== v) tgSel.value = v; });   // quiet hours or a scene set these
       const loudDesc = () => {
         if (!CFG.loudnessOn) return LOUD_DESC;
         const g = +meter.gainDb;
@@ -17105,9 +17267,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const paintBoost = () => { try { boostR.row.lastChild.style.color = (CFG.boostAmt | 0) > 100 ? '#ff6a1f' : '#86868e'; } catch (e) {} };
       boostR = sliderRow('Volume boost', 100, 300, 5, () => cl(CFG.boostAmt | 0, 100, 300), (x) => { CFG.boostAmt = x | 0; saveSoon(); applyFx(); paintBoost(); }, (x) => (x | 0) + '%', 100);
       paintBoost(); bodyEl.appendChild(boostR.row);
+      liveSync.push(syncSlider(boostR, () => cl(CFG.boostAmt | 0, 100, 300)), paintBoost);
       // clip guard (2.1): the description gains a live gain-reduction suffix while it works
       const GUARD_DESC = 'Stops boosts from distorting · on automatically when boosting or enhancing';
       const guard = toggleRow('Clip guard', GUARD_DESC, 'limiterOn');
+      liveSync.push(() => guard.sw._paint());
 
       // ── stereo ──
       bodyEl.appendChild(sectionLabel('Stereo'));
@@ -17356,7 +17520,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (!CFG.hotkeys || !e) return false;
         if (e.altKey || e.ctrlKey || e.metaKey) return false;
         const t = (e.composedPath ? e.composedPath()[0] : null) || e.target, ae = D.activeElement;
-        const typing = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+        const typing = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
         if (typing(t) || typing(ae)) return false;
         const k = e.key, down = e.type === 'keydown';
         const mine = k === 'a' || k === 'A' || k === 'n' || k === 'N' || k === ',' || k === '.';
@@ -17587,7 +17751,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       show('.sce-info', CFG.barInfo);
       const ab = barWrap.querySelector('.sce-ab');
       if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.classList.toggle('on', !!abOn); }
-      const anyTool = !!(CFG.barRestart || CFG.barSpeed || CFG.barAB || CFG.barInfo || CFG.barCopy);   // no track tools shown: no hairlines around an empty group
+      // fit: SoundCloud's bar keeps a fixed width and clips its last item — when the pill runs past the badge's edge the
+      // least-used tools go first (restart, copy, info, A·B, speed), so the gear is never the one cut off
+      try {
+        const badge = barWrap.closest('.playControls__soundBadge') || barWrap.parentElement;
+        const over = () => !!badge && barWrap.getBoundingClientRect().right > badge.getBoundingClientRect().right + 0.5;
+        for (const cls of ['.sce-restart', '.sce-copy', '.sce-info', '.sce-ab', '.sce-speed']) { if (!over()) break; const el = barWrap.querySelector(cls); if (el && el.style.display !== 'none') el.style.display = 'none'; }
+      } catch (e) {}
+      const anyTool = ['.sce-restart', '.sce-speed', '.sce-ab', '.sce-info', '.sce-copy'].some((cls) => { const el = barWrap.querySelector(cls); return !!(el && el.style.display !== 'none'); });   // no track tools shown: no hairlines around an empty group
       barWrap.querySelectorAll('.sep').forEach((el) => { el.style.display = anyTool ? '' : 'none'; });
       // FX glow (WP10): the hub button wears the speed pill's accent while the listener's own audio settings are
       // engaged (an open tab alone routes the chain but changes nothing audible); the tooltip names it and the boost
@@ -17616,7 +17787,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     + '.sce-barwrap>.sep{width:1px;height:14px;margin:0 2px;border-radius:1px;background:color-mix(in srgb,currentColor 16%,transparent);flex:none}'
     + '.sce-barwrap>.tip{position:absolute;bottom:calc(100% + 8px);left:0;transform:translateX(-50%) translateY(3px);background:rgba(18,18,22,.96);color:#fff;font:600 10.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;letter-spacing:.01em;padding:6px 9px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s ease,transform .12s ease;box-shadow:0 4px 14px rgba(0,0,0,.35),inset 0 0 0 1px rgba(255,255,255,.08);z-index:30}'
     + '.sce-barwrap>.tip.on{opacity:1;transform:translateX(-50%) translateY(0)}'
-    + '@media (max-width:1000px){.playControls__wrapper.l-container,.playControls__elements{width:auto !important;min-width:0 !important}'
+    + '@media (max-width:1000px){.playControls__wrapper.l-container,.playControls__elements{width:auto !important;min-width:0 !important}.sce-barwrap{margin-left:6px;gap:0}.sce-barwrap>button{min-width:24px;height:24px;padding:0 6px}.sce-barwrap>button.i{width:24px}'
     + '.playControls__elements>.playControls__soundBadge{flex:0 1 328px !important;min-width:150px !important}.playControls__soundBadge>.playbackSoundBadge{width:auto !important;min-width:0 !important;max-width:100%}.playbackSoundBadge__titleContextContainer{min-width:0 !important}}'
     + '@media (prefers-reduced-motion:reduce){.sce-barwrap>button,.sce-barwrap>.tip{transition:none}}';
   function ensureBar() {
@@ -17675,6 +17846,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // shuffle bolt + lyrics button if they slipped in before us
       try { D.querySelectorAll('.bhx-barwrap').forEach((e) => e.remove()); } catch (e) {}
       refreshBar();
+      if (!W.__sceBarResize) { W.__sceBarResize = 1; let rt = 0; W.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(refreshBar, 150); }); }   // the fit follows the window
     } catch (e) {}
   }
 
@@ -17757,14 +17929,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const paint = () => {
         box.replaceChildren(); let total = 0;
         STORES.forEach(([name, pfx, note], i) => {
-          const keys = keysOf(pfx).filter((k) => !(name === 'Settings' && k.indexOf('scssgm:sl4:') === 0)); const b = size(keys); total += b;
+          const keys = keysOf(pfx).filter((k) => !(name === 'Settings' && (k.indexOf('scssgm:sl4:') === 0 || k === 'scssgm:sl:cues'))); const b = size(keys); total += b;   // cue points have their own row
           const line = D.createElement('div'); line.style.cssText = 'display:flex;align-items:center;gap:10px;font-size:11.5px;color:#e6e6ea;padding:7px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.05)' : '0');
           const nm = D.createElement('span'); nm.style.cssText = 'flex:1;min-width:0'; nm.textContent = name; if (note) nm.title = note;
           const sz = D.createElement('span'); sz.style.cssText = 'font-variant-numeric:tabular-nums;color:#86868e;min-width:58px;text-align:right;font-size:11px'; sz.textContent = keys.length ? fmtB(b) : '—';
           const clr = D.createElement('button'); clr.type = 'button'; clr.textContent = 'Clear'; clr.disabled = !keys.length;
           clr.style.cssText = 'flex:none;border:0;border-radius:8px;padding:6px 10px;font:600 10.5px inherit;background:rgba(255,255,255,.06);color:#c4c4ca;cursor:' + (keys.length ? 'pointer' : 'default') + ';opacity:' + (keys.length ? '1' : '.38');
           clr.setAttribute('aria-label', 'Clear ' + name);
-          clr.addEventListener('click', () => { let ok = true; try { ok = W.confirm('Clear ' + name + ' (' + fmtB(b) + ')? This cannot be undone.'); } catch (e) {} if (!ok) return; try { for (const k of keys) localStorage.removeItem(k); } catch (e) {} if (name === 'Lyrics cache') { try { localStorage.removeItem('scssgm:sl4:idx'); } catch (e) {} } toast(name + ' cleared'); paint(); });
+          clr.addEventListener('click', () => { let ok = true; try { ok = W.confirm('Clear ' + name + ' (' + fmtB(b) + ')? This cannot be undone.'); } catch (e) {} if (!ok) return; try { for (const k of keys) localStorage.removeItem(k); } catch (e) {} if (name === 'Settings') { try { CFG = Object.assign({}, DEFAULTS, { eqCustom: clampEqCustom(CFG.eqCustom) }); save(); applyAll(); } catch (e) {} } if (name === 'Lyrics cache') { try { localStorage.removeItem('scssgm:sl4:idx'); } catch (e) {} } toast(name + ' cleared'); paint(); });
           line.append(nm, sz, clr); box.appendChild(line);
         });
         // how much of the site's allowance the suite is using
@@ -18242,7 +18414,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const inp = D.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json'; inp.style.display = 'none';
           inp.addEventListener('change', () => {
             const f = inp.files && inp.files[0]; if (!f) { inp.remove(); return; }
-            if (SUITE.restoreAll) { SUITE.restoreAll(f); setTimeout(() => { try { enhancerRender(container); } catch (e) {} }, 400); }
+            if (SUITE.restoreAll) {
+              // rebuild the tab once the import has actually been applied (a large backup takes longer than a fixed delay)
+              let built = false; const rebuild = () => { if (built) return; built = true; try { enhancerRender(container); } catch (e) {} };
+              SUITE.restoreAll(f, rebuild); setTimeout(rebuild, 4000);
+            }
             else toast('Restore unavailable');
             setTimeout(() => inp.remove(), 2000);
           });
@@ -18311,6 +18487,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         migrateFrom(obj); CFG.cfgVer = DEFAULTS.cfgVer;
         ensureEqBands(); clampAudioCfg();
         save(); applyAll();
+        try { rerenderAudio(); } catch (e) {}   // the Audio tab, if open, shows the restored values
       } catch (e) {}
     };
   } catch (e) {}
