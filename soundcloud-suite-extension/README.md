@@ -130,6 +130,14 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **Dark themes, scanned for light patches** — nine public SoundCloud pages
+  were rendered in the dark theme and every large element still carrying a
+  light, opaque background was listed. Two were the theme's to fix: the
+  search page's selected filter (Everything, Tracks, People…) was a white
+  block whose label had gone invisible under the theme's light link colour,
+  and a profile without a banner showed a light grey header. Both take the
+  theme's own surfaces now. What remains light is SoundCloud's own "Create a
+  SoundCloud account" button, which is meant to stand out.
 - **A review of the last three releases, two fixes** — an independent reader
   went through everything since 4.82.0 with the pages open. Two findings held
   up. The repaired "Wider main column" kept the track page's main column at

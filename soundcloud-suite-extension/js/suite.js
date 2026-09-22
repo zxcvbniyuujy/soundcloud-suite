@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.86.0
+// @version      4.87.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.86.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.87.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9726,6 +9726,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🌒', 'Dark themes, scanned for light patches', 'Nine public SoundCloud pages were rendered in the dark theme and every large element still carrying a light, opaque background was listed. Two were the theme’s to fix: the search page’s selected filter (Everything, Tracks, People…) was a white block whose label had gone invisible under the theme’s light link colour, and a profile without a banner showed a light grey header. Both take the theme’s own surfaces now. What remains light is SoundCloud’s own “Create a SoundCloud account” button, which is meant to stand out.'],
           ['🔎', 'A review of the last three releases, two fixes', 'An independent reader went through everything since 4.82.0 with the pages open. Two findings held up. The repaired “Wider main column” kept the track page’s main column at its fixed 864 px, so on a window narrower than about 1290 px the sidebar ran over its right edge; the column is fluid now and stops 16 px short of the sidebar at every width (checked at 1600, 1280, 1200 and 1100). And a hub that left fullscreen kept the size it had before entering, so a window shrunk meanwhile could push its header off the top; leaving fullscreen fits it again. The lyrics one-to-one check is now a tool in the repository, and the debug readout says which highlight lead is in force.'],
           ['🧹', 'Every Hide tweak, checked against today’s pages', 'All 92 rows of the Tweaks table were tested against twelve public SoundCloud pages: does anything the row names still exist? Eight “Hide” tweaks had lost their target to a renamed class and now find it again: track tags (the # pill in the hero), the “In playlists” sidebar module, the trending-tracks module on the landing page, Follow buttons in follower lists, playlist track counts, the hero’s artwork-derived background, the header’s ⋯ menu and the “Report” link. Four rows hid things SoundCloud no longer draws at all (breadcrumbs, a waveform timeline that is canvas now, partner offers, a trending-tags bar) and are gone rather than left as switches that do nothing. The rest match, or wait for a signed-in page or a hover to have something to hide.'],
           ['🧭', 'The class names the suite lives on, checked', 'The launch gate now looks for every SoundCloud class name the suite reads or mounts on, page by page, and runs the shuffle engine’s own selector self-test beside it. It found two tweaks quietly doing nothing on today’s pages: “Wider main column” targeted a max-width SoundCloud no longer sets (the column is a fixed 1240 px on the outer wrappers now), and “Larger comment text” set the size comments already have. The wide column now really goes fluid with a 24 px gutter, the sidebar keeping its width; focus mode, which hides that sidebar, also lets the main column take the space it frees instead of leaving a blank strip; and larger comments are larger. The comment body’s new class name joins the theme rules too.'],
@@ -13965,6 +13966,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // comment composer / reply box + individual comments
       '.commentForm,.commentForm__input,.commentForm textarea,.composer,.commentInput,[class*="commentForm" i],[class*="commentComposer" i]{background-color:' + t.card + ' !important;color:' + t.tx + ' !important;border-color:' + t.bd + ' !important}',
       '.commentItem,.commentNode,.comment,.comment__body,.commentItem__body,.commentItem__message{background-color:transparent !important;color:' + t.tx + ' !important;border-color:' + t.bd + ' !important}',
+      // the search page's selected filter (Everything / Tracks / People …) is a white block in SoundCloud's own
+      // style; with the theme's light link colour on it the label vanished — give it the hover surface instead
+      '.searchOptions__navigationItem.active,.g-nav-item-search.active,.searchOptions__navigation .g-nav-item.active{background-color:' + t.hov + ' !important}',
+      '.searchOptions__navigationItem.active .g-nav-link,.searchOptions__navigation .g-nav-item.active a{color:' + t.tx + ' !important}',
+      // the profile header's fallback colour behind (or, for a profile without a banner, instead of) the visual
+      '.profileHeaderBackground{background-color:' + t.card + ' !important}',
       // player-control icon buttons (so they read on the dark bar)
       // ── PLAYER BAR (exact SoundCloud classes from the live DOM) ──
       '.playControls,.playControls__inner,.playControls__wrapper,.playControls__bg{background-color:' + t.card + ' !important;background-image:none !important}',
