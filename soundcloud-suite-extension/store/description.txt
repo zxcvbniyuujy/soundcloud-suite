@@ -8,9 +8,10 @@ Lyrics
 Open the hub and the words are right there, line by line, moving with the vocals. Sped-up upload? Edited version? It still lands on the beat. Press F and the screen is nothing but the lyrics.
 
 • Seven lyric sources, searched for you — five of them with real timing
-• The stage: full-screen lyrics on the blurred artwork, the cover beside them, a seek bar and transport, your choice of size and layout
+• The stage: full-screen lyrics on the blurred artwork or a pulse backdrop that breathes with the music, the cover beside them, a seek bar and transport, your choice of size and layout
+• Sing along: one switch on the stage softens the vocal line while the words run full-screen
 • A text-only sheet follows the voice: the first line pins itself to the moment the vocal comes in
-• Two taps fix the timing on anything still off
+• Two taps fix the timing on anything still off; a sheet timed to another cut of the track is read the way the vocals say
 • Translate in place, copy a quote with its timestamp, export .lrc
 • A floating lyrics window that stays on top of every app, and a small floating line while the hub is closed
 • Share a lyric card: pick up to six lines, get an image for your story
@@ -27,7 +28,7 @@ Drag an equalizer curve on a live spectrum, or just switch on Enhance and hear t
 • A true-peak clip guard, so nothing distorts
 • Speed from 0.5× to 2×, pitch that follows or holds
 • Stereo width, crossfeed, headphone correction
-• The tempo, measured from the audio itself, in BPM — and a lock that plays every track at the BPM you choose
+• The tempo in BPM and the musical key with its Camelot code, measured from the audio itself — and a lock that plays every track at the BPM you choose
 • Save the whole Audio tab as a scene and recall it in one tap
 • Every control is an exact passthrough when off. Hold Compare to hear the original.
 
@@ -72,7 +73,7 @@ Eleven dark themes. A light one. Zen mode for when you want nothing but the musi
 • Play, skip and like from any tab with Alt+Shift+P, N, B and L
 • J and K walk any list, Enter plays
 • Lose your audio output and playback pauses instead of switching to the speakers
-• Speed, an A–B loop and a sleep timer in the player bar
+• One clean pill in the player bar: lyrics, shuffle, restart, speed, an A–B loop, track info, copy link, settings
 • Track info, timecodes, a waveform timeline
 • Ctrl+K opens a command palette for everything: type 12:34 to jump, 1.5x for the speed, or a title from your likes to play it. Press ? for every shortcut.
 
