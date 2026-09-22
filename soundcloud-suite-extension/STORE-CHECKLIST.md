@@ -10,7 +10,9 @@ public listing.
 ```
 
 `--public` refuses to build if any Genius token is present; `--zip` writes
-`../soundcloud-suite-4.81.0.zip` containing only `manifest.json`, `icons/` and `js/`.
+`../soundcloud-suite-4.81.0.zip` containing `manifest.json`, `icons/`, `js/`,
+`_locales/` (the store name and summary in twelve languages) and `i18n/` (the
+in-app dictionaries), and nothing else — no tools, docs or dotfiles.
 Upload it at https://chrome.google.com/webstore/devconsole
 
 ## MUST verify before upload
