@@ -45,6 +45,9 @@
       "world": "MAIN"
     }
   ],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://soundcloud.com/*",
     "https://*.soundcloud.com/*",

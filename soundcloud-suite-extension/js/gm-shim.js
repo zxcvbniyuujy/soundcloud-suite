@@ -116,6 +116,22 @@
     if (e.source !== window || !d || d.scss !== 'xhr-res' || linked) return;
     settle(d);
   });
+  // the listener's tokens go to the extension's own storage over the channel (see background.js); with no link
+  // there is no way to reach them, and the answer is null
+  let mseq = 0;
+  const mpending = new Map();
+  if (chan) chan.addEventListener('scss-msg-res', (e) => { let d = null; try { d = JSON.parse(String(e.detail)); } catch (err) { d = null; } const cb = d && mpending.get(d.id); if (!cb) return; mpending.delete(d.id); cb(d.res); });
+  const ask = (msg) => new Promise((res) => {
+    const send = (tries) => {   // the suite asks at boot, which may land a tick before the bridge has linked: wait up to 2 s
+      if (!chan) { res(null); return; }
+      if (!linked) { if (tries > 0) setTimeout(() => send(tries - 1), 50); else res(null); return; }
+      const id = ++mseq;
+      mpending.set(id, res);
+      setTimeout(() => { if (mpending.delete(id)) res(null); }, 5000);
+      try { chan.dispatchEvent(new CustomEvent('scss-msg', { detail: JSON.stringify({ id, msg }) })); } catch (e) { mpending.delete(id); res(null); }
+    };
+    send(40);
+  });
 
   window.GM_xmlhttpRequest = function (opts) {
     opts = opts || {};
@@ -167,6 +183,9 @@
     }
     return { abort: () => settle(null) };
   };
+  // carried by the relay function, which the suite takes off the window along with them
+  window.GM_xmlhttpRequest.setToken = (name, value) => ask({ scss: 'tok-set', name: String(name || ''), value: String(value || '') });
+  window.GM_xmlhttpRequest.hasTokens = () => ask({ scss: 'tok-has' });
 
   try { console.info('[SoundCloud Suite] GM shim ready (extension build)'); } catch (e) {}
 })();

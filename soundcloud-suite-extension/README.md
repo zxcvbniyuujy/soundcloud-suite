@@ -141,6 +141,15 @@ never plays.
   Verified live: an inline script first in `<head>` sees no offer, its
   postMessage request gets no answer, its own channel is never adopted, and
   lyrics still arrive.
+- **Your tokens leave the page** — the Genius API token and the ListenBrainz
+  token used to sit in soundcloud.com's localStorage, readable by any script on
+  the site. They now live in the extension's own storage (the one `storage`
+  permission): the page holds a placeholder, and the background worker puts the
+  token into a request only for that service's host, refusing it for any other.
+  A token an older build kept in the page moves over on the first run and is
+  removed from the page; the prompts never show it back. Verified live: the
+  worker's fetch to api.genius.com carries the real token, the page's trail and
+  storage never do.
 - **Five more from the review** — listening stats kept in two tabs add up
   instead of overwriting each other (each tab merges its deltas into storage);
   another profile's cached library is cleared a week after its last shuffle

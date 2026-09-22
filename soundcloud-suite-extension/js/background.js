@@ -108,6 +108,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   fetch(chrome.runtime.getURL('i18n/' + msg.lang + '.json')).then((r) => (r.ok ? r.text() : Promise.reject(new Error('no dictionary')))).then((json) => sendResponse({ ok: true, json })).catch(() => sendResponse({ ok: false }));
   return true;
 });
+/* The tokens the listener provides (a Genius client access token, a ListenBrainz user token) live here, in the
+ * extension's own storage, never in the page's. The page holds a placeholder — $SCSS_TOKEN(name) — in a header
+ * value, and the worker puts the token in just before the fetch, only for the host that token is for: a request
+ * that names a token for any other host is refused, so a token can never leave for somewhere else. */
+const TOKENS = {
+  gtok: (h) => h === 'api.genius.com' || h === 'genius.com' || h.endsWith('.genius.com'),
+  lbtok: (h) => h === 'api.listenbrainz.org',
+};
+const TOKEN_KEY = (name) => 'scss:tok:' + name;
+const TOKEN_PH = /\$SCSS_TOKEN\(([a-z]+)\)/g;
+function readTokens(names) {
+  return new Promise((res) => {
+    const out = {}; for (const n of names) out[n] = '';
+    try {
+      chrome.storage.local.get(names.map(TOKEN_KEY), (o) => { void chrome.runtime.lastError; for (const n of names) { const v = o && o[TOKEN_KEY(n)]; if (typeof v === 'string') out[n] = v; } res(out); });
+    } catch (e) { res(out); }
+  });
+}
+// header values with the placeholders filled in; throws when a token is missing or not for this host
+function fillTokens(headers, host) {
+  const wanted = new Set();
+  for (const k of Object.keys(headers)) { const v = String(headers[k]); let m; TOKEN_PH.lastIndex = 0; while ((m = TOKEN_PH.exec(v))) wanted.add(m[1]); }
+  if (!wanted.size) return Promise.resolve(headers);
+  for (const n of wanted) if (!TOKENS[n] || !TOKENS[n](host)) return Promise.reject(new Error('token not for this host: ' + n));
+  return readTokens([...wanted]).then((toks) => {
+    for (const n of wanted) if (!toks[n]) throw new Error('no token: ' + n);
+    const out = {};
+    for (const k of Object.keys(headers)) out[k] = String(headers[k]).replace(TOKEN_PH, (m0, n) => toks[n]);
+    return out;
+  });
+}
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || (msg.scss !== 'tok-set' && msg.scss !== 'tok-has')) return;
+  if (!sender || !sender.tab || !SC_FRAME.test(String(sender.url || ''))) { sendResponse({ ok: false }); return; }
+  if (msg.scss === 'tok-set') {
+    const name = String(msg.name || '');
+    if (!TOKENS[name]) { sendResponse({ ok: false }); return; }
+    const value = typeof msg.value === 'string' ? msg.value.trim().slice(0, 512) : '';
+    try {
+      if (value) chrome.storage.local.set({ [TOKEN_KEY(name)]: value }, () => { void chrome.runtime.lastError; sendResponse({ ok: true, has: true }); });
+      else chrome.storage.local.remove(TOKEN_KEY(name), () => { void chrome.runtime.lastError; sendResponse({ ok: true, has: false }); });
+    } catch (e) { sendResponse({ ok: false }); }
+    return true;
+  }
+  const names = Object.keys(TOKENS);
+  readTokens(names).then((t) => { const has = {}; for (const n of names) has[n] = !!t[n]; sendResponse({ ok: true, has }); });
+  return true;
+});
+if (typeof module !== 'undefined' && module.exports) Object.assign(module.exports, { fillTokens, TOKENS });   // the unit test
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.scss !== 'xhr' || !msg.req) return;
   if (!sender || !sender.tab || !SC_FRAME.test(String(sender.url || ''))) {
@@ -130,15 +180,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       error: String((e && e.message) || e),
     });
   };
+  let host = ''; try { host = new URL(req.url).hostname; } catch (e) {}
   try {
-    fetch(req.url, {
+    fillTokens(Object.assign({}, req.headers || {}), host).then((headers) => fetch(req.url, {
       method: req.method || 'GET',
-      headers: req.headers || {},
+      headers,
       body: req.data != null ? req.data : undefined,
       credentials: (!req.anonymous && /^https:\/\/(api-v2\.)?soundcloud\.com\//.test(req.url)) ? 'include' : 'omit',   // cookies only ever go to the two SoundCloud hosts the suite reads as the listener, whatever the page asks
       redirect: 'follow',
       signal: ctrl.signal,
-    }).then((r) => {
+    })).then((r) => {
       if (!hostAllowed(r.url)) { ctrl.abort(); throw new Error('redirected off the allowlist: ' + r.url); }
       const len = +r.headers.get('content-length');
       if (len > MAX_BODY_BYTES) { ctrl.abort(); throw new Error('response too large'); }

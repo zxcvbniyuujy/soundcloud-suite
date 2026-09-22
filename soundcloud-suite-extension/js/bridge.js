@@ -63,6 +63,13 @@
       if (!d || !d.req) return;
       relay(d.req, (res) => { try { el.dispatchEvent(new CustomEvent('scss-xhr-res', { detail: JSON.stringify(Object.assign({ id: d.id }, res)) })); } catch (err) {} });
     });
+    // the listener's tokens: set and asked after over the channel only, never by postMessage
+    el.addEventListener('scss-msg', (e) => {
+      let d = null; try { d = JSON.parse(String(e.detail)); } catch (err) { d = null; }
+      const m = d && d.msg; if (!m || (m.scss !== 'tok-set' && m.scss !== 'tok-has')) return;
+      const answer = (res) => { try { el.dispatchEvent(new CustomEvent('scss-msg-res', { detail: JSON.stringify({ id: d.id, res: res || null }) })); } catch (err) {} };
+      try { chrome.runtime.sendMessage(m, (res) => { void chrome.runtime.lastError; answer(res); }); } catch (err) { answer(null); }
+    });
     try { el.dispatchEvent(new CustomEvent('scss-chan!')); } catch (e) {}   // linked: the shim stops offering
   };
   document.addEventListener('scss-chan', (e) => adopt(e.target), true);

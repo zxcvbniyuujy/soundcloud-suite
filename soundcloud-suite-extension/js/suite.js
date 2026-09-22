@@ -600,7 +600,20 @@
      * storage (Tampermonkey: private; extension build: soundcloud.com
      * localStorage under the scssgm: prefix). */
     const LB_QKEY = 'bh_sc_lbq';
-    const lbToken = () => { try { return GM_getValue('bh:lbtok', '') || ''; } catch (e) { return ''; } };
+    // extension build: the token lives in the extension's own storage and the suite holds a placeholder the
+    // background fills in at fetch time (a token an older build kept in page storage moves over on the first run);
+    // userscript build: the manager's private storage, as before
+    const LB_PH = '$SCSS_TOKEN(lbtok)';
+    const lbExt = !!(sceRelay && typeof sceRelay.hasTokens === 'function');
+    let lbTok = '';
+    if (lbExt) {
+        let legacy = ''; try { legacy = GM_getValue('bh:lbtok', '') || ''; } catch (e) {}
+        if (legacy) { lbTok = LB_PH; sceRelay.setToken('lbtok', legacy).then((r) => { if (r && r.ok) { try { GM_deleteValue('bh:lbtok'); } catch (e) {} } }).catch(() => {}); }
+        else sceRelay.hasTokens().then((r) => { if (r && r.ok && r.has && r.has.lbtok && !lbTok) lbTok = LB_PH; }).catch(() => {});
+    } else { try { lbTok = GM_getValue('bh:lbtok', '') || ''; } catch (e) {} }
+    const lbToken = () => lbTok;
+    const lbTokenShown = () => (lbTok === LB_PH ? '' : lbTok);   // what a prompt may prefill: never the placeholder
+    const lbKept = () => (lbExt ? 'It is kept in the extension’s own storage, out of the page’s reach.' : 'It is kept in your userscript manager’s storage.');
     function lbSubmit(listens) {
         return new Promise((resolve, reject) => {
             try {
@@ -620,6 +633,12 @@
     }
     let lbFlushing = false;
     let lbBadTok = '';   // a token ListenBrainz rejected — no more flushes until it changes
+    function lbSetToken(t) {   // '' turns scrobbling off
+        const val = String(t || '').trim();
+        lbBadTok = '';   // a new token gets its own chance
+        if (lbExt) { lbTok = val ? LB_PH : ''; try { sceRelay.setToken('lbtok', val).catch(() => {}); } catch (e) {} return; }
+        lbTok = val; try { GM_setValue('bh:lbtok', val); } catch (e) {}
+    }
     function lbFlush() {
         if (lbFlushing || !lbToken() || lbToken() === lbBadTok) return;
         const q = LS.get(LB_QKEY, []);
@@ -3178,10 +3197,10 @@
             lbBtn.title = 'Set or clear your ListenBrainz user token';
             lbBtn.addEventListener('click', () => {
                 let t = null;
-                try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off. It is kept in this browser’s site data for soundcloud.com.', lbToken() || ''); } catch (e) {}
+                try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off. ' + lbKept(), lbTokenShown()); } catch (e) {}
                 if (t === null) return;
                 t = t.replace(/^\s*token\s+/i, '');
-                try { GM_setValue('bh:lbtok', t.trim()); } catch (e) {}
+                lbSetToken(t);
                 lbLab.innerHTML = lbSubTxt();
                 showToast(t.trim() ? 'ListenBrainz on — plays will scrobble' : 'ListenBrainz off');
                 if (t.trim()) lbFlush();
@@ -3305,8 +3324,8 @@
           try { S.sessionLib = null; S.sessionLibAt = 0; S.sessionLibKey = ''; idbClearLib(); LS.del('bh_sc_lib'); invalidateLibMap(); showToast('Cache cleared — the next shuffle refetches everything'); } catch (e) {}
         }]]);
         btnRow('ListenBrainz', (lbToken() ? 'Scrobbling plays' : 'Off — add a token to scrobble'), [['Token', (lab) => {
-          let t = null; try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off. It is kept in this browser’s site data for soundcloud.com.', lbToken() || ''); } catch (e) {}
-          if (t === null) return; t = t.replace(/^\s*token\s+/i, ''); try { GM_setValue('bh:lbtok', t.trim()); } catch (e) {}
+          let t = null; try { t = prompt('ListenBrainz user token (listenbrainz.org → Settings). Leave empty to turn scrobbling off. ' + lbKept(), lbTokenShown()); } catch (e) {}
+          if (t === null) return; t = t.replace(/^\s*token\s+/i, ''); lbSetToken(t);
           const sm = lab.querySelector('small'); if (sm) sm.textContent = t.trim() ? 'Scrobbling plays' : 'Off — add a token to scrobble';
           showToast(t.trim() ? 'ListenBrainz on — plays will scrobble' : 'ListenBrainz off'); if (t.trim()) { try { lbFlush(); } catch (e) {} }
         }]]);
@@ -5359,14 +5378,29 @@
   // see that file's `--public` flag which enforces blank-and-fail for releases.
   // A user-set token via the ⋯ menu always overrides whatever's here.
   const GTOK_DEFAULT = '';
+  // In the extension build the token never sits in the page: it lives in the extension's own storage, the suite
+  // holds a placeholder the background fills in at fetch time, and a token an older build kept in page storage
+  // moves over on the first run. Under a userscript manager the sandbox's storage is private already.
+  const TOK_PH = (n) => '$SCSS_TOKEN(' + n + ')';
+  const TOK_IS_PH = (v) => /^\$SCSS_TOKEN\(/.test(String(v || ''));
   const Gtok = (() => {
     let t = '';
-    try { t = GM_getValue('sl:gtok', '') || ''; } catch (e) {}
+    const ext = !!(sceRelay && typeof sceRelay.hasTokens === 'function');
+    if (ext) {
+      let legacy = ''; try { legacy = GM_getValue('sl:gtok', '') || ''; } catch (e) {}
+      if (legacy) { t = TOK_PH('gtok'); sceRelay.setToken('gtok', legacy).then((r) => { if (r && r.ok) { try { GM_deleteValue('sl:gtok'); } catch (e) {} } }).catch(() => {}); }
+      else sceRelay.hasTokens().then((r) => { if (r && r.ok && r.has && r.has.gtok && !t) t = TOK_PH('gtok'); }).catch(() => {});
+    } else { try { t = GM_getValue('sl:gtok', '') || ''; } catch (e) {} }
     if (!t) t = GTOK_DEFAULT;   // nothing stored → use the baked-in default
     return {
       get: () => t,
       has: () => !!t,
-      set(v) { t = String(v || '').trim() || GTOK_DEFAULT; try { GM_setValue('sl:gtok', String(v || '').trim()); } catch (e) {} },
+      set(v) {
+        const val = String(v || '').trim();
+        if (ext) { t = val ? TOK_PH('gtok') : GTOK_DEFAULT; sceRelay.setToken('gtok', val).catch(() => {}); return; }
+        t = val || GTOK_DEFAULT; try { GM_setValue('sl:gtok', val); } catch (e) {}
+      },
+      kept: () => (ext ? 'It is kept in the extension’s own storage, out of the page’s reach.' : 'It is kept in your userscript manager’s storage.'),
     };
   })();
   /* collective / uploader → real-artist alias map (user-taught). Keyed by a
@@ -9401,6 +9435,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🗝', 'Your tokens leave the page', 'A Genius API token or a ListenBrainz token used to sit in soundcloud.com’s own storage, where any script on the site could read it. It now lives in the extension’s storage: the page holds a placeholder, and the extension puts the token into a request only for that service. A token you set before moves over by itself and leaves the page.'],
           ['🔒', 'The relay answers to the suite alone', 'The extension fetches lyrics with its own permissions, and until now any script on soundcloud.com could ask it to. The request path is now a private channel the suite and the extension share before the page’s own scripts run, the request function leaves the window once the suite holds it, and a request from anywhere else is not relayed. Nothing changes for you; the privacy policy says how it works.'],
           ['🧹', 'Five more from the review', 'Listening stats kept in two tabs no longer overwrite each other: each tab adds what it counted to what is stored. Another profile’s cached library is cleared a week after its last shuffle instead of staying forever (yours stays). The clip guard’s bypass is now part of the detector, so the level never steps when the guard engages or lets go, and a chain the player has abandoned stops its worklets instead of rendering silence.'],
           ['🧰', 'Twenty-six fixes from a review of every module', 'Seven reviewers read the whole suite. The title parser read “A ft. B - Song” as a song called A by nobody, so every search for that common form went wrong — fixed, with a self-test. A stage backdrop set to Pulse leaked its canvas into the ordinary panel above the header. The player-bar pill now hides its least-used tools when the bar has no room, so the gear is never the one cut off. A lyric search that finished on a rejected sheet, a re-search that left the loading skeleton up, history rows with a doubled origin, digits 6–9 reaching SoundCloud’s seek, an Escape swallowed by the list ring, M muting twice, a shuffle loader orphaned by a cancel, “Forget” undone by a background refresh, “Clear settings” that cleared nothing, a tracklist of song lengths read as chapters, a Genius outage remembered for five minutes, per-track loudness measured on the next track’s audio, and an Enhance curve re-uploaded on every slider tick — all fixed.'],
@@ -10155,7 +10190,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       mi('Genius API token: ' + (Gtok.has() ? 'set ✓' : 'not set'), () => {
         let v = null;
         try {
-          v = prompt('Paste your Genius API "Client Access Token".\n\nGet one free at genius.com/api-clients — sign in, create an API Client (any app name + URL), then copy the Client Access Token.\n\nThis makes finding the right song reliable on networks that block Genius. Leave empty to clear.', Gtok.get() || '');
+          v = prompt('Paste your Genius API "Client Access Token".\n\nGet one free at genius.com/api-clients — sign in, create an API Client (any app name + URL), then copy the Client Access Token.\n\nThis makes finding the right song reliable on networks that block Genius. ' + Gtok.kept() + ' Leave empty to clear.', TOK_IS_PH(Gtok.get()) ? '' : (Gtok.get() || ''));
         } catch (e) {}
         if (v === null) return;
         Gtok.set(v);

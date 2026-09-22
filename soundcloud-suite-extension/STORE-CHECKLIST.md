@@ -37,8 +37,12 @@ Upload it at https://chrome.google.com/webstore/devconsole
     directly from public lyric APIs, without cookies; no proxying of user data.
     The background worker only serves the extension's own content script and
     only for the allowlisted hosts.
+  - *`storage`* — the extension's own storage holds only the optional tokens
+    the user enters (a Genius API token, a ListenBrainz token), so they never
+    sit in the page's storage where site scripts could read them. Nothing else
+    is stored there.
   - *Single purpose:* "Enhance the SoundCloud web player."
-- The extension requests no `permissions` entries at all; all data stays in
+- The only `permissions` entry is `storage` (above); everything else stays in
   soundcloud.com's own browser storage.
 
 ## Stability notes (already handled)

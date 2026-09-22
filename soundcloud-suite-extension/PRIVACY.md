@@ -46,14 +46,19 @@ fetch on its behalf.
 
 ## Optional tokens you provide
 
-A **Genius API token** and a **ListenBrainz token** are optional, stored
-locally, and used only to call those services' own APIs. They are never sent
-anywhere else, and the extension ships without any built-in token.
+A **Genius API token** and a **ListenBrainz token** are optional and used only
+to call those services' own APIs. They are kept in the extension's own storage,
+out of the page's reach: the page holds a placeholder, and the extension's
+background script puts the token in only for a request to that service's host.
+They are never sent anywhere else, and the extension ships without any built-in
+token.
 
 ## Permissions, and why
 
 - Host access to soundcloud.com — to run the enhancer on the site.
 - Host access to the lyric providers above — to fetch lyrics.
+- `storage` — the extension's own storage, used only for the optional tokens
+  above, so they never sit in the page's storage.
 
 The extension requests no other permissions.
 
