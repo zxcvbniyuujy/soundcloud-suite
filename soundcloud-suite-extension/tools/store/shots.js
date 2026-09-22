@@ -40,7 +40,7 @@ const VW = 1280, VH = 800, PAD = 28;
   const playing = () => page.evaluate(() => { const b = document.querySelector('.playControls__play'); return !!(b && b.classList.contains('playing')); });
   for (let i = 0; i < 4 && !(await playing()); i++) { await step('play-again', () => page.evaluate(() => { const b = document.querySelector('.playControls__play'); if (b) b.click(); })); await sleep(2500); await closeScModals(); }
   console.log('playing:', await playing());
-  await step('seek', () => page.evaluate(() => { const d = window.__sceAudioDebug && window.__sceAudioDebug(); if (d && d.seek) { d.seek(31); return 'debug'; } const w = document.querySelector('.playbackTimeline__progressWrapper'); if (w) { const r = w.getBoundingClientRect(); w.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: r.left + r.width * 0.12, clientY: r.top + r.height / 2 })); return 'click'; } return 'none'; }).then((m) => console.log('seek via', m)));
+  await step('seek', () => page.evaluate(() => { const d = window.__sceAudioDebug && window.__sceAudioDebug(); if (d && d.seek) { d.seek(178); return 'debug'; } /* 2:58: the lyrics capture lands on the second verse, a window with no profanity in it */ const w = document.querySelector('.playbackTimeline__progressWrapper'); if (w) { const r = w.getBoundingClientRect(); w.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: r.left + r.width * 0.68, clientY: r.top + r.height / 2 })); return 'click'; } return 'none'; }).then((m) => console.log('seek via', m)));
   await sleep(2500); await closeScModals();
   await step('dismiss-toasts', () => page.keyboard.press('Escape')); await sleep(400);
   // the themed page, hub closed
