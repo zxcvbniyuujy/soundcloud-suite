@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in SoundCloud Suite is broken or behaves wrongly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The debug log is the single most useful thing you can attach: it names what SoundCloud changed, which request failed, and which feature gave up. Nothing in it identifies you (tokens are redacted).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+      placeholder: Pressed Shuffle Play on my likes page; the button said "Loading 12/12" and then "Error – try again".
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Page
+      description: The SoundCloud page you were on (a track, your likes, a playlist, the feed).
+      placeholder: https://soundcloud.com/you/likes
+    validations:
+      required: true
+  - type: dropdown
+    id: signed
+    attributes:
+      label: Signed in?
+      options:
+        - Signed in
+        - Signed out
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Suite version
+      description: Open the hub (Alt+L) → the ⋯ menu shows "What's new in v…".
+      placeholder: v4.82.0
+    validations:
+      required: true
+  - type: input
+    id: chrome
+    attributes:
+      label: Browser
+      description: Chrome, Edge, Brave… and its version (chrome://version).
+      placeholder: Chrome 131 on macOS
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: Hub (Alt+L) → Tweaks → Data → Debug log → Copy, then paste here. When a toast offered "Copy log", that copy is the same thing.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I reloaded the SoundCloud tab and it still happens
+          required: true
+        - label: I tried with other extensions disabled (or I have none that touch soundcloud.com)

@@ -1,0 +1,23 @@
+name: Feature request
+description: Something SoundCloud Suite could do, or do better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What you want to be able to do, and where in the suite it belongs (lyrics, audio, shuffle, the page, the player bar).
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: The workaround, if any, and what makes it fall short.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Fits the suite
+      options:
+        - label: It works with SoundCloud as a listener, not around it (no downloading, no paywall bypass, no scraping other people's data)
+          required: true

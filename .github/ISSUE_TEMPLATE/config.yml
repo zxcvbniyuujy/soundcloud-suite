@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Privacy policy
+    url: https://github.com/zxcvbniyuujy/soundcloud-suite/blob/main/soundcloud-suite-extension/PRIVACY.md
+    about: What the extension sends, and to whom. Nothing is sent to us.
