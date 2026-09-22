@@ -5105,7 +5105,7 @@
 
   /* ----- LRCLIB ----- */
 
-  const LRC_HEADERS = { 'Lrclib-Client': 'SuperLyricsSC v4.0 (userscript)' };
+  const LRC_HEADERS = { 'Lrclib-Client': 'SoundCloud Suite v' + VER + ' (https://github.com/zxcvbniyuujy/soundcloud-suite)' };   // LRCLIB asks clients to say who they are
 
   // LRCLIB rate-limit back-off. On a 429 we'd otherwise keep hammering and dig
   // ourselves deeper; the helper here parks the provider for 60s, gives the
@@ -8068,10 +8068,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .mini:hover { box-shadow: inset 0 0 0 1px var(--acc), 0 10px 30px rgba(0,0,0,0.45); }
 
 /* ── sync wizard chip ── */
-.wchip { position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%); z-index: 5; max-width: calc(100% - 30px);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; font-weight: 650; color: #fff;
+.wchip { position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%); z-index: 5; width: max-content; max-width: calc(100% - 30px);
+  white-space: normal; text-align: center; line-height: 1.35; font-size: 10.5px; font-weight: 650; color: #fff;   /* the whole hint, on two lines in the compact panel, never an ellipsis (width: max-content — an absolute box at left: 50% would otherwise get half the panel) */
   background: rgba(20,20,24,0.98); box-shadow: inset 0 0 0 1px rgba(255,90,0,0.5), 0 8px 24px -6px rgba(0,0,0,.55);
-  padding: 7px 14px; border-radius: 99px; display: none; cursor: pointer; }
+  padding: 7px 14px; border-radius: 16px; display: none; cursor: pointer; }
 .wchip.on { display: block; animation: lin .2s ease both; }
 .wchip:hover { background: rgba(30,30,35,0.98); }
 
@@ -8478,7 +8478,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         <div class="hdr" id="hdr">
           <div class="art" id="art" aria-hidden="true">${ICONS.note}</div>
           <div class="meta">
-            <div class="tt" id="tt">SuperLyrics</div>
+            <div class="tt" id="tt">SoundCloud Suite</div>
             <div class="srcrow"><div class="src" id="src">Play a song</div><span class="tm" id="tm" aria-hidden="true"></span></div>
           </div>
           <div class="hactions">
