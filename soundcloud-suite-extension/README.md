@@ -130,6 +130,21 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **A third review, six fixes** — an independent read of the 4.78.0 likes
+  engine: the likes captured from one profile's list could be applied to the
+  next profile's pool when SoundCloud rendered that page from its cache (the
+  capture is now tied to the page it was made on, and a cached library learns
+  the profile whose pagination the feed may answer from it); the queue-panel
+  jump could be beaten by the loader's own scrolling while later pages loaded,
+  and could not reach a first pool track that sat past SoundCloud's rendered
+  window (a profile whose liked playlists expand ahead of the pool) — the
+  loader's kicks now yield to the jump and the scan extends the window itself,
+  verified on a 520-like profile; a landing on the seed no longer counts as a
+  pool track; a run cancelled mid-start (an SPA navigation, a second press)
+  can no longer skip, unpause or finish the run that replaced it; a refused
+  reload leaves nothing armed and a cancel drops the auto-run flag; a re-used
+  XHR cannot record a served page as the list's own; the "Queue almost done"
+  toast reshuffles the page you are on instead of navigating to your likes.
 - **Shuffle Play on today's SoundCloud** — the likes engine had gone quiet on
   the current site and every run fell to the compatibility engine with one
   track queued. Four causes, four fixes, all verified live on public likes
