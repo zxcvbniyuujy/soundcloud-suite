@@ -35,16 +35,28 @@ h1 { font-size: 58px; line-height: 1.02; font-weight: 800; letter-spacing: -.035
 .strip img { display: block; }
 `;
 const brand = (px = 34) => `<div class="brand">${markSvg(px, '#fff', ORANGE, '#fff')}<span>SoundCloud Suite</span></div>`;
+// the right column runs from 560 to 1280: a hub card sits centred in it, a browser frame fits it whole (680 px wide,
+// 24 px off the seam and the edge), and a card can bleed off the bottom on purpose but never off the right
+const COL_X = 560, COL_W = 720;
+const centred = (w) => COL_X + Math.round((COL_W - w) / 2);
+const cardW = (name) => rects[name].width - PAD * 2, cardH = (name) => rects[name].height - PAD * 2;
+const centredCard = (name, top) => card(name, 22, `left:${centred(cardW(name))}px;top:${top}px`);
+const shuffleUi = () => {
+  // the likes page in a frame, the Shuffle Play button's queued count readable, the hub's Queue tab over its lower half
+  const fw = 680, fx = COL_X + 20, fy = 60;
+  const qw = Math.round(cardW('hub-queue-shuffle') * 0.86), qh = Math.round(cardH('hub-queue-shuffle') * 0.86);
+  return frame('page-shuffle', fw, `left:${fx}px;top:${fy}px`) + card('hub-queue-shuffle', 22, `left:${COL_X + COL_W - qw - 36}px;top:${fy + 180}px;transform:scale(.86);transform-origin:top left`);
+};
 const shots = [
-  { file: 'screenshot-1-lyrics', eyebrow: 'Lyrics', h1: 'Lyrics that follow the song', sub: 'Synced line by line from six sources and locked to the vocals — even on sped-up and edited uploads.', ui: () => card('hub-lyrics', 22, 'left:640px;top:58px') },
-  { file: 'screenshot-2-audio', eyebrow: 'Audio', h1: 'Studio-grade sound, right in the player', sub: 'A ten-band EQ on a live spectrum, Enhance, loudness normalization and a true-peak clip guard. Exact passthrough when off.', ui: () => card('hub-audio', 22, 'left:632px;top:44px') },
-  { file: 'screenshot-3-themes', eyebrow: 'Themes', h1: 'A darker, cleaner SoundCloud', sub: 'Eleven dark themes, the upsells and clutter gone, and a Zen mode that leaves nothing but the music.', ui: () => frame('page-dark', 880, 'left:540px;top:176px') },
-  { file: 'screenshot-4-tools', eyebrow: 'Player tools', h1: 'Every tool in the bar', sub: 'Speed, A–B loop, sleep timer, track info, a floating lyric line, and a Ctrl+K palette that reaches every setting.', ui: () => frame('cmdk', 820, 'left:540px;top:64px') + `<div class="strip" style="left:400px;top:664px;width:760px;height:48px"><img src="${dataUri('bar')}" style="width:760px;height:56px;margin-top:-8px"></div>` },
-  { file: 'screenshot-5-chapters', eyebrow: 'Mixes & podcasts', h1: 'A two-hour set, in chapters', sub: 'The tracklist in the description becomes chapters that follow the playhead. Add your own cue points, and long sets resume where you stopped.', ui: () => cardFrom('probe-chapters', 800, 54, 470, 682, 22, 'left:640px;top:52px') },
+  { file: 'screenshot-1-lyrics', eyebrow: 'Lyrics', h1: 'Lyrics that follow the song', sub: 'Synced line by line from seven sources and locked to the vocals — even on sped-up and edited uploads.', ui: () => centredCard('hub-lyrics', 56) },
+  { file: 'screenshot-2-audio', eyebrow: 'Audio', h1: 'Studio-grade sound, right in the player', sub: 'A ten-band EQ on a live spectrum, Enhance, loudness normalization and a true-peak clip guard. Exact passthrough when off.', ui: () => centredCard('hub-audio', 44) },
+  { file: 'screenshot-3-shuffle', eyebrow: 'Shuffle', h1: 'Shuffle every track you ever liked', sub: 'True random across your whole library — not the first page the site loads. Filter by genre or artist, skip what you just heard.', ui: shuffleUi },
+  { file: 'screenshot-4-themes', eyebrow: 'Themes', h1: 'A darker, cleaner SoundCloud', sub: 'Eleven dark themes, the upsells and clutter gone, and a Zen mode that leaves nothing but the music.', ui: () => frame('page-dark', 680, `left:${COL_X + 20}px;top:170px`) },
+  { file: 'screenshot-5-tools', eyebrow: 'Player tools', h1: 'Every tool in the bar', sub: 'Speed, A–B loop, sleep timer, track info, a floating lyric line, and a Ctrl+K palette that reaches every setting.', ui: () => frame('cmdk', 680, `left:${COL_X + 20}px;top:118px`) + `<div class="strip" style="left:${COL_X + 20 + 60}px;top:616px;width:560px;height:56px"><img src="${dataUri('bar')}" style="width:760px;height:56px;margin-left:-200px"></div>` },
 ];
 const page1280 = (s) => `<html><head><style>${CSS}</style></head><body><div class="stage" style="width:1280px;height:800px"><div class="band" style="width:560px"></div><div class="copy"><div class="eyebrow">${s.eyebrow}</div><h1>${s.h1}</h1><div class="sub">${s.sub}</div></div>${brand()}${s.ui()}</div></body></html>`;
 const tile440 = () => `<html><head><style>${CSS} .t { width:440px;height:280px;background:${ORANGE};position:relative;overflow:hidden;color:#fff } .t h1 { font-size:34px;letter-spacing:-.03em;position:absolute;left:36px;top:132px } .t .tag { position:absolute;left:36px;top:190px;font-size:15px;font-weight:600;opacity:.9;letter-spacing:.01em } .t .m { position:absolute;left:36px;top:44px }</style></head><body><div class="t"><div class="m">${markSvg(150, '#fff', ORANGE, '#fff')}</div><h1>SoundCloud Suite</h1><div class="tag">Lyrics · Audio · Shuffle · Themes</div></div></body></html>`;
-const marquee1400 = () => `<html><head><style>${CSS} .stage { background:${ORANGE} } .mq h1 { font-size:64px;max-width:560px } .mq .sub { font-size:22px;max-width:520px }</style></head><body><div class="stage mq" style="width:1400px;height:560px"><div class="copy" style="top:104px"><div style="margin-bottom:34px">${markSvg(170, '#fff', ORANGE, '#fff')}</div><h1>SoundCloud Suite</h1><div class="sub">Synced lyrics, studio-grade audio, full-library shuffle and a cleaner SoundCloud.</div></div>${card('hub-audio', 22, 'left:700px;top:40px;transform:scale(.8);transform-origin:top left')}${card('hub-lyrics', 22, 'left:1010px;top:110px;transform:scale(.8);transform-origin:top left')}</div></body></html>`;
+const marquee1400 = () => `<html><head><style>${CSS} .stage { background:${ORANGE} } .mq h1 { font-size:64px;max-width:560px } .mq .sub { font-size:22px;max-width:520px }</style></head><body><div class="stage mq" style="width:1400px;height:560px"><div class="copy" style="top:104px"><div style="margin-bottom:34px">${markSvg(170, '#fff', ORANGE, '#fff')}</div><h1>SoundCloud Suite</h1><div class="sub">Synced lyrics, studio-grade audio, full-library shuffle and a cleaner SoundCloud.</div></div>${card('hub-audio', 22, 'left:704px;top:36px;transform:scale(.78);transform-origin:top left')}${card('hub-lyrics', 22, `left:${1400 - 40 - Math.round(cardW('hub-lyrics') * 0.78)}px;top:96px;transform:scale(.78);transform-origin:top left`)}</div></body></html>`;
 (async () => {
   const b = await chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox'] });
   const pg = await b.newPage({ viewport: { width: 1400, height: 800 }, deviceScaleFactor: 1 });

@@ -7,12 +7,12 @@ Paste these into the developer dashboard. Files referenced are in this folder.
 | Field | Value |
 |---|---|
 | Name (from manifest) | SoundCloud Suite |
-| Summary (from manifest, 130 chars) | All-in-one SoundCloud upgrade: themes & declutter, player tools, studio-grade audio, a synced-lyrics hub and full-library shuffle. |
-| Description | `description.txt` (4469 characters) |
+| Summary (from the manifest's `_locales`, 117 chars, shown by the store in the user's language) | Synced lyrics, studio-grade audio, full-library shuffle, ad skipping and a cleaner look for the SoundCloud web player. |
+| Description | `description.txt` (4,569 characters; the limit is 16,000) |
 | Category | Entertainment |
 | Language | English (United States) |
 | Store icon (128×128) | `store-icon-128.png` |
-| Screenshots (1280×800, in this order) | `screenshot-1-lyrics.png`, `screenshot-2-audio.png`, `screenshot-3-themes.png`, `screenshot-4-tools.png`, `screenshot-5-chapters.png` |
+| Screenshots (1280×800, in this order) | `screenshot-1-lyrics.png`, `screenshot-2-audio.png`, `screenshot-3-shuffle.png`, `screenshot-4-themes.png`, `screenshot-5-tools.png` |
 | Small promo tile (440×280) | `promo-small-440x280.png` |
 | Marquee promo tile (1400×560) | `promo-marquee-1400x560.png` |
 | Global promo video | none |
@@ -43,8 +43,8 @@ Paste these into the developer dashboard. Files referenced are in this folder.
 
 | Field | Value |
 |---|---|
-| Username / Password | Leave empty. Lyrics, audio and themes work signed out. If you want the reviewer to exercise Shuffle, create a throwaway SoundCloud account, like ten tracks, and enter its login here. |
-| Additional instructions (477 chars) | No login needed for core features. 1) Open https://soundcloud.com/rexorangecounty/best-friend and press play. Dismiss the one-time welcome card. 2) Press Alt+L (or the note icon in the player bar): the hub opens with synced lyrics that follow the song. 3) Audio tab: drag the EQ curve, switch on Enhance, hold Compare to hear the original. 4) Tweaks tab: pick a theme. 5) Shuffle needs any SoundCloud account with a few liked tracks: sign in, then click the bar's shuffle icon. |
+| Username / Password | Leave empty. Everything can be exercised signed out: lyrics, audio, themes, and Shuffle Play on any public likes page. |
+| Additional instructions (≈560 chars) | No login needed. 1) Open https://soundcloud.com/rexorangecounty/best-friend and press play; if SoundCloud shows its sign-in prompt on the first play, close it and press play again. Dismiss the one-time welcome card. 2) Press Alt+L (or the note icon in the player bar): the hub opens with synced lyrics that follow the song. 3) Audio tab: drag the EQ curve, switch on Enhance, hold Compare to hear the original. 4) Tweaks tab: pick a theme. 5) Shuffle: open https://soundcloud.com/flume/likes and press the "Shuffle Play" button next to the Likes tab; the whole library is queued in a fresh order and playback starts. |
 
 ## Distribution
 

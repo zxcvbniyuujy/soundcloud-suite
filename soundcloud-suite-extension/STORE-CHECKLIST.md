@@ -6,11 +6,11 @@ public listing.
 ## Build the public package
 
 ```sh
-./build.sh --public --zip 4.80.0
+./build.sh --public --zip 4.81.0
 ```
 
 `--public` refuses to build if any Genius token is present; `--zip` writes
-`../soundcloud-suite-4.80.0.zip` containing only `manifest.json`, `icons/` and `js/`.
+`../soundcloud-suite-4.81.0.zip` containing only `manifest.json`, `icons/` and `js/`.
 Upload it at https://chrome.google.com/webstore/devconsole
 
 ## MUST verify before upload
@@ -52,8 +52,18 @@ Upload it at https://chrome.google.com/webstore/devconsole
 - Visual features are pure CSS (reversible, can't break playback or layout).
 - The script guards against double-injection and SPA re-renders.
 
-## Nice-to-have before launch
+## Listing assets (all in `store/`, regenerated with `tools/store/shots.js` then `tools/store/compose.js`)
 
-- [ ] Take 3–5 screenshots (lyrics hub, themes, shuffle, settings).
-- [ ] A 1–2 line store description plus a longer feature list.
-- [ ] Decide a support contact / repo URL.
+- [x] Five 1280×800 screenshots: lyrics, audio, shuffle, themes, player tools.
+- [x] Small promo tile 440×280 and marquee 1400×560.
+- [x] Store icon 128×128 (`store-icon-128.png`; the same mark as `icons/`).
+- [x] `store/description.txt` (the long description) and `store/listing.md` (every dashboard field, ready to paste).
+- [x] Homepage and support URLs: the GitHub repository and its issues page.
+
+## Before you press Publish
+
+- [ ] Merge this branch to `main` so the privacy policy link in `listing.md` (the `main` row) resolves; until then use the branch row.
+- [ ] Upload the zip `build.sh --public --zip` wrote (the one whose version matches `manifest.json`).
+- [ ] Paste the fields from `store/listing.md`: summary, description, category, privacy tab (single purpose, permission justifications, data usage, certifications), test instructions.
+- [ ] Upload the five screenshots in the listed order and both promo tiles.
+- [ ] Revoke any Genius API token that was ever committed to the repository's history (the build refuses a non-blank one, but the old value is still in git history until revoked).

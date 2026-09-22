@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.80.0
+// @version      4.81.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.80.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.81.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -471,7 +471,8 @@
         auth: null, clientId: null, tpl: null,
         pageUserId: '',   // the profile a GenericLikes run resolved, so the feed answers only that profile's pagination
         meId: '',   // the signed-in account's id from /me, when the token's shape does not carry it
-        listSeen: new Map(),   // page path → { path, ids }: the likes each page's list has loaded from the API (they head its queue)
+        listSeen: new Map(),   // page path → Map(api path → Set of track ids): the likes each page's list loaded (they head its queue)
+        sessionLibUid: '',   // the profile id the session library belongs to (GenericLikes), restored with it
         reloading: false,   // a reshuffle reload is under way: the auto-run flag belongs to the next page
         apiFails: 0, apiNoticeShown: false,   // R23: api-v2 degradation watchdog (see ApiHealth)
         fetchAbort: null,
@@ -513,6 +514,9 @@
         pend.ms = 0; pend.played = 0; pend.day = {}; pend.hour = {};
     }
     window.addEventListener('pagehide', () => { try { flushStats(); } catch (e) {} });
+    // the reshuffle reload: the auto-run flag is written only by a document that really leaves, so a slow reload
+    // (a throttled network) still arms the next page and a refused one arms nothing
+    window.addEventListener('pagehide', () => { try { if (S.reloading) SS.set('bh_sc_autorun', location.pathname); } catch (e) {} });
     function localDayKey(offsetDays) {
         const d = new Date(Date.now() - (offsetDays || 0) * 86400000);
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -546,16 +550,18 @@
      * and linearly scanned on every lookup (every 2s watcher tick, every
      * lyric search, every Alt+B). Parse once into a url→tuple Map; the only
      * writers (saveCompactCache / Forget) invalidate it. */
-    let LIBMAP = null;
-    function invalidateLibMap() { LIBMAP = null; }
+    let LIBMAP = null, LIBMAP_ME = null;   // the memo and the account it was checked for
+    function invalidateLibMap() { LIBMAP = null; LIBMAP_ME = null; }
     // another tab rewriting bh_sc_lib must not leave this tab's map stale
     try { window.addEventListener('storage', e => { if (!e || e.key === null || e.key === 'bh_sc_lib') invalidateLibMap(); }); } catch (e) {}
     function getLibMap() {
-        if (LIBMAP) return LIBMAP;
+        let me = ''; try { me = userTag(); } catch (e) {}
+        if (LIBMAP_ME === me) return LIBMAP;   // memoised for this account, a null included: every reader tolerates it
+        LIBMAP_ME = me;
         const c = LS.get('bh_sc_lib', null);
-        if (!c || !c.items) return null;
+        if (!c || !c.items) { LIBMAP = null; return null; }
         // written by another account on this browser: not this listener's library (a blob from before the tag is kept)
-        try { const me = userTag(); if (c.acct && me && c.acct !== me) return null; } catch (e) {}
+        if (c.acct && me && c.acct !== me) { LIBMAP = null; return null; }
         const m = new Map();
         for (const it of c.items) m.set(it[1], it);
         m.__items = c.items;
@@ -778,19 +784,23 @@
             if (!LIKES_PATH.test(p) || !json || !Array.isArray(json.collection)) return;
             // one capture per page: SoundCloud keeps each page's collection for the life of the tab, so a page
             // rendered again from that cache (no request) still has its capture
+            // every path seen on the page is kept apart: another profile's queue keeps paginating after a navigation,
+            // and its page must never replace (or pose as) this page's own list
             const page = location.pathname;
-            let cap = S.listSeen.get(page);
-            if (!cap || cap.path !== p) {
-                cap = { path: p, ids: new Set() };
-                S.listSeen.delete(page); S.listSeen.set(page, cap);
+            let byPath = S.listSeen.get(page);
+            if (!byPath) {
+                byPath = new Map();
+                S.listSeen.set(page, byPath);
                 while (S.listSeen.size > 8) S.listSeen.delete(S.listSeen.keys().next().value);
             }
+            let ids = byPath.get(p);
+            if (!ids) { ids = new Set(); byPath.set(p, ids); }
             for (const it of json.collection) {
                 if (!it) continue;
-                if (it.track && it.track.id) cap.ids.add(it.track.id);
+                if (it.track && it.track.id) ids.add(it.track.id);
                 // a liked playlist expands into its tracks ahead of the pool, and those are held once too
                 const tr = it.playlist && Array.isArray(it.playlist.tracks) ? it.playlist.tracks : null;
-                if (tr) for (const t of tr) if (t && t.id) cap.ids.add(t.id);
+                if (tr) for (const t of tr) if (t && t.id) ids.add(t.id);
             }
         } catch (e) {}
     }
@@ -822,11 +832,14 @@
             try { showToast(msg, sub, { label: 'Copy log', fn: () => { try { GM_setClipboard(Log.dump()); } catch (e) {} } }); } catch (e) {}
         }
         return {
-            markFail(status) {
+            markFail(status, url) {
                 // only count "endpoint moved / server broken" signals; auth (401/403)
                 // and rate limits (429) are normal user states, not API changes.
                 if (status !== 404 && status < 500) return;
                 if (!S.clientId) return;   // cold-path is handled by the watchdog timer
+                // a 404 on a stream URL is a dead upload the player skips (a library with a few removed tracks
+                // produces several in a row during a shuffle), not an API change
+                if (/api-v2\.soundcloud\.com\/media\//.test(String(url || ''))) return;
                 S.apiFails++;
                 if (S.apiFails >= FAIL_LIMIT) notice('endpoints');
             },
@@ -1115,7 +1128,7 @@
         const likesPage = listPageUrl(rawUrl, mth);
         return p.then(res => {
             try {
-                if (res && (res.status === 404 || res.status >= 500)) ApiHealth.markFail(res.status);
+                if (res && (res.status === 404 || res.status >= 500)) ApiHealth.markFail(res.status, rawUrl);
                 else if (res && res.status < 400) ApiHealth.markOk();
             } catch (e) {}
             if (likesPage && res && res.ok) { try { res.clone().json().then(j => noteListPage(rawUrl, j)).catch(() => {}); } catch (e) {} }
@@ -1137,6 +1150,7 @@
             this.__bhAdBlock = adBlocked(raw);
             sniffUrl(raw, method);
             this.__bhApi = API_RE.test(raw);
+            this.__bhApiUrl = raw;
             this.__bhListKind = ((method || '').toUpperCase() === 'GET') ? feedListKind(raw) : null;   // feed / search / related lists get the rules
             if ((method || '').toUpperCase() === 'GET') {
                 const page = resolveFeed(raw);
@@ -1168,7 +1182,7 @@
                 this.__bhHealthHooked = true;
                 this.addEventListener('load', () => {
                     try {
-                        if (this.status === 404 || this.status >= 500) ApiHealth.markFail(this.status);
+                        if (this.status === 404 || this.status >= 500) ApiHealth.markFail(this.status, this.__bhApiUrl);
                         else if (this.status > 0 && this.status < 400) ApiHealth.markOk();
                     } catch (e) {}
                 });
@@ -1796,11 +1810,13 @@
         if (!auth || !S.clientId) return Promise.resolve('');
         const url = `https://api-v2.soundcloud.com/me?client_id=${S.clientId}`;
         try { assertScApi(url); } catch (e) { return Promise.resolve(''); }
-        meResolving = origFetch(url, { credentials: 'include', headers: { Authorization: auth } })
+        const ac = new AbortController();
+        if (!S.fetchAbort) S.fetchAbort = ac;   // a cancel aborts it like the library fetch
+        meResolving = origFetch(url, { credentials: 'include', headers: { Authorization: auth }, signal: ac.signal })
             .then(r => (r.ok ? r.json() : null))
             .then(j => { if (j && j.id) S.meId = String(j.id); return S.meId || ''; })
             .catch(() => '')
-            .then(v => { meResolving = null; return v; });
+            .then(v => { meResolving = null; if (S.fetchAbort === ac) S.fetchAbort = null; return v; });
         return meResolving;
     }
     async function buildFirstPageUrl(pageType, limit) {
@@ -2013,8 +2029,8 @@
             return v && Array.isArray(v.items) ? v : null;
         } catch (e) { swallow(e, 'idbLoadLib'); return null; }
     }
-    function idbSaveLib(libKey, items, t) {
-        LibCache.set(libKey, { t: t || Date.now(), items }).then(() => idbPruneLib(libKey)).catch(e => swallow(e, 'idbSaveLib'));
+    function idbSaveLib(libKey, items, t, uid) {
+        LibCache.set(libKey, { t: t || Date.now(), items, uid: uid || '' }).then(() => idbPruneLib(libKey)).catch(e => swallow(e, 'idbSaveLib'));
     }
     function idbClearLib() { libGen++; LS.del(LIB_IDX); LibCache.clear().catch(e => swallow(e, 'idbClearLib')); }
 
@@ -2032,7 +2048,10 @@
             if (Date.now() - (lastTopUpAt.get(libKey) || 0) < 5 * 60000) return;   // a reshuffle burst needs one sync, not five
             lastTopUpAt.set(libKey, Date.now());
             await waitFor(() => (S.tpl || S.clientId) && (S.auth || cookieAuth() || pageType === 'GenericLikes'), T.authWait, 200);
+            const path0 = location.pathname;
             let url = await buildFirstPageUrl(pageType, 200);
+            if (location.pathname !== path0) return;   // navigated meanwhile: the first page would be the new page's profile
+            const uid0 = pageType === 'GenericLikes' ? S.pageUserId : '';
             const auth = S.auth || cookieAuth();
             const have = new Set(lib.map(it => it.track.id));
             const fresh = [];
@@ -2056,7 +2075,7 @@
             const merged = fresh.concat(lib);   // likes arrive newest-first
             if (S.sessionLibKey === libKey) { S.sessionLib = merged; S.sessionLibAt = Date.now(); }
             if (pageType !== 'GenericLikes') saveCompactCache(merged);   // never poison YOUR library with someone else's
-            idbSaveLib(libKey, merged, fullFetchT);   // keep t: scheduled full refetch stays due
+            idbSaveLib(libKey, merged, fullFetchT, uid0);   // keep t: scheduled full refetch stays due
             showToast(fresh.length + ' new like' + (fresh.length === 1 ? '' : 's') + ' synced — in the pool from the next shuffle');
         } catch (e) { lastTopUpAt.delete(libKey); swallow(e, 'topUpCache'); }
     }
@@ -2069,13 +2088,15 @@
         bgRefreshing = true;
         try {
             await waitFor(() => (S.tpl || S.clientId) && (S.auth || cookieAuth() || pageType === 'GenericLikes'), T.authWait, 200);
-            const gen0 = libGen;
+            const gen0 = libGen, path0 = location.pathname;
             const fresh = await fetchLibrary(pageType, null, { detached: true });
             if (!fresh || fresh.length < 3) return;
             if (gen0 !== libGen) return;   // "Forget" ran meanwhile: a cleared cache stays cleared
-            if (S.sessionLibKey === libKey) { S.sessionLib = fresh; S.sessionLibAt = Date.now(); }
+            if (location.pathname !== path0 && pageType === 'GenericLikes') return;   // navigated meanwhile: the fetch resolved the new page's profile
+            const uid = pageType === 'GenericLikes' ? S.pageUserId : '';
+            if (S.sessionLibKey === libKey) { S.sessionLib = fresh; S.sessionLibAt = Date.now(); S.sessionLibUid = uid; }
             if (pageType !== 'GenericLikes') saveCompactCache(fresh);
-            idbSaveLib(libKey, fresh);
+            idbSaveLib(libKey, fresh, undefined, uid);
             libGen++;
             showToast('Library refreshed', fresh.length.toLocaleString() + ' likes ready for the next shuffle');
         } catch (e) { swallow(e, 'bg refresh'); }
@@ -2491,14 +2512,13 @@
         // collection for the life of the page (SPA navigation included) and holds each track once, so no served
         // page can give it a new order. Reload and run again on arrival — the library comes from the cache.
         if (fedPaths.has(location.pathname.replace(/\/$/, ''))) {
-            S.reloading = true;   // the flag is for the page that comes next: this page's own auto-run check must not consume it
-            SS.set('bh_sc_autorun', location.pathname);
+            S.reloading = true;   // the pagehide listener writes the auto-run flag for the page that comes next
             setBtn('Reshuffling…');
-            try { location.reload(); } catch (e) { S.reloading = false; SS.del('bh_sc_autorun'); throw e; }
+            try { location.reload(); } catch (e) { S.reloading = false; throw e; }
             await pause(4000);   // the page is on its way out; never fall through to the compatibility engine
-            // still here: the reload was refused (a page prompt the listener declined) — the flag must not fire on
-            // the next visit, and the button must not stay busy
-            if (S.reloading) { S.reloading = false; SS.del('bh_sc_autorun'); cancel('Shuffle Play'); }
+            // still here: the reload is slow (a throttled network) or was refused (a page prompt the listener
+            // declined). Free the button either way; the arming stays, so a late departure still runs on arrival
+            if (S.reloading) { setBtn('Shuffle Play'); setBtnProgress(null); setBusy(false); S.active = false; }
             return;
         }
         // 1. FETCH — or reuse: memory (this session) → disk cache (last fetch) → network.
@@ -2537,6 +2557,7 @@
         let lib = null, salvaged = false;
         if (CFG.cacheHours > 0 && S.sessionLib && S.sessionLibKey === libKey && Date.now() - S.sessionLibAt < T.libReuseMs) {
             lib = S.sessionLib;
+            if (pageType === 'GenericLikes' && !S.pageUserId && S.sessionLibUid) S.pageUserId = S.sessionLibUid;
             const age = Math.max(1, Math.round((Date.now() - S.sessionLibAt) / 60000));
             showToast('Reshuffling', `Library from ${age}m ago — Forget in settings to refetch`);
             // reshuffles see fresh likes too (topUpCache self-throttles to one
@@ -2558,9 +2579,10 @@
             }
             if (hit && hit.items.length >= 3 && !S.cancelled) {
                 const cacheAge = Date.now() - (hit.t || 0);
+                if (pageType === 'GenericLikes' && !S.pageUserId && hit.uid) S.pageUserId = String(hit.uid);   // the profile the record was fetched for
                 if (cacheAge < CFG.cacheHours * 3600000) {
                     lib = hit.items;
-                    S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey;
+                    S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey; S.sessionLibUid = String(hit.uid || '');
                     const ageM = Math.max(1, Math.round(cacheAge / 60000));
                     const ageTxt = ageM < 60 ? ageM + 'm' : Math.round(ageM / 60) + 'h';
                     showToast(`Instant start — ${lib.length.toLocaleString()} likes from cache`, `${ageTxt} old · syncing new likes in the background`);
@@ -2569,7 +2591,7 @@
                     // expired but recent: stale-while-revalidate — instant music
                     // from the old cache, full refresh runs behind it
                     lib = hit.items;
-                    S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey;
+                    S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey; S.sessionLibUid = String(hit.uid || '');
                     const ageH = Math.max(1, Math.round(cacheAge / 3600000));
                     showToast(`Instant start — ${lib.length.toLocaleString()} likes from cache`, `${ageH}h old · refreshing your full library in the background`);
                     refreshLibInBackground(pageType, libKey);
@@ -2599,9 +2621,9 @@
             }
             if (S.cancelled) return;
             if (!lib || lib.length < 3) throw new Error('library too small');
-            S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey;
+            S.sessionLib = lib; S.sessionLibAt = Date.now(); S.sessionLibKey = libKey; S.sessionLibUid = pageType === 'GenericLikes' ? S.pageUserId : '';
             if (pageType !== 'GenericLikes') saveCompactCache(lib);   // bh_sc_lib is YOUR library, not theirs
-            if (!salvaged && CFG.cacheHours > 0) idbSaveLib(libKey, lib);   // partial fetches stay session-only
+            if (!salvaged && CFG.cacheHours > 0) idbSaveLib(libKey, lib, undefined, S.sessionLibUid);   // partial fetches stay session-only
         }
 
         // 2. SHUFFLE
@@ -2611,12 +2633,16 @@
         let pool = built.pool;
         // the likes this page's list has already loaded sit in the queue ahead of the served pool, and SoundCloud
         // drops a served like whose track the collection already holds — so they leave the pool here, and the count
-        // and the Up-next list say what will actually play. Only a capture made on THIS page counts (a profile
-        // SoundCloud renders from its cached collection makes no request, and the previous page's capture would
-        // otherwise pass); on a cache hit it also names the profile whose pagination the feed may answer
-        const cap = S.listSeen.get(location.pathname) || null;
-        if (cap && pageType === 'GenericLikes' && !S.pageUserId) { const m = LIKES_PATH.exec(cap.path); if (m && m[1]) S.pageUserId = m[1]; }
-        const seen = cap && feedOwnerOk(cap.path) ? cap.ids : null;
+        // and the Up-next list say what will actually play. Only a capture made on THIS page counts, for the path
+        // the feed may answer: with the profile known (a network fetch resolved it, or the cached library remembered
+        // it) the path that passes the ownership check; with no profile known, only when this page saw a single
+        // path — a stray page of another profile's queue must never name the profile or drop tracks
+        const byPath = S.listSeen.get(location.pathname) || null;
+        let seen = null;
+        if (byPath && byPath.size) {
+            if (S.pageUserId || pageType === 'Likes') { for (const [pth, ids] of byPath) if (feedOwnerOk(pth)) { seen = ids; break; } }
+            else if (byPath.size === 1) { const [pth, ids] = byPath.entries().next().value; const m = LIKES_PATH.exec(pth); if (m && m[1]) { S.pageUserId = m[1]; seen = ids; } }
+        }
         if (seen && seen.size) {
             const kept = pool.filter(it => !seen.has(it.track.id));
             stats.inList = pool.length - kept.length;
@@ -2817,7 +2843,7 @@
                 S.stall >= CFG.stallDoneTicks);
             if (done) { stopLoader(); onDone(true); return; }
 
-            if (S.stall && S.stall % CFG.stallKickTicks === 0) {
+            if (!S.jumping && S.stall && S.stall % CFG.stallKickTicks === 0) {
                 scrollable.scrollTop = Math.max(0, scrollable.scrollTop - 500);
                 kick();
             }
@@ -2949,7 +2975,7 @@
     }
     function cancel(label) {
         S.cancelled = true;
-        if (S.reloading) { S.reloading = false; SS.del('bh_sc_autorun'); }   // a reshuffle cancelled before the reload lands must not run on arrival
+        if (S.reloading) { S.reloading = false; SS.del('bh_sc_autorun'); }   // a reshuffle cancelled before the reload lands must not run on arrival (the flag is only ever written at pagehide)
         stopLoader();
         S.boosting = false;
         cleanupFeed();
@@ -9701,6 +9727,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🔎', 'A fourth review, five fixes', 'A second reader of the last two rounds. The reshuffle’s auto-run flag is now written only as the page actually leaves, so a slow reload keeps it and a refused one never sets it. What a page’s list loaded is kept per path, and the profile a cached library belongs to is stored with it rather than inferred from passing traffic. The compact library behind stats and search remembers which account it was checked for. The loader’s stall kick yields to the queue-panel jump, and the account lookup can be cancelled like the library fetch. Found while taking the store pictures: a shuffle through a library with a few removed uploads made SoundCloud’s player hit three dead stream URLs in a row, and the API watchdog read that as “SoundCloud API may have changed” — a missing stream is a dead upload, and no longer counts.'],
           ['🪪', 'Your own likes, on paper and in practice', 'The one flow that cannot be exercised from here is the signed-in Likes page, so a reviewer read it against what today’s SoundCloud does. Six things changed: the account id no longer depends on the shape of the sign-in token alone (the suite asks SoundCloud once when the token does not say), a liked playlist’s tracks count as already on the page, each page keeps its own record of what its list loaded, a library cached before accounts were kept apart is dropped rather than handed to whichever account shuffles first, the compact library used by stats and search is tagged with its account, and the Shuffle Play button on your Likes page finds a home above the list if SoundCloud renames its header. The compatibility engine was verified live on a public playlist.'],
           ['🔎', 'A third review, six fixes', 'The likes engine’s new code, read by an independent reviewer. The list of likes captured on one profile could be applied to the next profile’s pool when SoundCloud rendered that page from its cache; the capture now belongs to its page, and a cached library still learns the profile whose pagination the feed may answer. The queue-panel jump only trusted itself when it found the row: the loader’s scrolling no longer fights it, it extends SoundCloud’s rendered window itself when the first pool track sits past it (a profile whose liked playlists expand ahead of the pool), and a landing on the seed no longer counts. A run cancelled mid-start can no longer skip, unpause or wrap up the run that replaced it, a refused reload leaves nothing armed, and the “Queue almost done” toast reshuffles the page you are on.'],
           ['🔀', 'Shuffle Play on today’s SoundCloud', 'The likes engine had gone quiet: SoundCloud now pages a likes list through a mixed tracks-and-playlists endpoint the feed never answered, a signed-out listener’s first play click opens a sign-in nudge instead of playing, and the queue keeps the page of likes the list had loaded ahead of the shuffle. The feed answers that endpoint, the nudge our click raised is closed and the click repeated, playback starts on the pool’s first track through the queue panel rather than a skip off the seed, likes already on the page leave the pool so the count says what will play, and a second shuffle on the same page reloads it for a fresh queue and starts on arrival from the cache.'],

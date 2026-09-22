@@ -130,6 +130,23 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **A fourth review, five fixes** — a second reader of the waves 24–25 code:
+  the reshuffle's auto-run flag is now written only as the document actually
+  leaves (a slow reload used to lose it, a refused one used to keep it); the
+  list capture keeps every likes path a page saw apart, and the profile a
+  cached library belongs to is stored with it and restored on a hit instead of
+  being inferred from passing traffic; the compact library's account check is
+  memoised with the account it was made for (readers no longer re-parse the
+  blob per track for another account's blob, and an early empty tag no longer
+  pins the wrong answer); the loader's stall kick yields to the queue-panel
+  jump like its regular kicks do; the `/me` lookup can be cancelled like the
+  library fetch; and a background library refresh that outlives a navigation
+  no longer files the new page's profile under the old key. Found while
+  taking the store screenshots: the API watchdog counted SoundCloud's own
+  404s on dead uploads' stream URLs (three in a row during a shuffle of a
+  library with a few removed tracks) and raised "SoundCloud API may have
+  changed"; a missing stream is a dead upload, not an API change, and no
+  longer counts.
 - **Your own likes, on paper and in practice** — the signed-in Likes page is
   the one flow that cannot be exercised from this environment, so a reviewer
   read it against today's SoundCloud. Six changes: the account id that keys
