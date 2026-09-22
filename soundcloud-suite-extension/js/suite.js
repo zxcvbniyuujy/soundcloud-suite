@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.67.0
+// @version      4.68.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.67.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.68.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -7344,10 +7344,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .glow { position: absolute; top: -50px; left: -30px; right: -30px; height: 200px; background: center/cover no-repeat; filter: blur(54px) saturate(190%) brightness(0.9); opacity: 0; transition: opacity 0.7s ease; pointer-events: none; }
 .panel.haz .glow { opacity: 0.34; }
 
-.hdr { position: relative; z-index: 1; display: flex; align-items: center; gap: 9px; padding: 12px 10px 11px 13px; flex: none; user-select: none; }
+.hdr { position: relative; z-index: 1; display: flex; align-items: center; gap: 9px; padding: 12px 8px 11px 13px; flex: none; user-select: none; }
 .hdr::after { content: ''; position: absolute; left: 15px; right: 15px; bottom: 0; height: 1px; background: rgba(255,255,255,0.045); }
 .prog { position: absolute; left: 15px; bottom: 0; height: 2px; width: 0%; max-width: calc(100% - 30px); background: var(--acc); border-radius: 2px; z-index: 1; }
-.tm { font-size: 9.5px; font-weight: 600; color: #74747b; font-variant-numeric: tabular-nums; flex: none; margin-right: 2px; letter-spacing: 0.02em; opacity: .8; }
+.tm { font-size: 9.5px; font-weight: 600; color: #74747b; font-variant-numeric: tabular-nums; flex: none; letter-spacing: 0.02em; opacity: .8; cursor: pointer; }
+.srcrow { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-top: 3px; }
+.srcrow .src { flex: 1; min-width: 0; margin-top: 0; }
+.srcrow .tm { padding-right: 2px; font-size: 9px; }
 
 .art { position: relative; width: 34px; height: 34px; border-radius: 10px; flex: none; background: rgba(255,255,255,0.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); display: grid; place-items: center; color: #5c5c63; overflow: hidden; }
 .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -7361,11 +7364,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
 .meta { flex: 1; min-width: 0; }
 .tt { font-size: 12.5px; font-weight: 680; letter-spacing: -0.2px; color: #f3f3f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.src { font-size: 10.5px; font-weight: 500; letter-spacing: 0.1px; color: #83838c; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s ease; }
+.src { font-size: 10.2px; font-weight: 500; letter-spacing: 0; color: #83838c; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s ease; }
 .src .dot { color: var(--acc2); }
 .src.lk { cursor: pointer; }
 .src.lk:hover { color: #c9c9cf; }
-.hbtn { width: 25px; height: 25px; flex: none; border-radius: 9px; display: grid; place-items: center; color: #82828a; transition: background .16s ease, color .16s ease, transform .12s ease; }
+.hbtn { width: 24px; height: 24px; flex: none; border-radius: 8px; display: grid; place-items: center; color: #82828a; transition: background .16s ease, color .16s ease, transform .12s ease; }
 .hbtn:hover { background: rgba(255,255,255,0.07); color: #f3f3f5; }
 .hbtn:active { transform: scale(0.9); }
 .hbtn svg { width: 14.5px; height: 14.5px; display: block; }
@@ -7381,7 +7384,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
 .line { padding: 7px 14px; border-radius: 10px; font-size: var(--fs, 16px); line-height: 1.5; font-weight: 600; letter-spacing: 0.1px; color: #7d7d86; transition: color 0.3s cubic-bezier(.22,1,.36,1), opacity .3s ease, transform 0.32s cubic-bezier(.22,1,.36,1); transform-origin: left center; }
 .line.sk-click { cursor: pointer; }
-.line.sk-click:hover:not(.act) { color: #d8d8de; transform: translateX(1px); }
+.line.sk-click:hover:not(.act) { color: #d8d8de; transform: translateX(1px); background: rgba(255,255,255,0.035); }
 .line.past { color: #4c4c53; }
 .line.act {
   color: transparent;
@@ -7442,7 +7445,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
 .srch { position: relative; z-index: 1; padding: 10px 11px 6px; display: flex; gap: 8px; flex: none; }
 .inp { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; color: #fff; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 11px; padding: 7.5px 11px; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
-.inp:focus { border-color: rgba(255,85,0,0.55); box-shadow: 0 0 0 3px rgba(255,85,0,0.13); }
+.inp:focus { border-color: rgba(255,255,255,0.22); box-shadow: 0 0 0 3px rgba(255,255,255,0.06); }
 .inp::placeholder { color: #6a6a71; }
 .go { flex: none; width: 34px; border-radius: 11px; background: var(--acc); color: #fff; display: grid; place-items: center; box-shadow: none; transition: background 0.15s ease, transform 0.12s ease; }
 .go:hover { background: var(--acc2); }
@@ -7648,6 +7651,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   .panel.max.stage .hbtn.stx { padding: 0 9px; }
 }
 
+/* ── the pin beside a hovered line, on guessed timing ── */
+.pin { position: absolute; right: 8px; top: 0; width: 26px; height: 26px; border-radius: 9px; display: none; place-items: center; z-index: 3; color: #111; transform: translateY(-50%);
+  background: #fff; box-shadow: 0 8px 18px -8px rgba(0,0,0,.7); transition: background .15s ease, transform .12s ease; }
+.pin.on { display: grid; animation: lin .12s ease both; }
+.pin:hover { background: #fff; color: #000; transform: translateY(-50%) scale(1.06); }
+.pin:active { transform: translateY(-50%) scale(.94); }
+.pin svg { width: 13px; height: 13px; }
+.panel.max .pin { width: 34px; height: 34px; border-radius: 11px; right: 6vw; }
+.panel.max .pin svg { width: 16px; height: 16px; }
+.panel.max.stage .pin { right: calc(var(--st-art) + 8vw); width: 40px; height: 40px; border-radius: 13px; }
+.panel.max.stage .pin svg { width: 18px; height: 18px; }
+
 /* ── hotkey cheat sheet ── */
 .keys { position: absolute; inset: 0; z-index: 8; background: rgba(10,10,12,0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   display: none; flex-direction: column; justify-content: center; padding: 18px 26px; cursor: pointer; }
@@ -7658,7 +7673,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .krow b i { font-style: normal; display: inline-block; background: rgba(255,255,255,0.1); border-radius: 5px; padding: 1px 6px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
 
 /* ── command palette (⌘K) ── always dark for contrast, sits above everything ── */
-.cmdk { position: fixed; inset: 0; z-index: 2147483647; display: none; align-items: flex-start; justify-content: center; background: rgba(7,7,10,0.5); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); pointer-events: auto; }
+.cmdk { position: fixed; inset: 0; z-index: 2147483647; display: none; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, 'Segoe UI', Roboto, sans-serif; color: #f2f2f4; -webkit-font-smoothing: antialiased; align-items: flex-start; justify-content: center; background: rgba(7,7,10,0.5); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); pointer-events: auto; }
 .cmdk.on { display: flex; animation: lin .12s ease both; }
 .cmdkbox { margin-top: 11vh; width: min(540px, 92vw); max-height: 64vh; display: flex; flex-direction: column; background: #16171d; border: 1px solid rgba(255,255,255,0.12); border-radius: 16px; box-shadow: 0 32px 90px rgba(0,0,0,0.62); overflow: hidden; }
 .cmdkin { border: 0; outline: 0; background: transparent; color: #fff; font: inherit; font-size: 15px; padding: 15px 18px; border-bottom: 1px solid rgba(255,255,255,0.08); width: 100%; box-sizing: border-box; }
@@ -8069,6 +8084,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     prev: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="2.6" height="14" rx="1"/><path d="M19 6.3v11.4a1 1 0 0 1-1.53.85l-8.9-5.7a1 1 0 0 1 0-1.7l8.9-5.7A1 1 0 0 1 19 6.3z"/></svg>',
     next: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="16.4" y="5" width="2.6" height="14" rx="1"/><path d="M5 6.3v11.4a1 1 0 0 0 1.53.85l8.9-5.7a1 1 0 0 0 0-1.7l-8.9-5.7A1 1 0 0 0 5 6.3z"/></svg>',
     open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16v6"/><path d="M8.5 3h7l-1 6.5 3.5 3.5H6l3.5-3.5z"/></svg>',
   };
 
   const UI = (() => {
@@ -8089,6 +8105,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let stagePref = { fs: 'm', al: 'l', art: 1, bg: 'art' };   // size · lines left/centred · cover · backdrop
     try { const sp = GM_getValue('sl:stage', null); if (sp && typeof sp === 'object') stagePref = Object.assign(stagePref, sp); } catch (e) {}
     let vocalGuided = false;     // est mode: the timeline is bent to the voice (App.getAnchors() carries .auto)
+    let pinEl = null, pinI = -1;  // guessed timing: the pin that floats beside the hovered line
     let menuOn = false, keysOn = false, keysBuilt = false;
     let chipShown = false, lastTm = -1;
     let lastSearchDur = 0;       // playing track's duration during manual search
@@ -8231,10 +8248,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           <div class="art" id="art" aria-hidden="true">${ICONS.note}</div>
           <div class="meta">
             <div class="tt" id="tt">SuperLyrics</div>
-            <div class="src" id="src">Play a song</div>
+            <div class="srcrow"><div class="src" id="src">Play a song</div><span class="tm" id="tm" aria-hidden="true"></span></div>
           </div>
           <div class="hactions">
-            <span class="tm" id="tm" aria-hidden="true"></span>
             <button class="hbtn" id="bSearch" type="button" title="Search lyrics manually (S)" aria-label="Search lyrics manually">${ICONS.search}</button>
             <button class="hbtn stx" id="bStyle" type="button" title="Stage style: size, alignment, cover, backdrop" aria-haspopup="dialog" aria-expanded="false">Style ${ICONS.chev}</button>
             <button class="hbtn stx" id="bArt" type="button" title="Show or hide the cover" aria-pressed="true">Art</button>
@@ -8305,6 +8321,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       body.addEventListener('click', (e) => {
         if (tapOn) { e.preventDefault(); e.stopPropagation(); tapAdvance(); }
       }, true);
+      // guessed timing: a pin floats beside the hovered line; a click pins that line to the moment (the line's own
+      // double-click handler does the anchoring, so both roads lead to the same place)
+      pinEl = document.createElement('button');
+      pinEl.type = 'button'; pinEl.className = 'pin'; pinEl.title = 'Pin this line to now'; pinEl.setAttribute('aria-label', 'Pin this line to the current time'); pinEl.innerHTML = ICONS.pin;
+      pinEl.addEventListener('click', (e) => { e.stopPropagation(); const el = lineEls[pinI]; if (el) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); });
+      body.addEventListener('mouseover', (e) => {
+        if (!estMode || tapOn || searchMode) return;
+        const el = e.target && e.target.closest ? e.target.closest('.line') : null;
+        if (!el || !el.classList.contains('sk-click')) return;
+        const i = lineEls.indexOf(el); if (i < 0) return;
+        pinI = i; pinEl.style.top = (el.offsetTop + el.offsetHeight / 2) + 'px'; pinEl.classList.add('on');   // the CSS centres it on that point
+      });
+      body.addEventListener('mouseleave', () => { pinEl.classList.remove('on'); pinI = -1; });
       qbody = panel.querySelector('#qbody');
       qbody.addEventListener('scroll', () => { if (Date.now() - qAutoAt > 400) qScrollAt = Date.now(); }, { passive: true });
       Chapters.onChange = () => { try { if (tab === 'queue') renderQueue(); if (Chapters.fromDesc >= 3 && Chapters.href && chapToldFor !== Chapters.href && panel.classList.contains('open') && tab !== 'queue') { chapToldFor = Chapters.href; toast(Chapters.fromDesc + ' chapters in this one · Queue tab'); } } catch (e) {} };
@@ -8710,7 +8739,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (idx < 0) return;
       // only near the top of the track, so it never pops mid-song
       if (times[idx] != null && Media.time() > times[idx] + 25) return;
-      wizEl.textContent = '🎤 Estimated timing — tap to sync this track line-by-line';
+      wizEl.textContent = 'Timing is a guess · hover a line and pin it as it’s sung · A taps along';
       wizEl.classList.add('on');
       wizT = Ticker.after(hideWizard, 24000);
     }
@@ -9170,6 +9199,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⚑', 'A sheet that is not these vocals says so', 'When the vocal aligner looks twice at a synced sheet, on a dozen lines each time, and finds no clear lag either time, the sheet is probably for another version or another song. The source line now says “Not these vocals? tap to pick” and opens the search; the trail says why. A sheet the aligner confirms, or one you picked, is never doubted.'],
+          ['⌖', 'Pin a line as it’s sung', 'On a sheet without timing (Genius) the guess is measured: on twenty rap tracks with real synced sheets, the guessed line starts were a median 7.5 s off; pins every eight lines bring that to half a second, every four to a fifth. So every line now grows a pin when you hover it — click it as the line is sung and the whole sheet bends to it. The source line reads Guessed timing, Vocal-guided or Pinned by you; A still taps along line by line.'],
+          ['✦', 'A cleaner hub', 'The command palette wears the hub’s own typeface instead of the page’s serif. The header clock sits beside the source line so the title has the full width. The search field focuses with a quiet ring, lines lift softly under the pointer, and the player-bar pill has a touch more air.'],
           ['◔', 'QQ Music, word by word', 'QQ Music’s word-timed sheets (QRC) are decrypted in the hub — the cipher its own client ships, transliterated and checked byte-exact — so a QQ sheet lights each word as it is sung, like Musixmatch richsync and NetEase yrc. The manual search now shows up to four rows per catalog, so QQ, NetEase and Kugou are never crowded out by LRCLIB’s duplicates.'],
           ['◐', 'A line that lights a beat early', 'The highlight now leads the voice by 100 ms by default. Broadcasting’s own standard (ITU-R BT.1359) finds a picture that trails its sound noticed from 45 ms on, but one that leads it only from 125 ms — and the flip itself costs a frame or two, so “exact” read as late. Lyrics ⋯ → Highlight timing keeps exact and early. The diagnostics report now lists each voice’s offset from the sheet.'],
           ['≡', 'Synced sheets, one-to-one with the voice', 'On a synced sheet the aligner now hears each voice that comes in after a pause and matches it to its line. Three of them set a provisional auto offset within the first verse — no more waiting 35 s for two looks — and a look on a dozen lines then confirms or replaces it. When a voice comes a beat before its line’s timestamp, that line lights on the voice. The karaoke wipe runs over the sung part of a line and holds, instead of crawling through the silence after it. The detector’s own lag was measured against a right LRCLIB sheet and taken off.'],
@@ -10240,14 +10272,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const srcFor = (lyr) => {
       if (!lyr) return ['', false];
       const name = SRC_NAME[lyr.src] || 'Lyrics';
-      const kind = lyr.synced ? (lyr.scaled ? 'Scaled sync' : 'Synced') : (estMode ? (App.anchorCount() > 0 ? 'Calibrated sync' : vocalGuided ? 'Vocal-guided' : 'Est. sync') : 'Text');
-      const qc = lyr.synced ? '#3ddc84' : (estMode ? '#ffb454' : '#8b8b92');
+      const kind = lyr.synced ? (lyr.scaled ? 'Scaled sync' : 'Synced') : (estMode ? (App.anchorCount() > 0 ? 'Pinned by you' : vocalGuided ? 'Vocal-guided' : 'Guessed timing') : 'Text');
+      const qc = lyr.synced ? (SyncAuto.doubt ? '#ffb454' : '#3ddc84') : (estMode ? '#ffb454' : '#8b8b92');
       let s = `<span class="qdot" style="background:${qc};box-shadow:0 0 6px ${qc}66"></span>${name}<span class="dot"> · </span>${kind}`;
       // a persisted nudge silently re-applies on every future play — show it
       const om = App.offsetMs ? App.offsetMs() : 0, am = SyncAuto.ms | 0;
       if (om || am) { const tot = om + am; s += `<span class="dot"> · </span>${!om && am ? 'auto ' : ''}${tot > 0 ? '+' : ''}${(tot / 1000).toFixed(Math.abs(tot) % 100 ? 2 : 1)}s`; }
       let lk = false;
-      if (lyr.picked) s += '<span class="dot"> · </span>Picked';
+      if (lyr.synced && SyncAuto.doubt && !lyr.picked) { s += '<span class="dot"> · </span>Not these vocals? tap to pick'; lk = true; }
+      else if (lyr.picked) s += '<span class="dot"> · </span>Picked';
       else if (lyr.low) { s += '<span class="dot"> · </span>Low match — tap to fix'; lk = true; }
       return [s, lk];
     };
@@ -10512,9 +10545,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const al = App.getAnchors();
         vocalGuided = !!(al && al.auto);
         times = warpTimes(baseTimes, al);
-        if (!estTip && lineEls.length) {
+        if (!estTip && lineEls.length && !wizOn) {   // the chip says it when it is on; the toast only when it is not
           estTip = true;   // once per session (no synced lyrics exist for this track \u2014 timing is a guess)
-          setTimeout(() => toast('Timing is a guess \u2014 press A to tap along'), 900);
+          setTimeout(() => toast('Timing is a guess \u2014 hover a line and pin it, or press A to tap along'), 900);
         }
       } else {
         for (const text of lyr.lines) {
@@ -10534,6 +10567,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
 
       body.replaceChildren(frag);
+      if (estMode && pinEl) { pinEl.classList.remove('on'); body.appendChild(pinEl); }   // guessed timing: the pin rides along
       body.scrollTop = 0;
       const [s, lk] = srcFor(lyr);
       setSrcLine(s, lk);
@@ -10696,8 +10730,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (sCur !== lastTm) {
         lastTm = sCur;
         const d = meta && meta.dur > 0 ? meta.dur : 0;
+        const wide = maxOn || panel.classList.contains('data');   // the roomy panels carry the length too; the corner panel keeps it short
         tmEl.textContent = d
-          ? (tmRemain ? '−' + fmtClock(Math.max(0, d - now)) + ' / ' + fmtClock(d) : fmtClock(now) + ' / ' + fmtClock(d))
+          ? (tmRemain ? '−' + fmtClock(Math.max(0, d - now)) : fmtClock(now)) + (wide ? ' / ' + fmtClock(d) : '')
           : (now > 0 ? fmtClock(now) : '');
       }
 
@@ -11477,13 +11512,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * "Align to vocals"; applying it sets a third offset term, SyncAuto.ms (clock-side: −lagSec), persisted with
      * the cache entry, shown as "auto" in the source line. '0' clears it like the other offsets; a manual nudge
      * sits on top of it. */
-    let aligner = null, alignT = null, alignTries = 0, alignerEl = null, alignRetaps = 0, alignWaits = 0, alignHist = [];   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
+    let aligner = null, alignT = null, alignTries = 0, alignerEl = null, alignRetaps = 0, alignWaits = 0, alignHist = [], alignBad = 0;   // alignBad: looks with lines enough and no clear lag in a row   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
     const AUTO_ALIGN_AT_MS = [20000, 15000, 15000, 20000, 30000, 40000, 60000];   // looks at 20, 35, 50, 70, 100, 140 and 200 s of playback (the window slides with the track)
     const ALIGN_BIAS_SEC = 0.12;    // on sheets that ARE right the estimator still reads +0.1..0.18 s: the sung energy rises after the instant people tap, so that much is not a sheet error
     const ALIGN_MIN_LINES = 12, ALIGN_MIN_Z = 2.0, ALIGN_MAX_RATIO = 0.85;   // what one look must have to count; two counting looks that agree within 150 ms are a finding
     function alignStop() { stopT(alignT); alignT = null; if (aligner) { try { aligner.dispose(); } catch (e) {} aligner = null; } }
     function alignStart(retap) {
-      alignStop(); alignTries = 0; SyncAuto.last = null; if (!retap) { alignRetaps = 0; alignWaits = 0; alignHist = []; }
+      alignStop(); alignTries = 0; SyncAuto.last = null; if (!retap) { alignRetaps = 0; alignWaits = 0; alignHist = []; alignBad = 0; SyncAuto.doubt = false; }
       try {
         if (typeof LYRIC_ALIGN === 'undefined') return;
         const tap = SUITE.audioTap && SUITE.audioTap();
@@ -11530,6 +11565,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           // a wrong sheet's lag wanders from look to look, a right one's holds still (measured on real tracks)
           const solid = r.linesUsed >= ALIGN_MIN_LINES && r.peak && r.peak.z >= ALIGN_MIN_Z && (!r.runnerUp || r.runnerUp.ratio <= ALIGN_MAX_RATIO);
           if (solid) alignHist.push(r.lagAdj); else alignHist.length = 0;
+          // a look with a dozen lines and still no clear peak, twice: these may not be the vocals of this sheet. The source
+          // line says so and opens the search — the listener decides (a wrong sheet at a high title score is what the
+          // trail shows most often when "synced" lyrics are nowhere near the voice)
+          if (solid) alignBad = 0; else if (r.linesUsed >= ALIGN_MIN_LINES) alignBad++;
+          if (alignBad >= 2 && !SyncAuto.doubt && !SyncAuto.auto) {
+            SyncAuto.doubt = true;
+            Trail.add('align: two looks on ' + r.linesUsed + ' lines found no clear lag — this may not be the sheet for these vocals');
+            try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
+          }
           const n = alignHist.length, agreed = n >= 2 && Math.abs(alignHist[n - 1] - alignHist[n - 2]) <= 0.15;
           r.agreed = agreed;
           if (agreed) {
@@ -11683,7 +11727,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       }
       const wantTap = synced || onsetWanted(result);   // a text sheet keeps the tap: the voice guides its timing
       if (!aligner && wantTap) alignStart();   // the source arrived after the track change
-      else if (aligner && swapped && synced) { alignHist = []; alignTries = 0; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
+      else if (aligner && swapped && synced) { alignHist = []; alignTries = 0; alignBad = 0; SyncAuto.doubt = false; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
       else if (aligner && !wantTap && !(meta && Inflight.has(meta.key))) alignStop();   // nothing to align and nothing still coming: the tap's 20 ms tick has no reader
       if (onsetWanted(result) && onsetLog.length) { const heard = onsetLog; onsetLog = []; heard.forEach(onVocalOnset); }   // the voices heard before the sheet landed
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
@@ -17122,7 +17166,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // a small, minimal glassy pill that reads on both light and dark bars;
       // position:relative anchors the hover tooltip; flex:none + a little right
       // clearance keeps the last (gear) button from being clipped
-      barWrap.style.cssText = 'position:relative;display:inline-flex;align-items:center;gap:0;flex:0 0 auto;margin:0 10px 0 2px;padding:2px;border-radius:9px;vertical-align:middle;background:rgba(124,124,134,.09);box-shadow:inset 0 0 0 1px rgba(150,150,160,.13);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)';
+      barWrap.style.cssText = 'position:relative;display:inline-flex;align-items:center;gap:1px;flex:0 0 auto;margin:0 10px 0 2px;padding:3px;border-radius:11px;vertical-align:middle;background:rgba(124,124,134,.1);box-shadow:inset 0 0 0 1px rgba(150,150,160,.12);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)';
       // one shared minimalist tooltip that floats above the hovered button
       const tip = D.createElement('div');
       tip.style.cssText = 'position:absolute;bottom:calc(100% + 9px);left:0;transform:translateX(-50%);background:rgba(18,18,22,.97);color:#fff;font:600 10px/1 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.02em;padding:5px 8px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s ease;box-shadow:0 6px 18px rgba(0,0,0,.5);z-index:30';
@@ -17142,9 +17186,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const mk = (cls, content, label, title, fn, isHtml) => {
         const b = D.createElement('button');
         b.type = 'button'; b.className = cls; b.title = title; b.setAttribute('aria-label', title);
-        b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;background:none;border:0;color:inherit;opacity:.55;cursor:pointer;font:800 10px/1 inherit;padding:0 ' + (isHtml ? '0' : '5px') + ';min-width:26px;height:26px;border-radius:7px;transition:opacity .14s ease,background .14s ease,color .14s ease';
+        b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;background:none;border:0;color:inherit;opacity:.55;cursor:pointer;font:800 10px/1 inherit;padding:0 ' + (isHtml ? '0' : '5px') + ';min-width:28px;height:28px;border-radius:7px;transition:opacity .14s ease,background .14s ease,color .14s ease';
         if (isHtml) b.innerHTML = content; else b.textContent = content;
-        b.addEventListener('mouseenter', () => { b.style.opacity = '1'; b.style.background = 'rgba(255,90,0,.15)'; b.style.color = '#ff6a1f'; showTip(b, b._tip || label); });
+        b.addEventListener('mouseenter', () => { b.style.opacity = '1'; b.style.background = 'rgba(255,90,0,.13)'; b.style.color = '#ff6a1f'; showTip(b, b._tip || label); });
         b.addEventListener('mouseleave', () => { b.style.background = 'none'; b.style.color = ''; b.style.opacity = '.55'; hideTip(); refreshBar(); });
         b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
         return b;

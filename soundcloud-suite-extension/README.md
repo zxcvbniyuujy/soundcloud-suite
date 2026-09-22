@@ -117,6 +117,14 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **A sheet that is not these vocals says so** — two looks by the vocal
+  aligner on a dozen lines each, and no clear lag either time, flag a synced
+  sheet as doubtful: the source line reads "Not these vocals? tap to pick" and
+  opens the search. A confirmed or picked sheet is never doubted.
+- **Pin a line as it's sung** — the guess on a text-only sheet was measured on
+  twenty rap tracks with real synced sheets: a median 7.5 s off; pins every
+  eight lines bring it to 0.5 s, every four to 0.2 s. Every line grows a pin on
+  hover; the source line reads Guessed timing, Vocal-guided or Pinned by you.
 - **QQ Music word by word** — QQ's word-timed QRC sheets are decrypted in the
   page: the DES its client ships (Brad Conte's, two S-box typos and little-endian
   word order included) transliterated line for line and checked byte-exact
