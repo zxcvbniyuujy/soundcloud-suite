@@ -1889,6 +1889,30 @@ const FIXTURE_SRC = `
     await closeHub(); await stopPlay();
   });
 
+  scenario('tap-tempo', async () => {
+    // a tempo set by hand: eight taps on the button set it (the median interval), it is published as 'tapped' and
+    // remembered so, the detector leaves it alone, the beat clock follows it, and "Detect again" measures the track anew
+    await play('K', { loop: true, href: '/test/tap' });
+    await audioTab(); await sleep(1500);
+    await abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Tap'); const tick = (n) => { if (n >= 8) return; b.click(); setTimeout(() => tick(n + 1), 500); }; tick(0);`);
+    await sleep(5500);
+    let b = await dbg(`return d.bpm();`);
+    assert(b && b.src === 'tapped' && Math.abs(b.bpm - 120) < 4, 'eight taps at 500 ms set 120 BPM by hand (got ' + JSON.stringify(b) + ')');
+    const line = await abody(`const el = [...a.querySelectorAll('div')].find((d) => /^Tempo ≈/.test(d.textContent)); return el ? el.textContent : null;`);
+    assert(line && /Tempo ≈ 1(1[89]|2[0-3]) BPM · tapped/.test(line), 'the tempo line says tapped (got ' + JSON.stringify(line) + ')');
+    await sleep(30000);
+    b = await dbg(`return d.bpm();`);
+    assert(b && b.src === 'tapped' && Math.abs(b.bpm - 120) < 4, 'the detector does not replace a tapped tempo (got ' + JSON.stringify(b) + ')');
+    const mem = await dbg(`return d.gm('enh:bpm');`);
+    assert(mem && mem['/test/tap'] && mem['/test/tap'].tap === 1 && Math.abs(mem['/test/tap'].b - 120) < 4, 'remembered as tapped');
+    await abody(`const b = [...a.querySelectorAll('button')].find((x) => x.textContent === 'Detect again'); b.click();`); await sleep(500);
+    b = await dbg(`return d.bpm();`); assert(!b, 'Detect again forgets it (got ' + JSON.stringify(b) + ')');
+    await sleep(30000);
+    b = await dbg(`return d.bpm();`);
+    assert(b && b.src === 'measured' && Math.abs(b.bpm - 128) < 2, 'the track is measured again (got ' + JSON.stringify(b) + ')');
+    await closeHub(); await stopPlay();
+  });
+
   scenario('tempo-lock', async () => {
     // the palette's "170 bpm": once the tempo is known the speed follows (lock ÷ tempo, 0.5×–2×), the estimator keeps
     // reporting the track's own tempo under the new rate, a remembered tempo applies the lock at once on the next

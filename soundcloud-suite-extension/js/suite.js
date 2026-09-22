@@ -9330,8 +9330,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         list.style.cssText = 'display:flex;flex-direction:column;gap:9px';
         const cardBase = 'inset 0 0 0 1px rgba(255,255,255,.07),0 6px 18px -12px rgba(0,0,0,.6)';
         const cardHover = 'inset 0 0 0 1px rgba(255,120,40,.32),0 14px 30px -12px rgba(255,90,0,.42)';
+        const FRESH = 8;   // the newest cards show; the rest wait behind one button, so the panel is a page, not a scroll of every release
+        let idx = 0;
         for (const [icon, title, desc] of FEATS) {
           const card = document.createElement('div');
+          if (idx++ >= FRESH) { card.classList.add('older'); card.style.display = 'none'; }
           card.style.cssText = 'display:flex;gap:13px;align-items:flex-start;padding:13px 14px;border-radius:15px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.022));box-shadow:' + cardBase + ';transition:transform .16s ease,box-shadow .16s ease';
           card.addEventListener('mouseenter', () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = cardHover; });
           card.addEventListener('mouseleave', () => { card.style.transform = ''; card.style.boxShadow = cardBase; });
@@ -9344,6 +9347,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           txt.append(tt, dd); card.append(ic, txt); list.appendChild(card);
         }
         wrap.appendChild(list);
+        if (FEATS.length > FRESH) {
+          const more = document.createElement('button'); more.className = 'btn'; more.textContent = 'Earlier releases (' + (FEATS.length - FRESH) + ')';
+          more.style.cssText = 'display:block;margin:14px auto 0';
+          more.addEventListener('click', (e) => { e.stopPropagation(); list.querySelectorAll('.older').forEach((x) => { x.style.display = ''; }); more.remove(); });
+          wrap.appendChild(more);
+        }
         const hint = document.createElement('div');
         hint.textContent = 'Tap anywhere to close';
         hint.style.cssText = 'text-align:center;font-size:11px;color:#76767e;margin-top:18px';
@@ -15644,9 +15653,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       bpmReset(href);
       const e = href && bpmMem()[href];
       // v: the detector's generation — figures the old feed measured (it drifted by whole octaves) are never recalled
-      if (e && e.b > 0 && e.v === 2 && Date.now() - (e.t || 0) < 365 * 864e5) { bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' }; applyTempoLock(); }
+      if (e && e.b > 0 && e.v === 2 && Date.now() - (e.t || 0) < 365 * 864e5) { bpm.pub = { bpm: e.b, conf: e.c || 0, src: e.tap ? 'tapped' : 'remembered' }; applyTempoLock(); }
     }
     if (!m || m.paused || (++bpm.tick % 4)) return;
+    if (bpm.pub && bpm.pub.src === 'tapped') return;   // a tempo set by hand stands: the detector never argues with it
     const rate = (m.playbackRate > 0 ? m.playbackRate : 1);
     if (Math.abs(rate - bpm.rate) > 0.001) { bpm.rate = rate; bpm.n = 0; return; }   // the window held audio at the old speed: start it over (the votes are rate-corrected already and stay)
     if (bpm.pub && !CFG.vinylMode && Math.abs(rate - 1) > 0.01) return;   // time-stretching smears the onsets: a known tempo is never replaced while the speed is off 1× (pitch-follows-speed has no stretch)
@@ -15667,9 +15677,30 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (!bpm.pub || bpm.pub.src !== 'measured' || Math.abs(bpm.pub.bpm - rounded) >= 0.5) {
       bpm.pub = { bpm: rounded, conf: Math.round(Math.min(1, next.w / 3) * 100) / 100, src: 'measured' };
       applyTempoLock();
-      if (href) { const map = bpmMem(); map[href] = { b: rounded, c: bpm.pub.conf, t: Date.now(), v: 2 }; const keys = Object.keys(map); if (keys.length > BPM_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete map[k]; }); } SET(BPM_KEY, map); }
+      if (href) bpmRemember(href, { b: rounded, c: bpm.pub.conf, t: Date.now(), v: 2 });
       repaintAudioSoon();
     }
+  }
+  function bpmRemember(href, entry) {   // the per-track memory, the oldest entries dropped past BPM_MAX
+    const map = bpmMem(); map[href] = entry;
+    const keys = Object.keys(map); if (keys.length > BPM_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete map[k]; }); }
+    SET(BPM_KEY, map);
+  }
+  // a tempo set by hand (the Tap button): published as 'tapped', remembered per track, never replaced by the detector; 0 forgets
+  // it and the track is measured again
+  function tapTempo(v) {
+    const href = curTrackHref() || '';
+    beat.period = 0; beat.sure = false; beat.at = 0;
+    if (!(v > 0)) {
+      if (bpm.pub && bpm.pub.src === 'tapped') { bpm.pub = null; bpm.votes = []; bpm.n = 0; }
+      if (href) { const map = bpmMem(); if (map[href] && map[href].tap) { delete map[href]; SET(BPM_KEY, map); } }
+      repaintAudioSoon(); return false;
+    }
+    const b = Math.round(Math.min(300, Math.max(40, v)) * 10) / 10;
+    bpm.pub = { bpm: b, conf: 1, src: 'tapped' }; bpm.votes = [];
+    applyTempoLock();
+    if (href) bpmRemember(href, { b, c: 1, t: Date.now(), v: 2, tap: 1 });
+    repaintAudioSoon(); return true;
   }
   function bpmText(withRate) {   // '≈ 128 BPM', with the sped-up figure when the rate is not 1×
     const p = bpm.pub; if (!p) return '';
@@ -16949,7 +16980,23 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       });
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
       const bpmLine = D.createElement('div'); bpmLine.className = 'tw-note'; bpmLine.style.cssText = 'margin-top:8px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px'; bodyEl.appendChild(bpmLine);
-      const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); const bpmDot = D.createElement('span'); bpmDot.className = 'tw-beat'; bpmDot.setAttribute('aria-hidden', 'true'); bpmDot.style.display = 'none'; bpmLine.append(bpmTxt, bpmDot, bpmUnlock);
+      const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); const bpmDot = D.createElement('span'); bpmDot.className = 'tw-beat'; bpmDot.setAttribute('aria-hidden', 'true'); bpmDot.style.display = 'none';
+      // tap tempo: eight taps (or four and a pause) set this track's tempo by hand when the reading is wrong; the detector then leaves it alone
+      const bpmTap = mkBtn('Tap'); bpmTap.style.cssText += ';padding:3px 9px;font-size:10px'; bpmTap.title = 'Tap the beat here: eight taps set this track’s tempo by hand, for when the reading is wrong';
+      const bpmRedetect = mkBtn('Detect again'); bpmRedetect.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmRedetect.title = 'Forget the tapped tempo and measure this track again';
+      bpmRedetect.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tapTempo', 0); });
+      let taps = [], tapT = 0;
+      const tapDone = () => {
+        tapT = 0; const n = taps.length; const iv = []; for (let i = 1; i < n; i++) iv.push(taps[i] - taps[i - 1]); taps = []; bpmTap.textContent = 'Tap';
+        if (n < 4) return; iv.sort((a, b) => a - b); const med = iv[iv.length >> 1];
+        if (med > 150 && med < 2000 && SUITE.audioCmd) SUITE.audioCmd('tapTempo', 60000 / med);
+      };
+      bpmTap.addEventListener('click', () => {
+        const now = performance.now(); if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
+        taps.push(now); if (taps.length > 8) taps.shift(); bpmTap.textContent = 'Tap ' + taps.length + '/8';
+        clearTimeout(tapT); if (taps.length >= 8) tapDone(); else tapT = setTimeout(tapDone, 2000);
+      });
+      bpmLine.append(bpmTxt, bpmDot, bpmUnlock, bpmTap, bpmRedetect);
       // the beat dot: one timeout per beat, nothing between beats; polls once a second while paused or the beat is unsteady,
       // stops when the tab is gone
       let dotT = 0;
@@ -16963,7 +17010,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         dotT = setTimeout(() => { bpmDot.classList.add('on'); setTimeout(() => bpmDot.classList.remove('on'), 80); dotTick(); }, next - now);
       };
       const dotArm = () => { if (!dotT && bpm.pub && audioTabOn && bodyEl.isConnected) dotTick(); };
-      const paintBpm = () => { const kt = (CFG.bpmDetect && keyDet.pub) ? ' · Key ' + keyText() + (keyDet.pub.src === 'remembered' && !(bpm.pub && bpm.pub.src === 'remembered') ? ' · remembered' : '') : ''; const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); const t2 = t + kt; if (bpmTxt.textContent !== t2) bpmTxt.textContent = t2; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; };
+      const paintBpm = () => { const kt = (CFG.bpmDetect && keyDet.pub) ? ' · Key ' + keyText() + (keyDet.pub.src === 'remembered' && !(bpm.pub && bpm.pub.src === 'remembered') ? ' · remembered' : '') : ''; const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : bpm.pub.src === 'tapped' ? ' · tapped' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); const t2 = t + kt; if (bpmTxt.textContent !== t2) bpmTxt.textContent = t2; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; const tp = CFG.bpmDetect ? '' : 'none'; if (bpmTap.style.display !== tp) bpmTap.style.display = tp; const rd = (CFG.bpmDetect && bpm.pub && bpm.pub.src === 'tapped') ? '' : 'none'; if (bpmRedetect.style.display !== rd) bpmRedetect.style.display = rd; };
       paintBpm(); liveSync.push(paintBpm, dotArm); dotArm();
       paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
@@ -18305,6 +18352,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         case 'mono': return flip('monoOn', 'Mono');
         case 'crossfeed': return flip('crossfeedOn', 'Crossfeed');
         case 'speed': { const v = Math.min(200, Math.max(50, Math.round(+arg) || 100)); CFG.speed = v; save(); rememberSpeed(); applySpeed(); try { refreshBar(); } catch (e) {} repaintAudioSoon(); toast('Speed ' + (v / 100) + '×'); return true; }
+        case 'tapTempo': { const ok = tapTempo(+arg); toast(ok ? 'Tempo set by hand · ' + Math.round(bpm.pub.bpm) + ' BPM' : 'Back to detecting the tempo'); return true; }
         case 'tempoLock': {
           const v = +arg > 0 ? Math.min(300, Math.max(40, Math.round(+arg))) : 0;
           CFG.tempoLock = v; save(); repaintAudioSoon();
