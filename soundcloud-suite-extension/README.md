@@ -112,8 +112,11 @@ never plays.
   languages.
 - **Floating lyrics window** — **P** in the hub, ⋯ → Floating lyrics window,
   or Ctrl+K: a small always-on-top window (Document Picture-in-Picture,
-  Chrome 116+) with the artwork, the sung line and its karaoke wipe, the next
-  line, a progress bar and prev / play / next. Space and ← → work inside it,
+  Chrome 116+) with the artwork behind a soft blur, the line before, the sung
+  line and its wipe, the line after, a glowing progress bar and prev / play /
+  next. It follows the same list the hub highlights: synced lines, or the
+  estimated timing a text sheet gets (the hub's "Est. sync"), warped by any
+  anchors you tapped. Space and ← → work inside it,
   ⤴ brings the SoundCloud tab forward, and the worker ticker keeps it moving
   while the tab is hidden. It reads the same synced sheet as the mini bar, so
   a text-only sheet shows the track instead.

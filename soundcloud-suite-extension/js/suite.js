@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.64.1
+// @version      4.64.2
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -102,7 +102,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.64.1';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.64.2';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -8114,24 +8114,29 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * Document Picture-in-Picture (Chrome 116+): a window of our own that stays above every app, driven by the
      * worker ticker so it keeps moving while the SoundCloud tab is hidden. The sung line and the next one, the
      * artwork, a progress bar and prev / play / next; the lines come from the same synced sheet the mini bar reads. */
-    let pip = null, pipT = null;
-    const PIP_CSS = 'html,body{margin:0;height:100%;background:#0b0b0f;color:#f4f4f6;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}'
-      + '.w{position:absolute;inset:0;display:flex;flex-direction:column;padding:12px 14px 10px;box-sizing:border-box;gap:8px}'
-      + '.top{display:flex;align-items:center;gap:11px;min-height:46px}.art{width:46px;height:46px;border-radius:10px;background:#1c1c22 center/cover no-repeat;flex:none;box-shadow:0 6px 18px -8px rgba(0,0,0,.8)}'
-      + '.meta{min-width:0;flex:1}.t{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.a{font-size:11.5px;color:#9a9aa4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}'
-      + '.ln{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}'
-      + '.cur{font-size:19px;font-weight:800;letter-spacing:-.2px;line-height:1.22;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%;'
-      + 'background:linear-gradient(90deg,#ff8a3d var(--fill),rgba(244,244,246,.92) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent}'
-      + '.cur.idle{color:#7c7c86;-webkit-text-fill-color:#7c7c86;font-weight:600;font-size:14px}'
-      + '.nx{font-size:12px;color:#7c7c86;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
-      + '.bot{display:flex;align-items:center;gap:10px}.bar{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.12);overflow:hidden}.bar i{display:block;height:100%;width:0;background:#ff5500;border-radius:2px}'
-      + '.ctl{display:flex;gap:2px}.ctl button{width:30px;height:30px;border:0;border-radius:9px;background:none;color:#e6e6ea;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}'
-      + '.ctl button:hover{background:rgba(255,255,255,.1)}.ctl button:focus-visible{outline:2px solid #ff8a3d;outline-offset:1px}.ctl .pp{background:#ff5500;color:#fff}.ctl .pp:hover{background:#ff6a1f}'
-      + '.tm{font-size:10.5px;color:#7c7c86;font-variant-numeric:tabular-nums;flex:none}';
-    const PIP_HTML = '<div class="w"><div class="top"><div class="art"></div><div class="meta"><div class="t"></div><div class="a"></div></div>'
-      + '<div class="ctl"><button class="open" title="Show the SoundCloud tab">⤴</button></div></div>'
-      + '<div class="ln"><div class="cur idle">Waiting for lyrics…</div><div class="nx"></div></div>'
-      + '<div class="bot"><span class="tm">0:00</span><div class="bar"><i></i></div>'
+    let pip = null, pipT = null, miniKind = '';   // miniKind: what the follow list is (synced · estimated · text)
+    const PIP_CSS = 'html,body{margin:0;height:100%;background:#09090c;color:#f4f4f6;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}'
+      + '.w{position:absolute;inset:0;display:flex;flex-direction:column;padding:14px 16px 12px;box-sizing:border-box;gap:6px;isolation:isolate}'
+      + '.bg{position:absolute;inset:-48px;z-index:-2;background:#14141a center/cover no-repeat;filter:blur(40px) saturate(1.35) brightness(.5);transform:scale(1.15);transition:background-image .6s ease}'
+      + '.veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(9,9,12,.18) 0%,rgba(9,9,12,.62) 55%,rgba(9,9,12,.9) 100%)}'
+      + '.top{display:flex;align-items:center;gap:12px;min-height:52px}.art{width:52px;height:52px;border-radius:13px;background:#1c1c22 center/cover no-repeat;flex:none;box-shadow:0 10px 24px -8px rgba(0,0,0,.9),inset 0 0 0 1px rgba(255,255,255,.08)}'
+      + '.meta{min-width:0;flex:1}.t{font-weight:800;font-size:14px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}.a{font-size:12px;color:#b9b9c2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}'
+      + '.a .k{color:#ff8a3d;font-weight:600}.a .k:empty{display:none}'
+      + '.open{width:30px;height:30px;border:0;border-radius:50%;background:rgba(255,255,255,.09);color:#e8e8ee;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}.open:hover{background:rgba(255,255,255,.18)}'
+      + '.ln{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;gap:5px;padding:2px 0}'
+      + '.pv,.nx{font-size:12.5px;line-height:1.3;color:#a3a3ad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.3em}.pv{opacity:.55}.nx{opacity:.8}'
+      + '.cur{font-size:21px;font-weight:800;letter-spacing:-.3px;line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%;'
+      + 'background:linear-gradient(90deg,#fff var(--fill),rgba(255,255,255,.36) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}'
+      + '.cur.idle{-webkit-text-fill-color:#c9c9d2;color:#c9c9d2;background:none;font-weight:600;font-size:15px;letter-spacing:0}.cur.idle::before{content:"♪  ";color:#ff8a3d}'
+      + '.bot{display:flex;align-items:center;gap:10px}.tm{font-size:11px;color:#b9b9c2;font-variant-numeric:tabular-nums;flex:none;min-width:34px}.tm.r{text-align:right}'
+      + '.bar{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.14);overflow:hidden}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ff5500,#ff8a3d);border-radius:2px;box-shadow:0 0 10px rgba(255,110,0,.55)}'
+      + '.ctl{display:flex;align-items:center;gap:6px;margin-left:4px}.ctl button{border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#f2f2f6;background:rgba(255,255,255,.09);width:32px;height:32px;border-radius:50%;font-size:13px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}'
+      + '.ctl button:hover{background:rgba(255,255,255,.18)}.ctl button:focus-visible{outline:2px solid #ff8a3d;outline-offset:2px}'
+      + '.ctl .pp{width:40px;height:40px;background:linear-gradient(135deg,#ff5500,#ff8a3d);color:#fff;font-size:15px;box-shadow:0 10px 22px -8px rgba(255,90,0,.8),inset 0 0 0 1px rgba(255,255,255,.14)}.ctl .pp:hover{filter:brightness(1.08)}';
+    const PIP_HTML = '<div class="w"><div class="bg"></div><div class="veil"></div>'
+      + '<div class="top"><div class="art"></div><div class="meta"><div class="t"></div><div class="a"><span class="an"></span><span class="k"></span></div></div><button class="open" title="Show the SoundCloud tab">↗</button></div>'
+      + '<div class="ln"><div class="pv"></div><div class="cur idle">Waiting for lyrics…</div><div class="nx"></div></div>'
+      + '<div class="bot"><span class="tm">0:00</span><div class="bar"><i></i></div><span class="tm r">0:00</span>'
       + '<div class="ctl"><button class="prev" title="Previous track">⏮</button><button class="pp" title="Play / pause">⏸</button><button class="next" title="Next track">⏭</button></div></div></div>';
     function floatSupported() { try { return !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow); } catch (e) { return false; } }
     function floatOn() { return !!pip; }
@@ -8140,21 +8145,21 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (pip) { try { pip.win.close(); } catch (e) {} pipStop(); return; }
       if (!floatSupported()) { toast('Floating lyrics need Chrome 116 or newer'); return; }
       let win = null;
-      try { win = await window.documentPictureInPicture.requestWindow({ width: 440, height: 232 }); } catch (e) { toast('Couldn’t open the floating window — try again from a click or a key'); return; }
+      try { win = await window.documentPictureInPicture.requestWindow({ width: 480, height: 270 }); } catch (e) { toast('Couldn’t open the floating window — try again from a click or a key'); return; }
       try {
         const d = win.document;
         d.title = 'SoundCloud Suite';
         const st = d.createElement('style'); st.textContent = PIP_CSS; d.head.appendChild(st);
         d.body.innerHTML = PIP_HTML;
         try { if (window.__scsI18n) window.__scsI18n.watch(d.body); } catch (e) {}
-        const q = (s) => d.querySelector(s);
+        const q = (sel) => d.querySelector(sel);
         const cmd = (n) => { try { if (SUITE.command) SUITE.command(n); } catch (e) {} };
         q('.prev').addEventListener('click', () => cmd('prev-track'));
         q('.next').addEventListener('click', () => cmd('next-track'));
         q('.pp').addEventListener('click', () => cmd('play-pause'));
         q('.open').addEventListener('click', () => { try { window.focus(); } catch (e) {} });
         d.addEventListener('keydown', (e) => { if (e.key === ' ') { e.preventDefault(); cmd('play-pause'); } else if (e.key === 'ArrowRight') cmd('next-track'); else if (e.key === 'ArrowLeft') cmd('prev-track'); });
-        pip = { win, d, art: q('.art'), t: q('.t'), a: q('.a'), cur: q('.cur'), nx: q('.nx'), fill: q('.bar i'), tm: q('.tm'), pp: q('.pp'), key: '', lastI: -2, lastPlaying: null, lastFill: '' };
+        pip = { win, d, bg: q('.bg'), art: q('.art'), t: q('.t'), an: q('.an'), k: q('.k'), pv: q('.pv'), cur: q('.cur'), nx: q('.nx'), fill: q('.bar i'), tm: q('.tm'), tm2: q('.tm.r'), pp: q('.pp'), key: '', kind: '', lastI: -2, lastPlaying: null, lastFill: '' };
         win.addEventListener('pagehide', () => pipStop());
         pipT = Ticker.every(pipTick, 100);   // the worker ticker keeps it moving while the tab is hidden
         pipTick();
@@ -8166,41 +8171,62 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         const m = uiMeta;   // what the header shows (App.setHeader keeps it current)
         const key = m ? (m.href || m.title || '') : '';
+        const ck = (t) => { t = Math.max(0, Math.floor(t)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
         if (key !== P.key) {
           P.key = key; P.lastI = -2;
           P.t.textContent = m ? (m.title || 'SoundCloud') : 'Nothing playing';
-          P.a.textContent = m ? (m.uploader || '') : '';
-          P.art.style.backgroundImage = m && m.art ? 'url("' + m.art.replace(/-t\d+x\d+\./, '-t200x200.') + '")' : '';
+          P.an.textContent = m ? (m.uploader || '') : '';
+          const art = m && m.art ? 'url("' + m.art.replace(/-t\d+x\d+\./, '-t500x500.').replace(/["')]/g, '') + '")' : '';
+          P.art.style.backgroundImage = art; P.bg.style.backgroundImage = art;
         }
+        const kind = miniData ? (miniKind === 'estimated' ? ' · estimated timing' : ' · synced') : '';
+        if (kind !== P.kind) { P.kind = kind; P.k.textContent = kind; }
         const playing = Media.playing();
         if (playing !== P.lastPlaying) { P.lastPlaying = playing; P.pp.textContent = playing ? '⏸' : '▶'; P.pp.title = playing ? 'Pause' : 'Play'; }
         const now = Media.time(), dur = m && m.dur > 0 ? m.dur : 0;
         const pct = dur ? Math.max(0, Math.min(100, now / dur * 100)) : 0;
         const w = pct.toFixed(1) + '%'; if (w !== P.lastFill) { P.lastFill = w; P.fill.style.width = w; }
-        const ck = (t) => { t = Math.max(0, Math.floor(t)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
-        const tm = ck(now) + (dur ? ' / ' + ck(dur) : ''); if (P.tm.textContent !== tm) P.tm.textContent = tm;
+        const tm = ck(now); if (P.tm.textContent !== tm) P.tm.textContent = tm;
+        const tm2 = dur ? ck(dur) : ''; if (P.tm2.textContent !== tm2) P.tm2.textContent = tm2;
         if (!miniData) {
-          if (P.lastI !== -1) { P.lastI = -1; P.cur.textContent = m ? 'No synced lyrics for this one' : 'Play something on SoundCloud'; P.cur.classList.add('idle'); P.nx.textContent = ''; }
+          if (P.lastI !== -1) { P.lastI = -1; P.cur.textContent = m ? (miniKind === 'text' ? 'Lyrics without timing for this one' : 'No lyrics for this one') : 'Play something on SoundCloud'; P.cur.classList.add('idle'); P.pv.textContent = ''; P.nx.textContent = ''; P.cur.style.removeProperty('--fill'); }
           return;
         }
         const i = curMiniLine();
         if (i !== P.lastI) {
           P.lastI = i;
           P.cur.classList.remove('idle');
+          P.pv.textContent = i > 0 && miniData[i - 1] ? miniData[i - 1][1] : '';
           P.cur.textContent = i >= 0 ? miniData[i][1] : '♪';
           P.nx.textContent = miniData[i + 1] ? miniData[i + 1][1] : '';
+          try { P.cur.animate([{ opacity: 0.35, transform: 'translateY(7px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }); } catch (e) {}
         }
         if (i >= 0) {
-          const s = miniData[i][0], e = miniData[i + 1] ? miniData[i + 1][0] : s + 4;
+          const s0 = miniData[i][0], e0 = miniData[i + 1] ? miniData[i + 1][0] : s0 + 4;
           const t = miniClock();
-          const f = Math.max(0, Math.min(100, (t - s) / Math.max(0.2, e - s) * 100)).toFixed(0) + '%';
+          const f = Math.max(0, Math.min(100, (t - s0) / Math.max(0.2, e0 - s0) * 100)).toFixed(0) + '%';
           if (P.cur.style.getPropertyValue('--fill') !== f) P.cur.style.setProperty('--fill', f);
         }
       } catch (e) {}
     }
 
     /* ---------- mini lyric bar ---------- */
-    function setMini(lines) {
+    function followList(result, dur, anchors) {
+      try {
+        if (!result || result.instr || !result.lines || !result.lines.length) return null;
+        if (result.synced) return { lines: result.lines, kind: 'synced' };
+        const text = { lines: null, kind: 'text' };
+        if (!(dur > 20 && dur < 1200)) return text;
+        const realLines = result.lines.filter((l) => l && !/^\[[^\]]{1,40}\]$/.test(l)).length;
+        if (realLines < 8) return text;
+        const base = [], texts = [];
+        for (const en of estimateTimes(result.lines, dur)) { if (en.gap || en.sec) continue; base.push(en.t); texts.push(en.text); }
+        const t = warpTimes(base, anchors || []);
+        return { lines: texts.map((x, i) => [t[i], x]), kind: 'estimated' };
+      } catch (e) { return null; }
+    }
+    function setMini(lines, kind) {
+      miniKind = kind || '';
       miniData = (lines && lines.length) ? lines : null;
       if (!miniData && miniShown && mini) { miniShown = false; mini.classList.remove('on'); }
     }
@@ -8737,7 +8763,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const FEATS = [
           ['⊘', 'No more audio ads', 'The ad calls fail the way an ad blocker fails them, so the player never has an ad to play and goes straight to the track. Nothing is ever muted. On by default — Tweaks → Declutter → Skip audio ads turns it off.'],
           ['🌐', 'In your language', 'The suite’s own text in German, French, Spanish, Portuguese, Italian, Dutch, Polish, Turkish, Russian, Japanese or Korean, following your browser; Tweaks → Appearance → Language picks one. SoundCloud itself and the lyrics stay as they are.'],
-          ['⧉', 'Lyrics that float above everything', 'Press P in the hub (or ⋯ → Floating lyrics window) for a small window that stays on top of every app: artwork, the sung line with the karaoke wipe, the next line, a progress bar and prev / play / next. It keeps moving while the SoundCloud tab is hidden. Chrome 116 or newer.'],
+          ['⧉', 'Lyrics that float above everything', 'Press P in the hub (or ⋯ → Floating lyrics window) for a small window that stays on top of every app: the artwork behind a soft blur, the line before, the sung line with its wipe, the line after, a glowing progress bar and prev / play / next. It follows estimated timing on text sheets just like the hub, and keeps moving while the SoundCloud tab is hidden. Chrome 116 or newer.'],
           ['★', 'A tour, and a way to spread the word', 'New listeners get three spotlights on the real buttons after the setup choice; Ctrl+K → Take the tour repeats it. Ctrl+K also has Share SoundCloud Suite (a line with the store link on the clipboard) and Rate SoundCloud Suite; after a week and thirty tracks a small card asks once.'],
           ['⚙', 'Sturdier everywhere', 'The toolbar icon toggles the hub without reloading the tab. Meters, loudness normalize and every current-track action follow the element that is playing, not the one SoundCloud keeps ready for the next track. Lyric requests you wait for go first, NetEase and Kugou are parked when they keep timing out, and the “no lyrics” card says which sources were unavailable. A failed shuffle says why, a rate-limited fetch counts down on the button, toasts in a hidden tab go away on their own, the dark theme lands before first paint, and slider drags no longer rebuild the page.'],
           ['≡', 'Sync that holds still, NetEase that loads', 'The vocal aligner waits for the audio instead of missing it on a cached sheet, keeps listening past the first 90 s, and trusts only two looks that agree — so a NetEase or Kugou sheet is pulled onto the vocals like an LRCLIB one, and a wrong sheet is left alone. NetEase requests carry the headers its own apps send, and when a sheet still will not load, the toast says why. A run of skipped tracks no longer starts a search for each.'],
@@ -10827,7 +10853,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
       shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
-      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, cycleTheme,
+      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, cycleTheme,
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
@@ -11118,7 +11144,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       warmT = Ticker.after(warmNext, 6000);
       refreshNext();
       try { UI.syncTabs(); } catch (e) {}   // live Queue/Stats tabs follow track changes
-      try { UI.setMini(synced ? result.lines : null); } catch (e) {}
+      try { const fl = UI.followList(result, meta && meta.dur, anch); UI.setMini(fl && fl.lines, fl && fl.kind); } catch (e) {}   // synced lines, or the estimated timing a text sheet gets
       if (UI.inSearch && UI.inSearch()) return;   // the search view stays; Back paints the sheet
       // auto-open: real lyrics just landed and the user opted in → reveal them
       try {
