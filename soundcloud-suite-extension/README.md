@@ -117,6 +117,13 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **The vocals decide how a sheet is read** — a sheet from a master of another
+  length has two readings: as written, with a lag, or stretched by the ratio.
+  It starts as written unless the upload says sped-up or slowed (the same
+  master cut differently is far more common than an unlabelled tempo change);
+  each look scores both readings on the vocals, and one a clear margin ahead
+  on eight lines or more takes over the sheet and its cache entry. A finding
+  agreed meanwhile does not close the question. The trail says why.
 - **A sheet that is not these vocals says so** — two looks by the vocal
   aligner on a dozen lines each, and no clear lag either time, flag a synced
   sheet as doubtful: the source line reads "Not these vocals? tap to pick" and

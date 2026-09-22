@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.68.0
+// @version      4.69.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.68.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.69.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -3943,7 +3943,7 @@
 
   // auto-align state shared by the renderer (defined first) and App (defined later): ms on the clock side,
   // the latest estimate, and App's apply() for the menu
-  const SyncAuto = { ms: 0, conf: 0, last: null, apply: null, MIN_SEC: 0.2 };
+  const SyncAuto = { ms: 0, conf: 0, last: null, apply: null, hold: false, MIN_SEC: 0.2 };   // hold: 0 pressed on this sheet — no finding applies itself again (the ⋯ menu still offers it)
   /* lyric-align.js — constant-lag estimator for per-line synced lyrics (LRC sheets).
    *
    * LYRIC_ALIGN.create(ctx, sourceNode, opts) → tracker
@@ -4608,11 +4608,13 @@
     const ratio = wantDur / srcDur;
     if (ratio < 0.6 || ratio > 1.7) return null;                        // wildly off = wrong version
     if (Math.abs(ratio - 1) <= 0.008) return { lines, scaled: false };  // already aligned (sub-2 s)
-    // a few seconds apart with no tempo tag on the upload: the same master with an intro, a tag or silence added or
-    // cut, so the timestamps are right and only start later or earlier — keep them (the vocal aligner finds the
-    // constant lag); stretching would be wrong everywhere but the middle. Sped-up / slowed uploads are stretched.
+    // another length with no tempo tag on the upload: the same master with an intro, a tag, an outro or silence added
+    // or cut is far more common than an unlabelled tempo change (measured: a NetEase sheet 41 s longer than the upload
+    // was right as written and wrong stretched), so the timestamps stay as they are — the vocal aligner finds a
+    // constant lag, and moves to the stretched reading only when that fits the voice better (alignRun). Sped-up and
+    // slowed uploads start stretched.
     const tempo = !!(flags && (flags.spedUp || flags.slowed));
-    if (!tempo && Math.abs(wantDur - srcDur) <= 10) return { lines, scaled: false };
+    if (!tempo) return { lines, scaled: false };
     return { lines: lines.map((l) => [l[0] * ratio, l[1]]), scaled: true };
   }
 
@@ -8141,6 +8143,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let estBaseTimes = null;            // est-mode unwarped times (for tap-along)
     let tapOn = false, tapIdx = 0;      // tap-along calibration state
     let curLyr = null;                  // last rendered lyrics (for src-line refresh)
+    let curDurSec = 0;                  // its track length, for re-timing a text sheet after a tap or a pin
     let estTip = false;   // session-scoped: re-surface the "estimated, tap to sync" hint once each session
     let fontPx = 16;
     try {
@@ -8668,7 +8671,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       miniData = (lines && lines.length) ? lines : null;
       if (!miniData && miniShown && mini) { miniShown = false; mini.classList.remove('on'); }
     }
-    function miniClock() { return Media.time() + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000; }   // the highlight clock, for the mini bar and the floating window
+    // every term the highlight clock adds to media time. A seek to a line subtracts all of them, so it lands where
+    // that line lights — the lead included, or a click lands past the line it was meant for (the wipe starts filled,
+    // and on lines closer together than the lead the next one is lit)
+    function clockOffS() { return ((App.leadMs() || 0) + (App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000; }
+    function miniClock() { return Media.time() + clockOffS(); }   // the highlight clock, for the mini bar and the floating window
     function curMiniLine() {
       if (!miniData) return -1;
       const t = miniClock();
@@ -8772,7 +8779,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let best = null;
       for (const idxs of cnt.values()) if (idxs.length >= 3 && (!best || idxs.length > best.length)) best = idxs;
       if (!best) { toast('No repeating chorus found'); return; }
-      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
+      const offS = clockOffS();
       const nowT = Media.time() + offS;
       let target = best[0];   // next occurrence ahead of now, else the first
       for (const i of best) if (times[i] > nowT + 1) { target = i; break; }
@@ -8786,7 +8793,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * let the arrow keys fall through to normal page scrolling. */
     function seekLine(delta) {
       if (!isSynced || !times.length || tab !== 'lyrics' || searchMode) return false;
-      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
+      const offS = clockOffS();
       let i = activeI < 0 ? 0 : activeI + delta;
       i = Math.max(0, Math.min(times.length - 1, i));
       Media.seek(Math.max(0, times[i] - offS));
@@ -8795,7 +8802,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     function replayLine() {
       if (!isSynced || activeI < 0 || tab !== 'lyrics' || searchMode) return false;
-      const offS = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
+      const offS = clockOffS();
       Media.seek(Math.max(0, times[activeI] - offS));
       pauseScrollUntil = 0;
       toast('↻ replaying line');
@@ -9199,6 +9206,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⇄', 'The vocals decide how a sheet is read', 'A sheet from a master of another length can be read two ways: as written, with an intro or outro of another length (the same master, cut differently), or stretched by the length ratio (a sped-up upload). Stretching by length alone put every line seconds off. Now a sheet starts as written unless the upload says sped-up or slowed, and each look scores both readings on the vocals: a clearly better one takes over — the panel, the mini bar, the floating window and the cache entry all switch, and the trail says why.'],
+          ['✂', 'Fewer switches, clearer groups', 'Eight gimmicks left the Tweaks tab with their code: grayscale and square artwork, the bigger play button, the taller waveform, slim scrollbars, the back-to-top button, hiding the Upload button and the stories bar. What remains is grouped as Look · Declutter · Feed rules · Player · Track pages · Player bar · Accessibility · Advanced · Your data, each switch saying what it does.'],
           ['⚑', 'A sheet that is not these vocals says so', 'When the vocal aligner looks twice at a synced sheet, on a dozen lines each time, and finds no clear lag either time, the sheet is probably for another version or another song. The source line now says “Not these vocals? tap to pick” and opens the search; the trail says why. A sheet the aligner confirms, or one you picked, is never doubted.'],
           ['⌖', 'Pin a line as it’s sung', 'On a sheet without timing (Genius) the guess is measured: on twenty rap tracks with real synced sheets, the guessed line starts were a median 7.5 s off; pins every eight lines bring that to half a second, every four to a fifth. So every line now grows a pin when you hover it — click it as the line is sung and the whole sheet bends to it. The source line reads Guessed timing, Vocal-guided or Pinned by you; A still taps along line by line.'],
           ['✦', 'A cleaner hub', 'The command palette wears the hub’s own typeface instead of the page’s serif. The header clock sits beside the source line so the title has the full width. The search field focuses with a quiet ring, lines lift softly under the pointer, and the player-bar pill has a touch more air.'],
@@ -10285,6 +10294,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       return [s, lk];
     };
 
+    // a tap or a pin moved the panel's timeline: the mini bar and the floating window follow it
+    function followAnchors(anchors) {
+      vocalGuided = false;
+      try { const fl = followList(curLyr, curDurSec, anchors || []); setMini(fl && fl.lines, fl && fl.kind); } catch (e) {}
+    }
     // est mode, live: the voice (or a tap) moved an anchor — bend the rendered times, the source line,
     // the mini bar and the floating window to it without a re-render
     function rewarp(result, dur, anchors) {
@@ -10408,7 +10422,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!tapOn) return;
       if (tapIdx >= lineEls.length) { endTapAlign(true); return; }
       const list = App.addAnchor(tapIdx, Media.time());   // anchor THIS line to now
-      if (estBaseTimes) times = warpTimes(estBaseTimes, list);   // est mode re-warps live
+      if (estBaseTimes) { times = warpTimes(estBaseTimes, list); followAnchors(list); }   // est mode re-warps live, the mini bar and the floating window with it
       tapIdx++;
       if (tapIdx >= lineEls.length) { endTapAlign(true); return; }
       tapTick();
@@ -10431,6 +10445,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const frag = document.createDocumentFragment();
       const m = App.meta();
       const dur = m && m.dur > 0 ? m.dur : 0;
+      curDurSec = dur;
 
       let mode = 'text';
       if (lyr.synced) mode = 'sync';
@@ -10446,11 +10461,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       let di = 0;
       const stagger = (el) => { el.style.animationDelay = Math.min(di * 14, 280) + 'ms'; di++; };
       const seekTo = (t) => {
-        // the highlight loop adds +(off+latency) to media time, so line i
-        // activates at media time (times[i] − off − latency) — seeking must
-        // SUBTRACT both or a nudged sync lands away from the clicked line
-        const off = ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;
-        Media.seek(Math.max(0, t - off));
+        // line i lights at media time (times[i] − everything the highlight clock adds): the seek lands there
+        Media.seek(Math.max(0, t - clockOffS()));
         pauseScrollUntil = 0;
       };
 
@@ -10528,6 +10540,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             clearTimeout(ct);
             const list = App.addAnchor(idx, Media.time());
             times = warpTimes(baseTimes, list);
+            followAnchors(list);
             activeI = -1;
             const [s2, lk2] = srcFor(lyr);
             setSrcLine(s2, lk2);
@@ -10750,7 +10763,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
       if (!isSynced || !times.length || searchMode || tab !== 'lyrics' || tapOn) return;
       // configurable perceptual lead + per-track nudge + device-latency comp
-      const t = now + (App.leadMs() || 0) / 1000 + ((App.offsetMs() || 0) + (App.latencyMs() || 0) + (SyncAuto.ms || 0)) / 1000;   // the one clock read of this frame
+      const t = now + clockOffS();   // the one clock read of this frame
       const i = bisect(t);
       // TRUE karaoke wipe: every frame, fill the current line from its exact
       // playback position within the line — this is what makes sync read as
@@ -11416,7 +11429,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
       shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
-      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, rewarp, onVoice, voiceStats: () => ({ snapped: snapN }), cycleTheme,
+      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, rewarp, onVoice, voiceStats: () => ({ snapped: snapN }), miniStats: () => ({ kind: miniKind, times: miniData ? miniData.map((l) => l[0]) : null }), cycleTheme,
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
@@ -11512,13 +11525,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * "Align to vocals"; applying it sets a third offset term, SyncAuto.ms (clock-side: −lagSec), persisted with
      * the cache entry, shown as "auto" in the source line. '0' clears it like the other offsets; a manual nudge
      * sits on top of it. */
-    let aligner = null, alignT = null, alignTries = 0, alignerEl = null, alignRetaps = 0, alignWaits = 0, alignHist = [], alignBad = 0;   // alignBad: looks with lines enough and no clear lag in a row   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
+    let aligner = null, alignT = null, alignTries = 0, alignerEl = null, alignRetaps = 0, alignWaits = 0, alignHist = [], alignBad = 0, altDone = false;   // altDone: both readings of a sheet of another length judged on a dozen lines   // alignBad: looks with lines enough and no clear lag in a row   // SyncAuto.ms (clock-side ms), .conf, .last (the latest estimate)
     const AUTO_ALIGN_AT_MS = [20000, 15000, 15000, 20000, 30000, 40000, 60000];   // looks at 20, 35, 50, 70, 100, 140 and 200 s of playback (the window slides with the track)
     const ALIGN_BIAS_SEC = 0.12;    // on sheets that ARE right the estimator still reads +0.1..0.18 s: the sung energy rises after the instant people tap, so that much is not a sheet error
+    const ALT_MIN_LINES = 8;   // the relative call between two readings of one sheet, on the same audio, needs fewer lines than a finding
     const ALIGN_MIN_LINES = 12, ALIGN_MIN_Z = 2.0, ALIGN_MAX_RATIO = 0.85;   // what one look must have to count; two counting looks that agree within 150 ms are a finding
     function alignStop() { stopT(alignT); alignT = null; if (aligner) { try { aligner.dispose(); } catch (e) {} aligner = null; } }
     function alignStart(retap) {
-      alignStop(); alignTries = 0; SyncAuto.last = null; if (!retap) { alignRetaps = 0; alignWaits = 0; alignHist = []; alignBad = 0; SyncAuto.doubt = false; }
+      alignStop(); alignTries = 0; SyncAuto.last = null; if (!retap) { alignRetaps = 0; alignWaits = 0; alignHist = []; alignBad = 0; altDone = false; SyncAuto.doubt = false; }
       try {
         if (typeof LYRIC_ALIGN === 'undefined') return;
         const tap = SUITE.audioTap && SUITE.audioTap();
@@ -11547,11 +11561,44 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (onsetWanted(lyr)) { alignTries = AUTO_ALIGN_AT_MS.length; return; }   // a text sheet: no looks, but the tap stays up for the voice
           again(); return;   // the sheet may still be on its way: look again later instead of giving up for this play
         }
-        const starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
+        let starts = lyr.lines.map((l) => +l[0]).filter((t) => isFinite(t));
         // an unscaled sheet timed to a longer or shorter master: the extra (or missing) part is usually at the start, so
         // the lag can be as large as the duration difference — search that far and prefer lags near 0 or ±that difference
-        const dd = (lyr.srcDur > 0 && meta && meta.dur > 0 && !lyr.scaled) ? Math.abs(meta.dur - lyr.srcDur) : 0;
-        const r = aligner.estimate(starts, dd > 2 ? { maxLagSec: Math.min(15, dd + 1.5), priorLags: [0, dd, -dd] } : null); SyncAuto.last = r;
+        const ddAll = (lyr.srcDur > 0 && meta && meta.dur > 0) ? Math.abs(meta.dur - lyr.srcDur) : 0;
+        const dd = lyr.scaled ? 0 : ddAll;
+        const plainOpts = (d) => (d > 2 ? { maxLagSec: Math.min(15, d + 1.5), priorLags: [0, d, -d] } : null);
+        let r = aligner.estimate(starts, plainOpts(dd)); SyncAuto.last = r;
+        // a sheet from a master of another length has two readings: stretched by the ratio (a sped-up or slowed upload)
+        // or plain, with an intro or outro of another length (the same master, cut differently). The lengths alone cannot
+        // tell them apart; the vocals can. The other reading is scored on the same audio at every look until both have
+        // been judged on a dozen lines, and a clearly better one takes over the sheet — and its cache entry, so the next
+        // play starts right. A relative call: a wrong reading still finds peaks (z 2.4–3.6 measured on a stretched sheet
+        // whose plain reading was right), so the margin over the reading in use decides, never the height alone, and the
+        // other reading's runner-up only matters when the margin is slim. A finding agreed meanwhile does not close the
+        // question (it did: a stretched reading agreed twice and locked its offset in, a look before the plain one won)
+        const altOpen = !altDone && !anch.length && ddAll > 1.5 && lyr.srcDur > 0 && meta && meta.dur > 0;
+        if (altOpen) {
+          const ratio = meta.dur / lyr.srcDur;
+          const alt = lyr.scaled ? starts.map((t) => t / ratio) : starts.map((t) => t * ratio);
+          const rA = aligner.estimate(alt, lyr.scaled ? plainOpts(ddAll) : null), rIn = r;
+          const zOf = (x, min) => (x && !x.reason && x.peak && x.linesUsed >= min) ? x.peak.z : -1;
+          const zA = zOf(rA, ALT_MIN_LINES), zC = zOf(rIn, ALT_MIN_LINES);
+          const ruOk = !rA.runnerUp || rA.runnerUp.ratio <= ALIGN_MAX_RATIO;
+          if (zA >= 0 && zC >= 0) Trail.add('align: the ' + (lyr.scaled ? 'plain' : 'stretched') + ' reading scores z ' + zA + ' on ' + rA.linesUsed + ' lines, the one in use z ' + zC + ' on ' + rIn.linesUsed);
+          if (zA >= 2.5 && zC >= 0 && zA >= zC + (ruOk ? 1 : 1.5)) {
+            const k = lyr.scaled ? 1 / ratio : ratio;
+            lyr.lines = lyr.lines.map((l) => [+l[0] * k, l[1]]);
+            lyr.scaled = !lyr.scaled; lyr.wt = null;   // word timing keyed by line start no longer matches
+            Trail.add('align: the ' + (lyr.scaled ? 'stretched' : 'plain') + ' reading of this sheet fits the vocals better → using it');
+            try { const entry = Cache.get(meta.key); if (entry) { entry.lines = lyr.lines; entry.scaled = lyr.scaled; entry.wt = 0; entry.aoff = 0; entry.vf = 1; Cache.set(meta.key, entry); } } catch (e) {}   // vf: the vocals chose this reading
+            alignHist = []; alignBad = 0; SyncAuto.doubt = false;
+            if (SyncAuto.ms || SyncAuto.auto) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.prov = false; SyncAuto.auto = false; }   // an offset measured on the old reading
+            onsetPairs = []; SyncAuto.voice = null;
+            starts = alt; r = rA; SyncAuto.last = r;
+            try { rerender(); } catch (e) {}   // the panel, the mini bar and the floating window
+          }
+          if (zOf(rA, ALIGN_MIN_LINES) >= 0 && zOf(rIn, ALIGN_MIN_LINES) >= 0) altDone = true;   // both judged on a dozen lines: the reading in use stands
+        }
         try { Trail.add('align look ' + (alignTries + 1) + ' (' + lyr.src + ', ' + Math.round(Media.time()) + ' s): ' + (r ? (r.reason || ('lag ' + r.lagSec + ' s, z ' + (r.peak ? r.peak.z : '?') + ', runner-up ' + (r.runnerUp ? r.runnerUp.ratio : '-') + ', ' + r.linesUsed + ' lines')) : 'no estimate')); } catch (e) {}
         // nothing heard: SoundCloud may have switched elements under the tap (it keeps one per upcoming track) — tap the audible one and go on
         if (r && /^(no-activity|no-audio|silence)$/.test(r.reason || '') && alignRetaps < 3) {
@@ -11576,17 +11623,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
           const n = alignHist.length, agreed = n >= 2 && Math.abs(alignHist[n - 1] - alignHist[n - 2]) <= 0.15;
           r.agreed = agreed;
-          if (agreed) {
+          if (agreed && !SyncAuto.auto) {
             const lag = (alignHist[n - 1] + alignHist[n - 2]) / 2; r.lagAdj = Math.round(lag * 1000) / 1000;
-            const clear = (!SyncAuto.ms || SyncAuto.prov) && !off && !anch.length;   // nothing manual in place (a provisional offset from the voice yields to a look)
-            Trail.add('align agreed: ' + r.lagAdj + ' s' + (Math.abs(lag) < 0.25 ? ' (sheet is right)' : clear ? ' → applied' : ' → offered (an offset is already set)'));
+            const more = altOpen && !altDone && alignTries + 1 < AUTO_ALIGN_AT_MS.length;   // the other reading of this sheet still unjudged and looks left: on to the next, the finding standing meanwhile (the tap stays up either way)
+            if (SyncAuto.doubt) { SyncAuto.doubt = false; alignBad = 0; Trail.add('align: two looks agree after all — these are the vocals of this sheet'); try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {} }   // the warning goes the moment the looks agree
+            const clear = !SyncAuto.hold && (!SyncAuto.ms || SyncAuto.prov) && !off && !anch.length;   // nothing manual in place (a provisional offset from the voice yields to a look; a reset by the listener holds)
+            Trail.add('align agreed: ' + r.lagAdj + ' s' + (Math.abs(lag) < 0.25 ? ' (sheet is right)' : clear ? ' → applied' : SyncAuto.hold ? ' → offered (reset by the listener: the ⋯ menu applies it)' : ' → offered (an offset is already set)'));
             // a finding applies itself, once, while nothing manual is in place; the toast says how to undo it. The tap stays up
             // either way: the voice keeps lighting lines one-to-one for the rest of the track
-            if (Math.abs(lag) >= 0.25 && clear && SyncAuto.apply) { SyncAuto.apply(true); alignTries = AUTO_ALIGN_AT_MS.length; return; }
+            if (Math.abs(lag) >= 0.25 && clear && SyncAuto.apply) { SyncAuto.apply(true); if (more) { again(); return; } alignTries = AUTO_ALIGN_AT_MS.length; return; }
             if (Math.abs(lag) < 0.25) {
               if (SyncAuto.prov) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.prov = false; try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {} }   // the look outranks the provisional guess
               SyncAuto.auto = true;   // a confirmed sheet: the voice stops re-estimating
-              alignTries = AUTO_ALIGN_AT_MS.length; return;
+              if (more) { again(); return; } alignTries = AUTO_ALIGN_AT_MS.length; return;
             }
           }
         }
@@ -11695,6 +11744,19 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       wt: (c.wt && typeof c.wt === 'object') ? c.wt : null,
     } : null;
 
+    // an entry stretched by a build that stretched every sheet of another length: back to the sheet as written (and
+    // without the offset measured on the stretch), unless the vocals chose the stretch (vf) or the upload is tagged
+    function unstretch(c, entry, key) {
+      try {
+        if (!c || !c.synced || !c.scaled || !entry || entry.vf || !(c.srcDur > 0) || !(meta && meta.dur > 0)) return;
+        const flags = (meta.title ? cleanTitle(meta.title).flags : null) || {};
+        if (flags.spedUp || flags.slowed) return;
+        const k = c.srcDur / meta.dur;
+        c.lines = c.lines.map((l) => [+l[0] * k, l[1]]); c.scaled = false; c.wt = null;
+        entry.lines = c.lines; entry.scaled = false; entry.wt = 0; entry.aoff = 0; Cache.set(key, entry);
+      } catch (e) {}
+    }
+
     function apply(result, myToken) {
       if (myToken !== token) return;
       try { UI.setBusy(false); } catch (e) {}
@@ -11721,13 +11783,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         // the lag measured on the old sheet is not this one's: the auto offset goes (a manual nudge stays — it is
         // small, and the listener would notice), and the next looks measure this sheet
         if (SyncAuto.ms || SyncAuto.auto) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.auto = false; SyncAuto.prov = false; }
+        SyncAuto.hold = false;   // a reset was about the sheet that went
         onsetPairs = [];
         SyncAuto.last = null;
         try { persistSync(); } catch (e) {}
       }
       const wantTap = synced || onsetWanted(result);   // a text sheet keeps the tap: the voice guides its timing
       if (!aligner && wantTap) alignStart();   // the source arrived after the track change
-      else if (aligner && swapped && synced) { alignHist = []; alignTries = 0; alignBad = 0; SyncAuto.doubt = false; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
+      else if (aligner && swapped && synced) { alignHist = []; alignTries = 0; alignBad = 0; altDone = false; SyncAuto.doubt = false; stopT(alignT); alignT = Ticker.after(alignRun, 3000); }   // the new sheet gets its own looks, starting on the audio already heard
       else if (aligner && !wantTap && !(meta && Inflight.has(meta.key))) alignStop();   // nothing to align and nothing still coming: the tap's 20 ms tick has no reader
       if (onsetWanted(result) && onsetLog.length) { const heard = onsetLog; onsetLog = []; heard.forEach(onVocalOnset); }   // the voices heard before the sheet landed
       // confirmed synced lyrics are accurate as-is — drop any stale per-line anchors
@@ -11880,6 +11943,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const entry = Cache.get(key);
         const c = fromCache(entry);
         if (c) {
+          unstretch(c, entry, key);   // stretched by an older build, before the vocals had a say
           off = (entry && entry.off) || 0;
           SyncAuto.ms = (entry && entry.aoff) | 0; SyncAuto.conf = SyncAuto.ms ? 1 : 0; SyncAuto.prov = false; SyncAuto.auto = !!SyncAuto.ms;   // a stored finding stands: the voice does not second-guess it
           anch = (entry && entry.anch) || [];
@@ -11930,11 +11994,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         onPartial: (rp) => {
           if (token !== myToken || partial) return;
           partial = rp;
-          // lyrics on screen NOW; the judge keeps working and either confirms
-          // this result (no re-render) or swaps in a better one
+          // lyrics on screen NOW, through the same door as a final result: the sheet shown before this one leaves
+          // nothing behind (its looks, its auto offset, its voice pins — a banned sheet used to hand its state to the
+          // right one). The judge keeps working and either confirms this result (no re-render) or swaps in a better one
+          apply(rp, myToken);
+          try { UI.setBusy(true); } catch (e) {}   // still verifying
           if (UI.isOpen() && !UI.inSearch()) {
-            lyr = rp;
-            UI.renderLyrics(rp);
             const sl = UI.srcFor(rp);
             UI.setSrcLine(sl[0] + '<span class="dot"> \u00B7 </span>verifying\u2026', sl[1]);
           }
@@ -11978,7 +12043,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       off = 0;
       SyncAuto.ms = 0; SyncAuto.conf = 0;
       anch = [];
-      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = ''; onsetPairs = []; SyncAuto.prov = false; SyncAuto.auto = false; SyncAuto.voice = null;
+      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = ''; onsetPairs = []; SyncAuto.prov = false; SyncAuto.auto = false; SyncAuto.hold = false; SyncAuto.voice = null;
       alignStart();
       UI.setReady(false);
       UI.setHeader(meta);
@@ -12300,7 +12365,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       };
       if (deltaMs === 0) {
         const hadAnchors = anch.length > 0 || autoAnch.length > 0;
-        off = 0; SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.prov = false; SyncAuto.auto = false; onsetPairs = [];
+        off = 0; SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.prov = false; SyncAuto.auto = false; onsetPairs = []; SyncAuto.voice = null;
+        SyncAuto.hold = true; alignHist = [];   // the listener's word: no look or voice puts an auto offset back on this sheet (the ⋯ menu still offers a finding)
         anch = [];
         autoAnch = []; autoHold = true;   // the listener's word: the voice stops guiding this track
         persistSync();
@@ -12328,8 +12394,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     function rerender() {
       if (!meta) { UI.showIdle(); return; }
-      if (lyr) { lyr.instr ? UI.showInstrumental() : UI.renderLyrics(lyr); }
-      else ensure(false);
+      if (lyr) {
+        lyr.instr ? UI.showInstrumental() : UI.renderLyrics(lyr);
+        try { const fl = UI.followList(lyr, meta.dur, anchorsNow()); UI.setMini(fl && fl.lines, fl && fl.kind); } catch (e) {}   // the mini bar and the floating window follow the panel (a reset drops its pins there too)
+      } else ensure(false);
     }
 
     /* ---------- vocal-guided timing: a text sheet follows the voice ----------
@@ -12394,7 +12462,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const L = lyr.lines; if (!L || L.length < 4) return;
       const manual = ((off || 0) + (goff || 0)) / 1000, offS = manual + (SyncAuto.ms || 0) / 1000;
       try { UI.onVoice(t + (lead || 0) / 1000 + offS); } catch (e) {}
-      if (anch.length || off) return;   // a calibration or a nudge is the listener's word
+      if (anch.length || off || SyncAuto.hold) return;   // a calibration, a nudge or a reset is the listener's word
       let best = -1, bd = Infinity, second = Infinity;
       for (let i = 0; i < L.length; i++) {
         const ad = Math.abs(t - (+L[i][0] - offS));
@@ -12404,7 +12472,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       onsetPairs.push(t - (+L[best][0] - manual));   // > 0: the voice came after the sheet said (the sheet is early)
       SyncAuto.voice = onsetPairs;   // the report shows them
       if (onsetPairs.length > 24) onsetPairs.shift();
-      if (onsetPairs.length < 3 || SyncAuto.auto) return;   // a look on a dozen lines is the better instrument once it has spoken
+      if (onsetPairs.length < 3 || SyncAuto.auto || (SyncAuto.ms && !SyncAuto.prov)) return;   // a look on a dozen lines, or the listener's own "Align to vocals", is the better instrument once it has spoken
       const sorted = onsetPairs.slice().sort((a, b) => a - b), h = sorted.length >> 1;
       const lag = sorted.length % 2 ? sorted[h] : (sorted[h - 1] + sorted[h]) / 2;
       const dev = onsetPairs.map((x) => Math.abs(x - lag)).sort((a, b) => a - b), spread = dev.length % 2 ? dev[h] : (dev[h - 1] + dev[h]) / 2;
@@ -12552,7 +12620,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     return {
       meta: () => meta,
-      lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, words: !!(lyr && lyr.wt && Object.keys(lyr.wt).length), envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
+      lyricDebug: () => ({ mediaT: Media.time(), off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, hold: !!SyncAuto.hold, doubt: !!SyncAuto.doubt, auto: !!SyncAuto.auto, looks: alignHist.length, scaled: !!(lyr && lyr.scaled), srcDur: (lyr && lyr.srcDur) || 0, mini: (() => { try { return UI.miniStats(); } catch (e) { return null; } })(), voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, words: !!(lyr && lyr.wt && Object.keys(lyr.wt).length), envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
       offsetMs: () => off,
       syncOffS: () => ((off || 0) + (goff || 0) + (SyncAuto.ms || 0)) / 1000,
       autoAlignMs: () => SyncAuto.ms,
@@ -12846,21 +12914,15 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     hideUpsell: true,       // Go+ / upgrade nags
     hidePromoted: false,    // promoted / sponsored items in the stream
     hideComments: false,    // comment markers on the waveform
-    grayArt: false,         // artwork grayscale until hover
     dimSidebar: false,      // fade the right sidebar until hover
-    bigPlay: false,         // larger play button
     fontScale: 100,         // 85..120 (%)
     hideFollowFeed: false,  // hide "suggested people to follow" boxes
     customCss: '',          // power users: your own CSS, applied last
     // ── more declutter / appearance (all pure-CSS, fail-safe) ──
-    hideUpload: false,      // hide the header Upload button
-    hideStories: false,     // hide the stories/"upload your first" bar
     hidePlayCounts: false,  // hide play / like counts for a calmer feed
     hideRelated: false,     // hide the related-tracks autoplay panel
     hideCommentSection: false, // hide the comments list under a track
     hideAppBanner: true,    // hide "get the app"/mobile nags
-    squareArt: false,       // square artwork instead of rounded
-    thinScroll: false,      // slim custom scrollbars
     focusMode: false,       // hide the right sidebar entirely
     maxWidth: false,        // cap content width for big screens
     hideReposts: false,     // hide reposts in the stream
@@ -12890,8 +12952,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     startPage: '',          // where a cold load of soundcloud.com lands ('' = SoundCloud's own choice)
     hidePlaylistsFeed: false, // hide playlists in the stream
     compactFeed: false,     // tighter stream rows
-    biggerWave: false,      // taller waveform
-    backTop: true,          // back-to-top button when scrolled
     // ── player / listener (behavioural) ──
     speed: 100,             // 50..200 (% playback speed)
     speedPerTrack: false,   // remember & restore playback speed per track URL
@@ -13387,25 +13447,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (CFG.hideUpsell) css += '.upsell,.upsellHeader,[class*="upsell" i],[class*="goPlus" i],[class*="go-plus" i],.playControls__upsell,.header__upsell,.l-upsell,.upgradeButton,.go-plus-upsell,.l-product-banners .banner.m-promotion,.l-product-banners:not(:has(.banner:not(.m-promotion))){display:none !important}';
     if (CFG.hidePromoted) css += '[class*="promoted" i],[class*="sponsored" i],.promotedTrack{display:none !important}';
     if (CFG.hideComments) css += '.commentNode,.waveform__layer.commentsLayer,.commentForm{display:none !important}';
-    if (CFG.grayArt) css += '.sc-artwork,.image__full{filter:grayscale(1);transition:filter .25s}.sc-artwork:hover,.listenArtworkWrapper:hover .sc-artwork{filter:none !important}';
     if (CFG.dimSidebar) css += '.l-sidebar-right,.sidebar{opacity:.55;transition:opacity .2s}.l-sidebar-right:hover,.sidebar:hover{opacity:1}';
-    if (CFG.bigPlay) css += '.playControls__play{transform:scale(1.18)}';
     if (CFG.fontScale !== 100) css += 'html{font-size:' + Math.min(120, Math.max(85, CFG.fontScale | 0)) + '% !important}';
     // ── declutter ──
-    if (CFG.hideUpload) css += '.header__upsell,a.uploadButton,.header__moreMenu .uploadButton,.uploadButton{display:none !important}';
-    if (CFG.hideStories) css += '[class*="stories" i],.uploadYourFirst{display:none !important}';
     if (CFG.hidePlayCounts) css += '.sc-ministats-plays,.sound__soundStats .sc-ministats-item,.playbackSoundBadge__sliderProgress~.sc-ministats{display:none !important}';
     if (CFG.hideRelated) css += '.relatedTracks,.l-related,[class*="related" i].l-listenable-content{display:none !important}';
     if (CFG.hideCommentSection) css += '.comments,.commentsList,.commentsSection{display:none !important}';
     if (CFG.hideAppBanner) css += '.mobileAppBanner,[class*="appBanner" i],.smartBanner,.l-mobile-app-banner,#onetrust-banner-sdk{display:none !important}';
-    if (CFG.squareArt) css += '.sc-artwork,.image__rounded,.sound__artwork .image{border-radius:4px !important}';
-    if (CFG.thinScroll) css += '::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-track{background:transparent}';
     if (CFG.focusMode) css += '.l-sidebar-right,.sidebar,.l-fluid-fixed .l-sidebar-right{display:none !important}.l-main .l-fluid-fixed .l-middle-fixed,.l-main{max-width:100% !important}';
     if (CFG.maxWidth) css += '.l-container.l-fluid,.l-container{max-width:1100px !important;margin:0 auto !important}';
     if (CFG.hideReposts) css += '.soundList__item .sound.streamContext-repost,.repostItem,[class*="repost" i].streamContext{display:none !important}';
     if (CFG.hidePlaylistsFeed) css += '.soundList__item:has(.playlist),.soundList__item:has(.systemPlaylistBadge),.stream__list .playlist{display:none !important}';
     if (CFG.compactFeed) css += '.soundList__item{padding-top:7px !important;padding-bottom:7px !important}.sound__body,.soundContext{padding-top:4px !important;padding-bottom:4px !important}';
-    if (CFG.biggerWave) css += '.waveform,.waveform__layer{height:160px !important}.listenEngagement,.waveform canvas{height:160px !important}';
     if (CFG.hideFollowFeed) css += '.userBadgeListItem.suggestion,.suggestedUsers,.recommendedUsers,[class*="whoToFollow" i],[class*="suggestedFollow" i]{display:none !important}';
     // data-driven feature table (each entry isolated & fail-safe)
     for (const f of MORE) {
@@ -15669,7 +15722,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     } catch (e) {}
     // back-to-top button
     try {
-      W.addEventListener('scroll', ensureTop, { passive: true });
     } catch (e) {}
   }
   function bumpVol(d) { const m = activeMedia(); if (!m) return; const v = Math.min(1, Math.max(0, (m.volume || 0) + d)); if (v > 0) mutedVol = null; m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%'); }
@@ -15871,24 +15923,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (b) { const was = b.classList.contains('sc-button-selected'); b.click(); toast(was ? 'Unliked' : 'Liked ♥'); } else toast('Play a track first');
   }
   function gotoArtist() { const a = D.querySelector('.playbackSoundBadge__lightLink'); const h = a && a.getAttribute('href'); if (h) { try { W.open('https://soundcloud.com' + h.split('?')[0], '_blank'); } catch (e) {} } else toast('Play a track first'); }
-  let topBtn = null;
-  function ensureTop() {
-    try {
-      if (!CFG.backTop) { if (topBtn) topBtn.style.display = 'none'; return; }
-      if (!topBtn) {
-        topBtn = D.createElement('button');
-        topBtn.textContent = '↑'; topBtn.title = 'Back to top';
-        topBtn.style.cssText = 'position:fixed;right:16px;bottom:112px;z-index:2147483330;width:38px;height:38px;border-radius:50%;border:0;cursor:pointer;'
-          + 'background:linear-gradient(180deg,rgba(42,42,48,.95),rgba(20,20,24,.97));color:#fff;font-size:17px;box-shadow:0 8px 24px rgba(0,0,0,.42),inset 0 0 0 1px rgba(255,255,255,.08);display:none;transition:opacity .2s,transform .15s';
-        topBtn.addEventListener('mouseenter', () => { topBtn.style.transform = 'translateY(-2px)'; });
-        topBtn.addEventListener('mouseleave', () => { topBtn.style.transform = 'none'; });
-        topBtn.addEventListener('click', () => { try { W.scrollTo({ top: 0, behavior: 'smooth' }); const sc = D.querySelector('#content, .l-container, .l-fluid'); if (sc && sc.scrollTo) sc.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {} });
-        (D.body || D.documentElement).appendChild(topBtn);
-      }
-      topBtn.style.display = ((W.scrollY || (D.scrollingElement && D.scrollingElement.scrollTop) || 0) > 500) ? 'block' : 'none';
-    } catch (e) {}
-  }
-
   /* ───────── small player-bar buttons (speed cycle · copy link) ───────── */
   // per-track speed memory (opt-in): each track remembers the last speed you set
   // for it and restores it on play; untracked tracks keep whatever's current.
@@ -17313,78 +17347,72 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       paint(); row.appendChild(box);
   }
   const ROWS = [
-    ['SEC', 'Appearance'],
+    ['SEC', 'Look'],
     ['uiLang', 'select', 'Language', 'The suite’s own text. Auto follows the browser; SoundCloud itself and lyrics stay as they are', [['auto', 'Auto'], ['en', 'English'], ['de', 'Deutsch'], ['fr', 'Français'], ['es', 'Español'], ['pt', 'Português'], ['it', 'Italiano'], ['nl', 'Nederlands'], ['pl', 'Polski'], ['tr', 'Türkçe'], ['ru', 'Русский'], ['ja', '日本語'], ['ko', '한국어']]],
     ['theme', 'select', 'Theme', 'Real dark themes + tints', [['none', 'Default (light)'], ['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED black'], ['midnight', '🌌 Midnight blue'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate'], ['dim', 'Dim (tint)'], ['dimmer', 'Dimmer (tint)'], ['warm', 'Night warm (tint)'], ['cool', 'Cool (tint)'], ['vivid', 'Vivid (tint)'], ['muted', 'Muted (tint)'], ['vintage', 'Vintage (tint)'], ['rose', 'Rosé (tint)'], ['sunset', 'Sunset (tint)'], ['forest', 'Forest (tint)'], ['neon', 'Neon (tint)'], ['noir', 'Noir (tint)'], ['cyber', 'Cyberpunk (tint)'], ['pastel', 'Pastel (tint)'], ['gray', 'Grayscale (tint)'], ['contrast', 'High contrast (tint)'], ['custom', '🎨 Custom…']]],
     ['autoDark', 'toggle', 'Auto dark', 'A dark theme by night and light by day, or whatever the system says — overrides the theme above while on'],
     ['autoDarkMode', 'select', 'Auto dark follows', 'The clock, or the OS colour scheme', [['clock', 'The clock (dark 7pm–7am)'], ['system', 'The system colour scheme']]],
-    ['motionOs', 'toggle', 'Reduce motion with the system', 'When the OS asks for less motion, the site and the hub animate less — whatever the switch above says'],
-    ['skipLinks', 'toggle', 'Skip links', 'Press Tab at the top of a page: Skip to content, Skip to player'],
     ['autoDarkTheme', 'select', 'After-dark theme', 'Which dark theme to use at night', [['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED'], ['midnight', '🌌 Midnight'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate']]],
     ['accent', 'select', 'Accent colour', 'Recolours buttons & links', [['default', 'SoundCloud orange'], ['red', 'Red'], ['pink', 'Pink'], ['purple', 'Purple'], ['blue', 'Blue'], ['cyan', 'Cyan'], ['green', 'Green'], ['gold', 'Gold'], ['custom', '🎨 Custom…']]],
-    ['grayArt', 'toggle', 'Grayscale artwork', 'Colour returns on hover'],
-    ['squareArt', 'toggle', 'Square artwork', ''],
-    ['dimSidebar', 'toggle', 'Dim right sidebar', 'Fades until you hover'],
-    ['focusMode', 'toggle', 'Focus mode', 'Hide the right sidebar entirely'],
-    ['maxWidth', 'toggle', 'Cap content width', 'Center on wide screens'],
-    ['bigPlay', 'toggle', 'Bigger play button', ''],
-    ['biggerWave', 'toggle', 'Taller waveform', ''],
-    ['thinScroll', 'toggle', 'Slim scrollbars', ''],
-    ['fontScale', 'range', 'Text size', '', 85, 120],
+    ['fontScale', 'range', 'Text size', '%', 85, 120],
+    ['maxWidth', 'toggle', 'Cap content width', 'A centred column on wide screens'],
+    ['dimSidebar', 'toggle', 'Dim right sidebar', 'Faded until you hover it'],
+    ['focusMode', 'toggle', 'Hide right sidebar', 'Related tracks, likes and follows go; the page is the track'],
+    ['compactFeed', 'toggle', 'Compact feed', 'Tighter stream rows'],
     ['SEC', 'Declutter'],
     ['adSkip', 'toggle', 'Skip audio ads', 'The ad calls fail the way an ad blocker fails them, so the player never has an ad to play and goes straight to the track'],
     ['hideUpsell', 'toggle', 'Hide Go+ upsells', 'Upgrade nags & banners'],
-    ['hideAppBanner', 'toggle', 'Hide app / cookie banners', ''],
+    ['hideAppBanner', 'toggle', 'Hide app and cookie banners', ''],
     ['hidePromoted', 'toggle', 'Hide promoted items', 'Sponsored tracks in the stream'],
     ['hideReposts', 'toggle', 'Hide reposts', 'In your stream · they never play from the feed either'],
+    ['hidePlaylistsFeed', 'toggle', 'Hide playlists in feed', 'Only tracks in the stream'],
+    ['hideFollowFeed', 'toggle', 'Hide “who to follow”', 'Suggested-people boxes'],
+    ['hideComments', 'toggle', 'Hide waveform comments', 'Cleaner player'],
+    ['hideCommentSection', 'toggle', 'Hide comments list', 'Under the track'],
+    ['hideRelated', 'toggle', 'Hide related tracks', 'The list under a track'],
+    ['hidePlayCounts', 'toggle', 'Hide play / like counts', 'Calmer feed'],
+    ['commentNoise', 'toggle', 'Hide comment noise', 'Emoji-only, promo (“check out my…”, links) and duplicate comments stay out of the comment list'],
+    ['SEC', 'Feed rules'],
     ['feedMute', 'text', 'Mute words', 'A track whose title, artist, tags or genre has one of these never shows or plays · comma-separated'],
     ['feedMinMin', 'select', 'Hide tracks shorter than', 'In the feed, search and related tracks', [['0', 'Off'], ['1', '1 minute'], ['2', '2 minutes'], ['5', '5 minutes']]],
     ['feedMaxMin', 'select', 'Hide tracks longer than', 'Keeps hour-long mixes out of a song feed', [['0', 'Off'], ['10', '10 minutes'], ['20', '20 minutes'], ['30', '30 minutes'], ['60', '1 hour']]],
-    ['feedHideLiked', 'toggle', 'Hide tracks you already liked', 'In the feed, search and related · uses the shuffle library'],
-    ['feedHidePlayed', 'toggle', 'Hide tracks you already played', 'Anything you played for 30 s or more in the last month'],
-    ['commentNoise', 'toggle', 'Hide comment noise', 'Emoji-only, promo (“check out my…”, links) and duplicate comments stay out of the comment list'],
     ['feedMaxPlays', 'select', 'Hide tracks with more plays than', 'Fresh finds: keep the big hits out of the feed and search', [['0', 'Off'], ['1000', '1,000'], ['10000', '10,000'], ['100000', '100,000'], ['1000000', '1,000,000']]],
     ['feedMaxAgeDays', 'select', 'Hide tracks older than', 'Only the newest uploads', [['0', 'Off'], ['7', '1 week'], ['30', '1 month'], ['365', '1 year']]],
-    ['hidePlaylistsFeed', 'toggle', 'Hide playlists in feed', 'Only tracks in the stream'],
-    ['compactFeed', 'toggle', 'Compact feed', 'Tighter stream rows'],
-    ['hideComments', 'toggle', 'Hide waveform comments', 'Cleaner player'],
-    ['hideCommentSection', 'toggle', 'Hide comments list', 'Under the track'],
-    ['hideRelated', 'toggle', 'Hide related tracks', ''],
-    ['hidePlayCounts', 'toggle', 'Hide play / like counts', 'Calmer feed'],
-    ['hideUpload', 'toggle', 'Hide Upload button', ''],
-    ['hideStories', 'toggle', 'Hide stories bar', ''],
+    ['feedHideLiked', 'toggle', 'Hide tracks you already liked', 'In the feed, search and related · uses the shuffle library'],
+    ['feedHidePlayed', 'toggle', 'Hide tracks you already played', 'Anything you played for 30 s or more in the last month'],
     ['SEC', 'Player'],
     ['speed', 'range', 'Playback speed', '%', 50, 200],
     ['speedPerTrack', 'toggle', 'Remember speed per track', 'Restore each track’s last speed'],
-    ['loopTrack', 'toggle', 'Loop current track', ''],
+    ['loopTrack', 'toggle', 'Loop the current track', 'Plays it again when it ends'],
     ['rememberVol', 'toggle', 'Remember volume', 'Restore it next time'],
     ['volScroll', 'toggle', 'Scroll = volume', 'Scroll over the player bar'],
     ['keySeek', 'toggle', 'Number-key seeking', '0–9 jump · [ ] = ∓10 s · { } = ∓1 min'],
     ['hotkeys', 'toggle', 'Global hotkeys', '/ search · M mute · ± volume · B like · C copy · G artist · I info · A compare · N night · , . speed'],
-    ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
-    ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
-    ['pauseUnplug', 'toggle', 'Pause when the audio output goes away', 'Headphones unplugged or a Bluetooth link dropped: playback pauses instead of switching to the speakers. Chrome only names outputs once the site may use your microphone; before that it pauses when no output is left'],
-    ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
-    ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['listKeys', 'toggle', 'Keyboard in lists', 'J and K walk the tracks of the feed, search and playlists · Enter plays · O opens · L likes'],
+    ['mediaKeys', 'toggle', 'System media controls', 'Title, artist and artwork in the OS now-playing panel · play, pause and seek from media keys'],
+    ['miniPlayer', 'toggle', 'Mini floating player', 'Draggable now-playing widget'],
+    ['pauseUnplug', 'toggle', 'Pause when the audio output goes away', 'Headphones unplugged or a Bluetooth link dropped: playback pauses instead of switching to the speakers. Chrome only names outputs once the site may use your microphone; before that it pauses when no output is left'],
+    ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
+    ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
+    ['resumePos', 'select', 'Resume long tracks', 'Mixes and podcasts over 10 minutes remember where you stopped, for a month', [['ask', 'Offer to resume'], ['auto', 'Resume automatically'], ['off', 'Off']]],
+    ['startPage', 'select', 'Start on', 'Where soundcloud.com opens when you come back to it', [['', 'SoundCloud’s choice'], ['/feed', 'Feed'], ['/you/library', 'Library'], ['/you/likes', 'Likes'], ['/discover', 'Discover']]],
+    ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
+    ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['quietHours', 'toggle', 'Quiet hours', 'Night mode and the −18 LUFS loudness target between the hours below; both go back at the end'],
     ['quietFrom', 'select', 'Quiet from', 'When the quiet window starts', [['20', '8 pm'], ['21', '9 pm'], ['22', '10 pm'], ['23', '11 pm'], ['0', 'Midnight']]],
     ['quietTo', 'select', 'Quiet until', 'When it ends', [['5', '5 am'], ['6', '6 am'], ['7', '7 am'], ['8', '8 am'], ['9', '9 am']]],
-    ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
-    ['backTop', 'toggle', 'Back-to-top button', 'Appears when you scroll down'],
-    ['pauseOnHide', 'toggle', 'Pause on tab switch', 'Pause when this tab is hidden'],
-    ['startPage', 'select', 'Start on', 'Where soundcloud.com opens when you come back to it', [['', 'SoundCloud’s choice'], ['/feed', 'Feed'], ['/you/library', 'Library'], ['/you/likes', 'Likes'], ['/discover', 'Discover']]],
-    ['resumePos', 'select', 'Resume long tracks', 'Mixes and podcasts over 10 minutes remember where you stopped, for a month', [['ask', 'Offer to resume'], ['auto', 'Resume automatically'], ['off', 'Off']]],
-    ['SEC', 'Artist / track'],
+    ['SEC', 'Track pages'],
     ['tsLinks', 'toggle', 'Clickable timestamps', 'Any 12:34 in a description or comment jumps there'],
     ['setRuntime', 'toggle', 'Playlist runtime', 'Track count and total length under a playlist or album title'],
+    ['SEC', 'Player bar'],
     ['barInfo', 'toggle', 'Track info button', 'ⓘ — metadata, download, artist links, embed'],
-    ['hideFollowFeed', 'toggle', 'Hide “who to follow”', 'Suggested-people boxes'],
-    ['SEC', 'Toolbar buttons'],
-    ['barSpeed', 'toggle', 'Speed', ''],
-    ['barRestart', 'toggle', 'Restart track', ''],
-    ['barAB', 'toggle', 'A–B loop', 'Click to set A then B'],
-    ['barCopy', 'toggle', 'Copy track link', ''],
+    ['barSpeed', 'toggle', 'Speed button', 'The current speed, a click cycles it'],
+    ['barRestart', 'toggle', 'Restart button', 'Back to the start of the track'],
+    ['barAB', 'toggle', 'A–B loop button', 'Click for A, again for B, right-click clears'],
+    ['barCopy', 'toggle', 'Copy-link button', 'The track’s link on the clipboard'],
+    ['SEC', 'Accessibility'],
+    ['motionOs', 'toggle', 'Reduce motion with the system', 'When the OS asks for less motion, the site and the hub animate less — whatever the switch above says'],
+    ['skipLinks', 'toggle', 'Skip links', 'Press Tab at the top of a page: Skip to content, Skip to player'],
     ['SEC', 'Advanced'],
     ['customCss', 'textarea', 'Custom CSS', 'Power users — applied last, wins over everything'],
     ['SEC', 'Your data'],
@@ -17559,7 +17587,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * hub's "Tweaks" tab, so everything lives in one place. */
   // the Tweaks tab: six segments behind a sticky chip strip, the enhancer's sections mapped onto them by title
   const TW_SEGS = [['shuffle', 'Shuffle'], ['look', 'Look'], ['hide', 'Hide'], ['player', 'Player'], ['more', 'More'], ['data', 'Data']];
-  const TW_SEC_SEG = { Appearance: 'look', Layout: 'look', Declutter: 'hide', 'Hide more': 'hide', Player: 'player', 'Artist / track': 'more', 'Toolbar buttons': 'more', Reading: 'more', Delight: 'more', Advanced: 'data', 'Your data': 'data' };
+  const TW_SEC_SEG = { Look: 'look', Appearance: 'look', Layout: 'look', Declutter: 'hide', 'Feed rules': 'hide', 'Hide more': 'hide', Player: 'player', 'Track pages': 'more', 'Player bar': 'more', Accessibility: 'more', 'Artist / track': 'more', 'Toolbar buttons': 'more', Reading: 'more', Delight: 'more', Advanced: 'data', 'Your data': 'data' };
   let twSeg = 'shuffle';   // the segment the user was on: kept across rebuilds and hub reopenings
   function enhancerRender(container) {
     try {
@@ -17864,7 +17892,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // a manual pick wins over auto-dark so the choice actually sticks
   try { SUITE.setTheme = (id) => { try { if (typeof id !== 'string') return; CFG.theme = id; CFG.autoDark = false; save(); applyAll(); } catch (e) {} }; } catch (e) {}
 
-  function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); ensureTop(); try { if (W.__scsI18n) W.__scsI18n.setLang(CFG.uiLang || 'auto'); } catch (e) {} }
+  function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); try { if (W.__scsI18n) W.__scsI18n.setLang(CFG.uiLang || 'auto'); } catch (e) {} }
   // a slider fires ~60 input events a second: the speed slider sets the rate and the bar, the text-size slider the
   // stylesheet — not a full CSS rebuild, graph write, DOM scan and banner sweep per event
   let rememberSpeedT = null;
@@ -18103,7 +18131,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       applyCss();
       setupBehaviour();
       ensureBar();
-      ensureTop();
       try { const sp = CFG.startPage; if (sp && /^\/[\w/-]+$/.test(sp) && (location.pathname === '/' || location.pathname === '/discover') && location.pathname !== sp && !/^https:\/\/soundcloud\.com/.test(D.referrer || '')) location.replace(sp); } catch (e) {}   // a cold load only: in-app navigation keeps SoundCloud's own routing
       D.addEventListener('click', (e) => { const a = e.target && e.target.closest ? e.target.closest('a.sce-ts') : null; if (!a) return; e.preventDefault(); e.stopPropagation(); jumpToPageTime(+a.dataset.t || 0); }, true);
       try { const hm = /[#&]t=((?:\d{1,2}:)?\d{1,3}:\d{2})\b/.exec(location.hash || ''); if (hm) tsPending = { href: location.pathname.replace(/\/$/, ''), pos: tsSecs(hm[1]), t: Date.now() }; } catch (e) {}
