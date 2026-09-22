@@ -13505,6 +13505,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const VOL_KEY = 'enh:vol';
   let mutedVol = null;   // the level M muted from (null = not muted); the 1 Hz volume memory skips saves while set
   let lastVolSaved = 0, lastVolStr = '';   // lastVolStr: the value last written — the same value is not written again every other tick
+  function saveVol(v) { const vs = String(v); lastVolStr = vs; SET(VOL_KEY, vs); }   // every writer goes through here, or the tick's guard would skip a real change after a bump
   // playback speed — SoundCloud plays through the WEB AUDIO API with NO <audio>
   // element in the page DOM (the console diagnostic showed querySelectorAll
   // returns 0). So plain playbackRate has nothing to drive. Instead we CAPTURE
@@ -15602,7 +15603,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           // (nor a sleep-timer fade in flight: its stepped-down levels are not "the volume" either)
           let sleepFading = false; try { sleepFading = !!(SUITE.sleep && SUITE.sleep.fading && SUITE.sleep.fading()); } catch (e) {}
           if (mutedVol != null && isFinite(m.volume) && m.volume >= 0.02) mutedVol = null;   // the slider raised the level: that is an unmute
-          if (mutedVol == null && !sleepFading && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; const vs = String(m.volume); if (vs !== lastVolStr) { lastVolStr = vs; SET(VOL_KEY, vs); } }
+          if (mutedVol == null && !sleepFading && isFinite(m.volume) && m.volume >= 0.02 && now - lastVolSaved > 1500) { lastVolSaved = now; if (String(m.volume) !== lastVolStr) saveVol(m.volume); }
         }
       }
     } catch (e) {}
@@ -15709,7 +15710,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           e.preventDefault();
           const v = Math.min(1, Math.max(0, (m.volume || 0) + (e.deltaY < 0 ? 0.05 : -0.05)));
           if (v > 0) mutedVol = null;   // wheeling up out of a mute is an unmute: the volume memory runs again
-          m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%');
+          m.volume = v; saveVol(v); toast('Volume ' + Math.round(v * 100) + '%');
         } catch (e2) {}
       }, { passive: false });
     } catch (e) {}
@@ -15753,7 +15754,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
     } catch (e) {}
   }
-  function bumpVol(d) { const m = activeMedia(); if (!m) return; const v = Math.min(1, Math.max(0, (m.volume || 0) + d)); if (v > 0) mutedVol = null; m.volume = v; SET(VOL_KEY, String(v)); toast('Volume ' + Math.round(v * 100) + '%'); }
+  function bumpVol(d) { const m = activeMedia(); if (!m) return; const v = Math.min(1, Math.max(0, (m.volume || 0) + d)); if (v > 0) mutedVol = null; m.volume = v; saveVol(v); toast('Volume ' + Math.round(v * 100) + '%'); }
   function toggleMute() { const m = activeMedia(); if (!m) return; if (m.volume > 0) { mutedVol = m.volume; m.volume = 0; toast('Muted'); } else { m.volume = mutedVol || 0.5; mutedVol = null; toast('Unmuted'); } }
 
   /* ───────── sleep timer chips (2.29) — one timer for the whole suite: module 1's SUITE.sleep owns the
