@@ -9334,8 +9334,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         let idx = 0;
         for (const [icon, title, desc] of FEATS) {
           const card = document.createElement('div');
-          if (idx++ >= FRESH) { card.classList.add('older'); card.style.display = 'none'; }
           card.style.cssText = 'display:flex;gap:13px;align-items:flex-start;padding:13px 14px;border-radius:15px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.022));box-shadow:' + cardBase + ';transition:transform .16s ease,box-shadow .16s ease';
+          if (idx++ >= FRESH) { card.classList.add('older'); card.style.display = 'none'; }   // after the cssText, which would reset it
           card.addEventListener('mouseenter', () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = cardHover; });
           card.addEventListener('mouseleave', () => { card.style.transform = ''; card.style.boxShadow = cardBase; });
           const ic = document.createElement('div');
