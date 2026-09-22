@@ -117,6 +117,17 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **Synced sheets, one-to-one with the voice** — the aligner's onset detector
+  (a steady 300 ms of the vocal band, then a rise of 4 dB that holds 160 ms;
+  its own 0.3 s lag measured against a right LRCLIB sheet and taken off)
+  matches each voice heard after a pause to its line. Three matches set a
+  provisional auto offset within the first verse; a look on twelve lines
+  confirms or replaces it, and a stored finding is never second-guessed. A
+  voice that comes up to 350 ms before its line's timestamp lights that line.
+  The karaoke wipe runs over the sung part of a line (from its syllables) and
+  holds, instead of crawling through the silence after it. A catalog that
+  answers with no sheet for an entry is reported as "no sheet there", not as
+  a failed route, and one query reaches each catalog once per search.
 - **Text sheets that follow the voice** — on a sheet without timing (Genius),
   the aligner listens for a voice coming in after a pause (the vocal-band
   level steady for 500 ms, then a rise of 4 dB that holds — a drum hit does

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.65.0
+// @version      4.66.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.65.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.66.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -4207,6 +4207,7 @@
       var halfWin = (FFT / 2) / ctx.sampleRate;
       var lastMt = -1, seg = null, ticks = 0, cpuMs = 0, frames = 0, disposed = false;
       var od = opts.onOnset ? onsetDetector() : null, odLast = -1;   // a voice after a pause → opts.onOnset(mediaTime)
+      var ONSET_BIAS = 0.3;   // the rise the detector sees comes this long after the instant a sheet stamps (measured on a right LRCLIB sheet: +0.28…0.30 s)
       var now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0; };
       var body = function () {
         var mt = +opts.mediaTime();
@@ -4246,7 +4247,7 @@
           if (odLast >= 0 && (t < odLast || t - odLast > 1)) od.reset();   // a seek: the pause before it is not a pause before this
           odLast = t;
           var on = od.push(10 * Math.log10(Math.max(1e-10, m2 - 0.65 * s2)), t);   // the centred (vocal) part of the band
-          if (on != null) { try { opts.onOnset(on); } catch (e) {} }
+          if (on != null) { try { opts.onOnset(Math.max(0, on - ONSET_BIAS)); } catch (e) {} }
         }
       };
       var tick = function () { if (disposed) return; var t0 = now(); ticks++; try { body(); } catch (e) {} cpuMs += now() - t0; };
@@ -5596,7 +5597,21 @@
     };
   })();
 
-  async function kugouSearch(q, durSec) {
+  // the same query reaches a catalog from several waves and pivots within a search: one request serves them all
+  const SEARCH_MEMO = new Map();
+  function memoSearch(key, fn) {
+    const now = Date.now(), h = SEARCH_MEMO.get(key);
+    if (h && now - h.at < 90000) return h.p;
+    const p = fn();
+    SEARCH_MEMO.set(key, { at: now, p });
+    p.catch(() => SEARCH_MEMO.delete(key));
+    if (SEARCH_MEMO.size > 80) SEARCH_MEMO.delete(SEARCH_MEMO.keys().next().value);
+    return p;
+  }
+  const memoKey = (src, q, durSec) => src + '|' + normKey(q) + '|' + (durSec > 0 ? Math.round(durSec) : 0);
+
+  function kugouSearch(q, durSec) { return memoSearch(memoKey('kugou', q, durSec), () => kugouSearchRaw(q, durSec)); }
+  async function kugouSearchRaw(q, durSec) {
     if (HostPark.parked('kugou')) return { songs: [] };
     const path = 'krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=' + encodeURIComponent(q)
       + '&duration=' + (durSec > 0 ? Math.round(durSec * 1000) : '') + '&hash=';
@@ -5620,7 +5635,8 @@
         + '&accesskey=' + encodeURIComponent(kkey || '') + '&fmt=lrc&charset=utf8';
       let j;
       try { j = await gmJSON('https://' + path, { timeout: 8000, prio: true }); HostPark.ok('kugou'); } catch (e) { HostPark.fail('kugou', e); throw e; }
-      if (!j || !j.content) return null;
+      if (!j) return null;
+      if (!j.content) return '';   // answered without a sheet
       let raw = '';
       try { raw = atob(j.content); } catch (e) { return null; }
       try { raw = decodeURIComponent(escape(raw)); } catch (e) {}
@@ -5633,7 +5649,8 @@
   // NetEase answers some regions with a “cheating” refusal unless the request looks domestic: the headers its own
   // clients send (the well-known workaround of every third-party NetEase client)
   const NE_HEADERS = { 'X-Real-IP': '211.161.244.70', 'X-Forwarded-For': '211.161.244.70' };
-  async function neteaseSearch(q, durSec) {
+  function neteaseSearch(q, durSec) { return memoSearch(memoKey('netease', q, durSec), () => neteaseSearchRaw(q, durSec)); }
+  async function neteaseSearchRaw(q, durSec) {
     if (HostPark.parked('netease')) return { songs: [] };
     let j;
     try {
@@ -5685,6 +5702,7 @@
         if (y) { if (y.wt) { NE_WORDS.set(nid, y.wt); if (NE_WORDS.size > 40) NE_WORDS.delete(NE_WORDS.keys().next().value); } return y.lrc; }
         const raw0 = j && j.lrc && j.lrc.lyric;
         if (raw0 && raw0.trim()) return raw0;
+        if (j && j.code === 200 && (j.uncollected || j.nolyric || (j.lrc && j.lrc.lyric === ''))) return '';   // answered: this entry has no sheet
       } catch (e) {
         if (HostPark.fail('netease', e)) return null;   // a host that did not answer will not answer its other doors either
       }
@@ -5705,7 +5723,8 @@
 
   /* ----- QQ MUSIC (synced LRC, the other huge Chinese catalog — Western songs too, keyless) ----- */
 
-  async function qqSearch(q, durSec) {
+  function qqSearch(q, durSec) { return memoSearch(memoKey('qq', q, durSec), () => qqSearchRaw(q, durSec)); }
+  async function qqSearchRaw(q, durSec) {
     if (HostPark.parked('qq')) return { songs: [] };
     let j;
     try {
@@ -5733,7 +5752,7 @@
       try { j = await gmJSON('https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=' + encodeURIComponent(data), { timeout: 8000, prio: true }); HostPark.ok('qq'); }
       catch (e) { HostPark.fail('qq', e); throw e; }
       const body = j && j.lyric && j.lyric.data && j.lyric.data.lyric;
-      if (!body) return null;
+      if (!body) return j && j.lyric && j.lyric.data ? '' : null;   // answered with nothing: no sheet for this entry (code 24001)
       const timed = (x) => /\[\d{1,2}:\d{2}/.test(x);
       let raw = String(body);
       if (!timed(raw)) {   // the sheet comes base64-encoded; a plain one is taken as it is
@@ -6464,7 +6483,9 @@
       function fetchBody(c) {
         if (!c || !needsBody(c) || bodies.has(c.id)) return;
         bodies.set(c.id, { state: 'p' });
+        let noSheet = false;   // the catalog answered and has no sheet for this entry: not a failure, no route to retry
         const fromLrcRaw = (raw) => {
+          if (raw === '') { noSheet = true; return null; }
           if (!raw) return null;
           const lines = parseLRC(raw, c.a, c.t);
           if (lrcIsPlaceholder(lines)) { Trail.add(`${c.src} body for "${c.t}" is an instrumental placeholder`); return null; }
@@ -6490,7 +6511,7 @@
         };
         p.then((body) => {
           bodies.set(c.id, body ? { state: 'ok', synced: body.synced, lines: body.lines, wt: body.wt || null } : { state: 'bad' });
-          Trail.add(`body ${c.src} "${c.t}" (${(c.score || 0).toFixed(2)}) → ${body ? 'ok' : 'FAILED on every route'}`);
+          Trail.add(`body ${c.src} "${c.t}" (${(c.score || 0).toFixed(2)}) → ${body ? 'ok' : noSheet ? 'no sheet there' : 'FAILED on every route'}`);
           if (!body) pivot();
           if (done && body && !lateFired && c.score >= 0.55 && typeof onLate === 'function' && lateOk(c.score, body.synced)) {
             lateFired = true;
@@ -7955,7 +7976,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let findWrap = null, findHits = [], findPos = -1;
     let wnEl = null;
 
-    let lineEls = [], times = [], lineWords = [], activeI = -1, isSynced = false, estMode = false;
+    let lineEls = [], times = [], lineWords = [], lineSung = [], activeI = -1, isSynced = false, estMode = false;
+    let snapN = 0;   // how many lines the voice lit early this track
     // lyric translation (optional, persisted) — target = the user's own language
     let transToken = 0; const transCache = new Map();
     let transLang = (() => { try { const saved = GM_getValue('sl:tlang', ''); if (saved && /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(saved)) return saved; } catch (e) {} try { return (navigator.language || 'en').split('-')[0] || 'en'; } catch (e) { return 'en'; } })();
@@ -9012,6 +9034,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['≡', 'Synced sheets, one-to-one with the voice', 'On a synced sheet the aligner now hears each voice that comes in after a pause and matches it to its line. Three of them set a provisional auto offset within the first verse — no more waiting 35 s for two looks — and a look on a dozen lines then confirms or replaces it. When a voice comes a beat before its line’s timestamp, that line lights on the voice. The karaoke wipe runs over the sung part of a line and holds, instead of crawling through the silence after it. The detector’s own lag was measured against a right LRCLIB sheet and taken off.'],
+          ['⌕', 'Honest trails', 'A catalog that answers with no sheet for an entry (QQ Music, NetEase, Kugou) is told apart from one that cannot be reached: the trail says “no sheet there”, a pick says the catalog has no lyrics for that one, and the same query no longer reaches a catalog three times from one search.'],
           ['▣', 'The stage: just the lyrics, full screen', 'F, the ⤢ button or a double-click on the artwork now fills the screen with the lyrics alone: the artwork blurred behind them, the sung line lit with its wipe, the cover on the right, a seek bar and prev / play / next along the bottom, and the chrome fading after three quiet seconds. Style picks the size (S – XL), left or centred lines, the cover on or off and an artwork or plain-dark backdrop, and remembers. The other tabs keep the roomy immersive panel.'],
           ['♪', 'Text sheets that follow the voice', 'On a sheet without timing (Genius), the aligner now listens for the voice coming in after a pause and pins the next line to it — starting with the first line after the intro, the guess that used to be wrong by the most. The source line says Vocal-guided; a tap-along still wins, 0 clears it for the track, and Lyrics ⋯ → Vocal-guided timing turns it off. QQ Music joins as a fifth synced catalog, so more tracks get real timing in the first place.'],
           ['⧉', 'A cleaner floating window', 'Real icons instead of emoji, a white play button, the kind of timing as a small pill, tighter spacing. The ✓ that marked played tracks in lists is gone — it was stamped over and over on some pages.'],
@@ -9792,6 +9816,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             'usedTime: ' + Media.time().toFixed(2) + 's',
             'offsets: global=' + (App.latencyMs() || 0) + 'ms  track=' + (App.offsetMs() || 0) + 'ms  auto=' + (SyncAuto.ms | 0) + 'ms' + (SyncAuto.last ? ' (conf ' + (+SyncAuto.last.confidence).toFixed(2) + (SyncAuto.last.reason ? ', ' + SyncAuto.last.reason : '') + ')' : '') + '  anchors=' + (App.anchorCount() || 0) + '  lead=' + (App.leadMs() || 0) + 'ms  autoLat=' + (App.autoLatencyMs() || 0) + 'ms',
             'active line #' + activeI + ': "' + act + '"',
+            'voice: ' + snapN + ' line' + (snapN === 1 ? '' : 's') + ' lit on the voice' + (SyncAuto.prov ? ' · provisional auto offset' : ''),
             'sample lines (effective time -> text):',
           ].concat(samp).join('\n');
           // route through the shared redactor before any clipboard sink so a track
@@ -10176,8 +10201,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     function clearLyrics() {
       if (shareBar) shareClose();
       closeFind();   // stale hits over the next track's state would point at detached lines
-      lineEls = []; times = []; lineWords = []; activeI = -1; isSynced = false; estMode = false;
-      estBaseTimes = null; vocalGuided = false;
+      lineEls = []; times = []; lineWords = []; lineSung = []; activeI = -1; isSynced = false; estMode = false;
+      estBaseTimes = null; vocalGuided = false; snapN = 0;
       ++transToken;   // invalidate any in-flight translation so it can't decorate the next track's lines
       if (tapOn) endTapAlign(false);
       hideWizard();
@@ -10303,6 +10328,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           lineEls.push(el);
           times.push(en.t);
           lineWords.push((!en.g && wtMap) ? (wtMap[String(Math.round(en.t * 100))] || null) : null);
+          lineSung.push(en.g ? 0 : sungSec(en.txt));
         }
       } else if (mode === 'est') {
         const baseTimes = [];
@@ -10342,6 +10368,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           lineEls.push(el);
           baseTimes.push(en.t);
           lineWords.push(null);   // estimated lines have no word data — keep lockstep with lineEls/times
+          lineSung.push(sungSec(en.text));
         }
         estBaseTimes = baseTimes;   // kept so tap-along can re-warp live
         const al = App.getAnchors();
@@ -10479,6 +10506,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       else { ++transToken; clearTranslation(); toast('Translation off'); }
     }
 
+    // a voice heard after a pause, on the highlight clock: when it comes a beat before the next line's timestamp, that
+    // line lights on the voice, not on the sheet's guess (a sheet that runs late; one that runs early gets the offset)
+    function onVoice(tclk) {
+      if (!isSynced || estMode || searchMode || tab !== 'lyrics' || tapOn || !times.length || !(tclk >= 0)) return;
+      const nx = bisect(tclk) + 1;
+      if (nx < times.length && times[nx] > tclk && times[nx] - tclk <= 0.35 && nx !== activeI && lineEls[nx] && lineEls[nx].classList.contains('line')) {   // the next line's voice came first
+        times[nx] = tclk; snapN++;
+      }
+    }
+    // how long a line takes to sing, from its syllables (Latin vowel groups, one per CJK character): the wipe's own length
+    function sungSec(text) {
+      const x = String(text || '');
+      let n = (x.match(/[aeiouy\u00e0-\u00fc]+/gi) || []).length + (x.match(/[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/g) || []).length;
+      if (!n) n = Math.ceil(x.replace(/\s+/g, '').length / 3);
+      return Math.min(12, Math.max(0.9, n * 0.3 + 0.35));
+    }
     function bisect(t) {
       let lo = 0, hi = times.length - 1, ans = -1;
       while (lo <= hi) {
@@ -10571,7 +10614,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pct = total > 0 ? Math.max(0, Math.min(100, (filled / total) * 100)) : 0;
         } else {
           // line-level fallback (no richsync words): linear across the line
-          pct = Math.max(0, Math.min(100, ((t - s) / span) * 100));
+          // …over the part that is sung: a line followed by silence fills in the time it takes to say, then holds
+          const sg = lineSung[activeI];
+          pct = Math.max(0, Math.min(100, ((t - s) / (sg > 0 ? Math.min(span, sg) : span)) * 100));
         }
         const fillStr = pct.toFixed(1) + '%';   // skip the style write (recalc) when it rounds to the same value
         if (fillStr !== lastFill) { lineEls[activeI].style.setProperty('--fill', fillStr); lastFill = fillStr; }
@@ -11195,7 +11240,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       renderLyrics, srcFor, toast, ensureButton, bumpFont,
       shareOpen: () => !!shareBar, shareClose, shareSheet,
       setTab, syncTabs, toggleMax, showKeys, escStep, setMini,
-      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, rewarp, cycleTheme,
+      toggleFocus, jumpChorus, seekLine, replayLine, openFind, toggleMini, toggleFloat, floatOn, followList, rewarp, onVoice, voiceStats: () => ({ snapped: snapN }), cycleTheme,
       cycleMood, cycleGlass, autoOpenWanted: () => autoOpenFound,
       startTapAlign, tapAdvance, tapActive: () => tapOn, endTapAlign,
       inSearch: () => searchMode, enterSearch, exitSearch,
@@ -11219,6 +11264,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let estBase = null, estKey = '';
     let autoOn = true;        // Lyrics ⋯ → Vocal-guided timing
     try { autoOn = GM_getValue('sl:autotap', 1) != 0; } catch (e) {}
+    let onsetPairs = [];      // synced sheet: voice − sheet, per voice heard after a pause (the sheet's own time, manual offsets in force)
     let token = 0;
     let prefetchT = null, warmT = null, warmT2 = null;   // Ticker handles: background-tab-proof
     const stopT = (h) => { if (h) { try { h.stop(); } catch (e) {} } };
@@ -11270,7 +11316,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let syncSaveT = null;
     const persistSync = () => {
       if (!meta) return;
-      const key = meta.key, offNow = off, aoffNow = SyncAuto.ms, anchNow = anch.slice();
+      const key = meta.key, offNow = off, aoffNow = SyncAuto.prov ? 0 : SyncAuto.ms, anchNow = anch.slice();   // a provisional offset is this play's, not the track's
       stopT(syncSaveT);
       syncSaveT = Ticker.after(() => {
         const entry = Cache.get(key);
@@ -11334,6 +11380,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           const tap = SUITE.audioTap && SUITE.audioTap();
           if (tap && tap.el && tap.el !== alignerEl) { alignRetaps++; alignStart(true); return; }
         }
+        if (r && r.reason === 'too-few-lines' && starts.length < ALIGN_MIN_LINES) { alignTries = AUTO_ALIGN_AT_MS.length; return; }   // a sheet this short will never make a look: no more of them (the tap stays for the voice)
         if (r && !r.reason) {
           r.lagAdj = Math.round((r.lagSec - ALIGN_BIAS_SEC) * 1000) / 1000;
           // one look is a hint; two looks that agree, each on a dozen lines or more with a clear peak, are a finding:
@@ -11344,10 +11391,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           r.agreed = agreed;
           if (agreed) {
             const lag = (alignHist[n - 1] + alignHist[n - 2]) / 2; r.lagAdj = Math.round(lag * 1000) / 1000;
-            Trail.add('align agreed: ' + r.lagAdj + ' s' + (Math.abs(lag) < 0.25 ? ' (sheet is right)' : (!SyncAuto.ms && !off && !anch.length) ? ' → applied' : ' → offered (an offset is already set)'));
-            // a finding applies itself, once, while nothing manual is in place; the toast says how to undo it
-            if (Math.abs(lag) >= 0.25 && !SyncAuto.ms && !off && !anch.length && SyncAuto.apply) { SyncAuto.apply(true); alignStop(); return; }
-            if (Math.abs(lag) < 0.25) { alignStop(); return; }   // the sheet is right: done looking, and done listening
+            const clear = (!SyncAuto.ms || SyncAuto.prov) && !off && !anch.length;   // nothing manual in place (a provisional offset from the voice yields to a look)
+            Trail.add('align agreed: ' + r.lagAdj + ' s' + (Math.abs(lag) < 0.25 ? ' (sheet is right)' : clear ? ' → applied' : ' → offered (an offset is already set)'));
+            // a finding applies itself, once, while nothing manual is in place; the toast says how to undo it. The tap stays up
+            // either way: the voice keeps lighting lines one-to-one for the rest of the track
+            if (Math.abs(lag) >= 0.25 && clear && SyncAuto.apply) { SyncAuto.apply(true); alignTries = AUTO_ALIGN_AT_MS.length; return; }
+            if (Math.abs(lag) < 0.25) {
+              if (SyncAuto.prov) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.prov = false; try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {} }   // the look outranks the provisional guess
+              SyncAuto.auto = true;   // a confirmed sheet: the voice stops re-estimating
+              alignTries = AUTO_ALIGN_AT_MS.length; return;
+            }
           }
         }
         again();   // more audio, another look
@@ -11357,7 +11410,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     SyncAuto.apply = (auto) => {
       try {
         const r = SyncAuto.last; if (!r || !lyr || !lyr.synced) return;
-        SyncAuto.ms = -Math.round((r.lagAdj != null ? r.lagAdj : r.lagSec) * 1000); SyncAuto.conf = r.confidence; SyncAuto.auto = !!auto;
+        SyncAuto.ms = -Math.round((r.lagAdj != null ? r.lagAdj : r.lagSec) * 1000); SyncAuto.conf = r.confidence; SyncAuto.auto = !!auto; SyncAuto.prov = false;
         persistSync();
         try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
         UI.toast('Lyrics aligned to the vocals (' + (SyncAuto.ms > 0 ? '+' : '') + (SyncAuto.ms / 1000).toFixed(2) + ' s) · 0 undoes it');
@@ -11480,7 +11533,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (swapped && synced) {
         // the lag measured on the old sheet is not this one's: the auto offset goes (a manual nudge stays — it is
         // small, and the listener would notice), and the next looks measure this sheet
-        if (SyncAuto.ms || SyncAuto.auto) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.auto = false; }
+        if (SyncAuto.ms || SyncAuto.auto) { SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.auto = false; SyncAuto.prov = false; }
+        onsetPairs = [];
         SyncAuto.last = null;
         try { persistSync(); } catch (e) {}
       }
@@ -11640,7 +11694,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const c = fromCache(entry);
         if (c) {
           off = (entry && entry.off) || 0;
-          SyncAuto.ms = (entry && entry.aoff) | 0; SyncAuto.conf = SyncAuto.ms ? 1 : 0;
+          SyncAuto.ms = (entry && entry.aoff) | 0; SyncAuto.conf = SyncAuto.ms ? 1 : 0; SyncAuto.prov = false; SyncAuto.auto = !!SyncAuto.ms;   // a stored finding stands: the voice does not second-guess it
           anch = (entry && entry.anch) || [];
           apply(c, myToken);
           if (!c.synced && !c.instr && !entry.picked) quietUpgrade(entry, key, myToken);
@@ -11737,7 +11791,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       off = 0;
       SyncAuto.ms = 0; SyncAuto.conf = 0;
       anch = [];
-      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = '';
+      autoAnch = []; autoHold = false; onsetLog = []; estBase = null; estKey = ''; onsetPairs = []; SyncAuto.prov = false; SyncAuto.auto = false;
       alignStart();
       UI.setReady(false);
       UI.setHeader(meta);
@@ -12012,7 +12066,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         } else if (item.src === 'kugou' || item.src === 'netease' || item.src === 'qq') {
           const raw = item.src === 'netease' ? await neteaseLyric(item.nid) : item.src === 'qq' ? await qqLyric(item.qmid) : await kugouLyric(item.kid, item.kkey);
           const nm = SRC_NAME[item.src] || item.src;
-          if (!raw) why = nm + ' didn’t answer — its lyric service may be blocked from your network';
+          if (raw === '') why = nm + ' has no lyrics for that one — try another result';
+          else if (!raw) why = nm + ' didn’t answer — its lyric service may be blocked from your network';
           if (raw) {
             const lines = parseLRC(raw, item.a, item.t);
             if (lrcIsPlaceholder(lines)) {
@@ -12058,7 +12113,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       };
       if (deltaMs === 0) {
         const hadAnchors = anch.length > 0 || autoAnch.length > 0;
-        off = 0; SyncAuto.ms = 0; SyncAuto.conf = 0;
+        off = 0; SyncAuto.ms = 0; SyncAuto.conf = 0; SyncAuto.prov = false; SyncAuto.auto = false; onsetPairs = [];
         anch = [];
         autoAnch = []; autoHold = true;   // the listener's word: the voice stops guiding this track
         persistSync();
@@ -12097,7 +12152,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      * has lit when its voice came late, or the next line when it came early and the lit one is
      * mostly over. Bounded moves only, never stored, and a tap-along always wins. */
     function onsetWanted(r) {
-      return autoOn && !autoHold && !!r && !r.synced && !r.instr && Array.isArray(r.lines) && r.lines.length >= 8
+      return autoOn && !autoHold && !!r && !r.synced && !r.instr && Array.isArray(r.lines)
+        && r.lines.filter((l) => l && !/^\[[^\]]{1,40}\]$/.test(l)).length >= 8   // real lines, as the renderer counts them for estimated timing
         && !!meta && meta.dur > 20 && meta.dur < 1200;
     }
     function estBaseFor() {
@@ -12118,6 +12174,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       try {
         if (!(t >= 0)) return;
         if (!lyr) { onsetLog.push(t); if (onsetLog.length > 40) onsetLog.shift(); return; }   // the sheet is still on its way
+        if (lyr.synced) { onsetSynced(t); return; }
         if (!onsetWanted(lyr) || anch.length) return;
         const base = estBaseFor();
         if (base.length < 8) return;
@@ -12135,10 +12192,40 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if (target < 0) return;
         const last = autoAnch[autoAnch.length - 1];
         if (last && (target <= last.i || t <= last.t + 0.2)) return;   // anchors ascend in both line and time
-        autoAnch.push({ i: target, t: Math.max(0, t - 0.1) });   // the level rises a beat after the voice starts
+        autoAnch.push({ i: target, t: t });
         if (autoAnch.length > 120) autoAnch.shift();
         try { UI.rewarp(lyr, meta.dur, anchorsNow()); } catch (e) {}
       } catch (e) {}
+    }
+    /* A synced sheet, one-to-one with the voice. Each voice heard after a pause is matched to the one line
+     * start it can belong to (within 0.7 s, nothing else within 1.2 s). The median of those residuals is the
+     * sheet's lag; after three it becomes a provisional auto offset (bounded, never stored) until a look on
+     * twelve lines confirms or replaces it. Every voice also goes to the panel, which lights a line up to
+     * 350 ms early when its voice comes first, and holds a line up to 300 ms when the band is still quiet. */
+    function onsetSynced(t) {
+      if (!lyr || !lyr.synced || lyr.instr || !autoOn) return;
+      const L = lyr.lines; if (!L || L.length < 4) return;
+      const manual = ((off || 0) + (goff || 0)) / 1000, offS = manual + (SyncAuto.ms || 0) / 1000;
+      try { UI.onVoice(t + (lead || 0) / 1000 + offS); } catch (e) {}
+      if (anch.length || off) return;   // a calibration or a nudge is the listener's word
+      let best = -1, bd = Infinity, second = Infinity;
+      for (let i = 0; i < L.length; i++) {
+        const ad = Math.abs(t - (+L[i][0] - offS));
+        if (ad < bd) { second = bd; bd = ad; best = i; } else if (ad < second) second = ad;
+      }
+      if (best < 0 || bd > 0.7 || second < 1.2) return;   // no line, or two lines, this voice could be
+      onsetPairs.push(t - (+L[best][0] - manual));   // > 0: the voice came after the sheet said (the sheet is early)
+      if (onsetPairs.length > 24) onsetPairs.shift();
+      if (onsetPairs.length < 3 || SyncAuto.auto) return;   // a look on a dozen lines is the better instrument once it has spoken
+      const sorted = onsetPairs.slice().sort((a, b) => a - b), h = sorted.length >> 1;
+      const lag = sorted.length % 2 ? sorted[h] : (sorted[h - 1] + sorted[h]) / 2;
+      const dev = onsetPairs.map((x) => Math.abs(x - lag)).sort((a, b) => a - b), spread = dev.length % 2 ? dev[h] : (dev[h - 1] + dev[h]) / 2;
+      if (spread > 0.2 || Math.abs(lag) > 2.5) return;   // the voices disagree, or these are not the lines
+      const want = Math.abs(lag) >= 0.25 ? -Math.round(lag * 1000) : 0;   // the same bar as a look: under a quarter second the sheet is right
+      if (want === (SyncAuto.ms | 0) || (want && Math.abs(want - SyncAuto.ms) < 80)) return;
+      SyncAuto.ms = want; SyncAuto.conf = want ? 0.5 : 0; SyncAuto.prov = !!want; SyncAuto.auto = false;
+      try { Trail.add('voice: ' + onsetPairs.length + ' entries, sheet ' + (lag > 0 ? 'early' : 'late') + ' by ' + Math.abs(lag).toFixed(2) + ' s → ' + (want ? 'provisional auto ' + (want > 0 ? '+' : '') + (want / 1000).toFixed(2) + ' s' : 'sheet is right')); } catch (e) {}
+      try { const sl = UI.srcFor(lyr); UI.setSrcLine(sl[0], sl[1]); } catch (e) {}
     }
     function toggleAutoTap() {
       autoOn = !autoOn;
@@ -12277,7 +12364,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 
     return {
       meta: () => meta,
-      lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
+      lyricDebug: () => ({ off, goff, aoff: SyncAuto.ms, aoffConf: SyncAuto.conf, aoffProv: !!SyncAuto.prov, voicePairs: onsetPairs.length, voice: (() => { try { return UI.voiceStats(); } catch (e) { return null; } })(), lineTimes: (lyr && lyr.synced && lyr.lines) ? lyr.lines.map((l) => +l[0]) : null, envelope: (() => { try { return aligner ? aligner.envelope() : null; } catch (e) { return null; } })(), lead, last: SyncAuto.last, tracker: aligner ? aligner.stats() : null, synced: !!(lyr && lyr.synced), lines: lyr && lyr.lines ? lyr.lines.length : 0, src: lyr && lyr.src, meta: meta && { title: meta.title, dur: meta.dur } }),
       offsetMs: () => off,
       syncOffS: () => ((off || 0) + (goff || 0) + (SyncAuto.ms || 0)) / 1000,
       autoAlignMs: () => SyncAuto.ms,
