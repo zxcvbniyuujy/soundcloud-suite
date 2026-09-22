@@ -141,6 +141,22 @@ never plays.
   Verified live: an inline script first in `<head>` sees no offer, its
   postMessage request gets no answer, its own channel is never adopted, and
   lyrics still arrive.
+- **Every label in your language** — a live collection of every string the
+  English hub shows, checked against all eleven dictionaries, found labels no
+  dictionary had at all (the coverage probe only flags keys left untranslated):
+  tab and segment names, audio terms, the hotkey legend, the engine footnote,
+  tint styles. 277 entries added across the eleven languages, each consistent
+  with its dictionary's established wording; the Audio tab's jump chips are
+  named after their sections ("Playback", "Stereo"), since "Play" and "Space"
+  read as the play button and the spacebar once translated.
+- **A second review, three fixes** — the per-track loudness pin is taken only
+  on an element that plays and is released once the pinned element has been
+  idle two seconds while another plays (a badge that changed before this
+  track's element buffered used to leave the whole track unmeasured); the shim
+  takes `dispatchEvent`, `CustomEvent`, the `detail` getter, `JSON` and
+  `String` before any page script runs, so patched built-ins see none of the
+  channel's traffic (the relay probe patches all four and sees nothing); token
+  names are checked as own properties.
 - **Your tokens leave the page** — the Genius API token and the ListenBrainz
   token used to sit in soundcloud.com's localStorage, readable by any script on
   the site. They now live in the extension's own storage (the one `storage`
