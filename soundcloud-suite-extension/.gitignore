@@ -14,3 +14,4 @@ tools/.audio-profile/
 tools/.route-profile/
 tools/store/.profile/
 tools/store/raw/
+tools/.sync-profile/

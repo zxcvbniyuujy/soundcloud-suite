@@ -608,6 +608,18 @@ node tools/route-sweep.js                  # about seven minutes
 ONLY=nav,sel node tools/route-sweep.js     # a subset: routes, nav, sel
 ```
 
+`tools/lyrics-sync-check.js` proves the highlight is one-to-one with the
+sheet: an observer inside the hub stamps the latency-compensated media clock
+the instant a line lights, and the error against the line's sheet time (with
+the lead and offsets in force) must sit within one animation frame, lines must
+advance in order, a seek must land on the right line at once, and no line may
+light before its moment. Measured on BEST FRIEND: 2–18 ms, median 8 ms.
+
+```sh
+node tools/lyrics-sync-check.js            # about two minutes
+TRACK=https://soundcloud.com/... node tools/lyrics-sync-check.js
+```
+
 ## Troubleshooting
 
 - `chrome://extensions` → SoundCloud Suite card → **Errors** shows loader problems.
