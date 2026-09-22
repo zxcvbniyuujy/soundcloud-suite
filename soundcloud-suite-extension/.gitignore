@@ -10,3 +10,7 @@ node_modules/
 # audio harness screenshots
 tools/shots/
 tools/.audio-profile/
+# browser profiles the route sweep and the store captures create
+tools/.route-profile/
+tools/store/.profile/
+tools/store/raw/

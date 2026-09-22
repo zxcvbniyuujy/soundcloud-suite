@@ -130,6 +130,17 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **A hub that fits the window** — a sweep of 26 public SoundCloud pages with
+  the suite loaded, signed out (search, charts, profiles and their tabs, a
+  track and its sub-pages, tags, the upload and sign-in pages), then in-app
+  navigation between a profile's tabs and five window sizes: every page
+  rendered its own content, carried one hub host, opened and closed the hub,
+  and threw nothing. One defect: a hub resized taller than a short window (a
+  laptop at 125 % zoom, DevTools open, a half-height window) pushed its
+  header and tabs above the top edge, both when the size was restored and
+  when the window shrank under an open hub. The saved size is now applied
+  through the window's limits and re-applied on every resize, so the hub
+  always shows whole and gets its saved size back when the window grows.
 - **A fourth review, five fixes** — a second reader of the waves 24–25 code:
   the reshuffle's auto-run flag is now written only as the document actually
   leaves (a slow reload used to lose it, a refused one used to keep it); the
@@ -551,6 +562,23 @@ node tools/audio-harness.js              # all scenarios; add --list or --only a
 
 The debug accessor it reads (`window.__sceAudioDebug`) exists only while
 `localStorage['scss:debug'] === '1'` on soundcloud.com.
+
+## The launch gate
+
+`tools/route-sweep.js` loads the unpacked extension and walks the public
+SoundCloud pages a new user reaches, signed out: the landing page, discover,
+search, charts, a profile and each of its tabs, a track and its sub-pages, a
+tag, the upload and sign-in pages. Every page must render its own content,
+carry exactly one hub host, open and close the hub, and throw nothing from
+the extension's scripts. It then navigates between a profile's tabs in-app
+(one host throughout, the Shuffle Play button only on Likes) and checks that
+the hub panel fits short and narrow windows, both when a saved size is
+restored there and when the window shrinks under an open panel.
+
+```sh
+node tools/route-sweep.js              # about five minutes
+ONLY=nav node tools/route-sweep.js     # navigation and window sizes only
+```
 
 ## Troubleshooting
 
