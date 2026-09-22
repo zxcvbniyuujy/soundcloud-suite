@@ -126,6 +126,10 @@ never plays.
   tempo change in the track wins within half a minute. On eight recorded uploads
   with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and
   an 87 BPM track with a triplet feel reads its 130 BPM pulse.
+- **Tap the tempo yourself** — when the reading is wrong, the Tap button beside
+  the readout takes over: eight taps (or four and a pause) set this track's tempo
+  from the median interval, remembered as tapped and never replaced by the
+  detector; the beat dot follows it, and "Detect again" measures the track anew.
 - **A dot on the beat** — beside the tempo readout a dot blinks on each beat and
   the stage's pulse backdrop swells on it. The phase comes from the onset
   envelope: over the last 12 s, the comb at a period within 1.5 % of the
