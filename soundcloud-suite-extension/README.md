@@ -117,6 +117,25 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **A tempo you can trust** — the onset feed is now spectral flux: a 1024-point
+  FFT of the decimated mix 172 times a second in the audio worklet, the rise of
+  24 log-spaced bands summed per frame. Every 4 s the last 32 s are gated (real
+  onsets, not silence, a held note or speech) and autocorrelated; each estimate
+  is a vote, votes within 3 % cluster and fade with a 30 s half-life, and the
+  heaviest cluster publishes — one odd window never flips the figure, a real
+  tempo change in the track wins within half a minute. On eight recorded uploads
+  with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and
+  an 87 BPM track with a triplet feel reads its 130 BPM pulse.
+- **No stranger's sheet on an unknown upload** — a candidate that only matched
+  the title (a famous song's Genius page, a synced entry of the wrong length)
+  could score 0.9 and render: the random lyrics on underground tracks. Every
+  render now passes one gate: the artist agrees with a hint that did not come
+  from a candidate (the title's own split, the uploader, the library,
+  SoundCloud's metadata, an alias), the length agrees to a few seconds, or a
+  confirmed candidate names the same song. Hints an anchor or the store lookup
+  derived from candidates no longer vouch. Anything less is capped under every
+  rendering floor, the trail says "unsure", and the "no lyrics" card names the
+  same-title strangers with Search starting from the first.
 - **Sing along on the stage** — a switch in the stage's Style popover softens the
   vocal band by 20 dB while the lyrics run full-screen; off, or leaving the
   stage, lifts it. The Vocals setting is never touched.
@@ -275,9 +294,10 @@ never plays.
   clock, top artists and the last seven days as one 1080×1080 image.
 - **Find a song by a lyric** — ⋯ menu → *Find a song by a lyric*: the words you
   remember, searched across every lyric sheet this browser has cached.
-- **Tempo** — the BPM measured from the audio itself (an onset detector in the
-  audio worklet), shown in the Audio tab and the track-info popover, corrected
-  for the playback speed and remembered per track (Tweaks → Player).
+- **Tempo** — the BPM measured from the audio itself (spectral flux from a
+  1024-point FFT in the audio worklet, autocorrelated, the estimates voting),
+  shown whole in the Audio tab and the track-info popover, corrected for the
+  playback speed and remembered per track (Tweaks → Player).
 - **Minute seeks** — `{` and `}` seek a whole minute; `[` and `]` still seek
   ten seconds and the digits jump to a tenth of the track.
 - **Artwork ↗** — the track-info popover opens the full-size cover.

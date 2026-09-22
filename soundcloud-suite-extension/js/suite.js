@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.72.0
+// @version      4.73.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.72.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.73.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9256,6 +9256,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['♩', 'A tempo you can trust', 'The onset feed was two band energies per block with a flux that saturated on every frame, so Best Friend read 139, 148 and 72 BPM across one play. The worklet now takes a thousand-point FFT of the mix 172 times a second and reports spectral flux across 24 bands; every 4 s the last 32 s vote, votes within 3 % cluster and fade with a 30 s half-life, and the heaviest cluster publishes — one odd window never flips the figure, a real change of tempo in the track wins within half a minute. On eight recorded uploads with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and an 87 BPM track with a triplet feel reads its 130 BPM pulse.'],
+          ['⛔', 'No stranger’s sheet on an unknown upload', 'A candidate that only matched the title — a famous song’s Genius page, a synced entry of the wrong length — could score 0.9 and render: that was the random lyrics on underground tracks. Every render now passes one gate: the artist agrees with a hint that did not come from a candidate, the length agrees to a few seconds, or a confirmed candidate names the same song. Anything less is capped under every rendering floor, the trail says so, and the “no lyrics” card names the same-title strangers, with Search starting from the first.'],
           ['🎤', 'Sing along on the stage', 'A switch in the stage’s Style popover: on, the vocal band drops 20 dB while the lyrics run full-screen and the rest of the mix stays as it is; off, or leaving the stage, lifts it. The Vocals setting itself is never touched, and the switch is a preference that comes back with the stage.'],
           ['🎹', 'The musical key beside the tempo', 'A chroma histogram from the audio, matched against key profiles: the key of the track, named the musician’s way and the DJ’s (Camelot) on the Audio tab’s tempo line and in the track-info popover, remembered per track beside the tempo. It listens while an effect is on, needs half a minute, and speaks only when two estimates in a row agree.'],
           ['🔥', 'A pulse backdrop for the stage', 'A third backdrop: twelve soft blobs, one per band of the spectrum, breathing with the music behind the lyrics. A still frame under reduced motion.'],
