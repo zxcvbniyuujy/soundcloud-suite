@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "SoundCloud Suite",
+    "description": "Extension name"
+  },
+  "extDesc": {
+    "message": "Letras sincronizadas, audio de estudio, aleatorio de toda la biblioteca, salto de anuncios y un reproductor SoundCloud más limpio.",
+    "description": "Store summary, at most 132 characters"
+  }
+}

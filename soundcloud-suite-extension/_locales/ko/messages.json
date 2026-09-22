@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "SoundCloud Suite",
+    "description": "Extension name"
+  },
+  "extDesc": {
+    "message": "싱크 가사, 스튜디오급 오디오, 전체 라이브러리 셔플, 광고 건너뛰기, 더 깔끔한 SoundCloud 플레이어.",
+    "description": "Store summary, at most 132 characters"
+  }
+}

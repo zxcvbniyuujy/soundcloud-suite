@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SoundCloud Suite",
+  "name": "__MSG_extName__",
   "version": "4.63.0",
-  "description": "Synced lyrics, studio-grade audio, full-library shuffle and a cleaner look for the SoundCloud web player.",
+  "description": "__MSG_extDesc__",
   "minimum_chrome_version": "111",
   "icons": {
     "16": "icons/icon-16.png",
@@ -102,5 +102,6 @@
     "focus-tab": {
       "description": "Jump to the SoundCloud tab that is playing"
     }
-  }
+  },
+  "default_locale": "en"
 }

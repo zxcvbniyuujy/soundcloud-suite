@@ -945,11 +945,18 @@
     }
     try { SUITE.feedStats = () => Object.assign({}, feedStats); SUITE.feedFilter = feedFilter; } catch (e) {}
 
+    // audio ads (Tweaks → Declutter → Skip audio ads, on by default): the player asks its own API for an ad before
+    // a track and streams the creative from a separate CDN. The same two first-party calls the ad-blocking filter
+    // lists fail (…/audio-ad…, …/promoted…) fail here with a network error — the player then simply plays the track.
+    const AD_RE = /^https:\/\/(?:[\w-]+\.)*soundcloud\.com\/(?:[^?#]*\/)?(?:audio-ads?|promoted)(?:[/?#]|$)/i;
+    const adBlocked = (url) => { try { return !!(SUITE.adSkip && SUITE.adSkip() && AD_RE.test(String(url || ''))); } catch (e) { return false; } };
+    const adHit = () => { try { Log.metric('audio ads blocked'); if (SUITE.adHit) SUITE.adHit(); } catch (e) {} };
     PW.fetch = function (input, init) {
         let rawUrl = '';
         try {
             const isReq = !!(input && typeof input === 'object' && typeof input.url === 'string');
             rawUrl = isReq ? input.url : String(input);
+            if (adBlocked(rawUrl)) { adHit(); return Promise.reject(new TypeError('Failed to fetch')); }
             const reqMethod = String((init && init.method) || (isReq && input.method) || 'GET').toUpperCase();
             sniffUrl(rawUrl, reqMethod);
             if (API_RE.test(rawUrl)) sniffHeaders(isReq ? input.headers : (init && init.headers));
@@ -1010,6 +1017,7 @@
             if (this.__bhFeedServed) { this.__bhFeedServed = false; for (const k of ['readyState', 'status', 'statusText', 'response', 'responseText', 'getAllResponseHeaders', 'getResponseHeader']) { try { delete this[k]; } catch (e) {} } }
             if (this.__bhListHooked) { try { delete this.responseText; delete this.response; } catch (e) {} this.__bhListHooked = false; }   // nor serve a previous list's filtered body
             const raw = String(url);
+            this.__bhAdBlock = adBlocked(raw);
             sniffUrl(raw, method);
             this.__bhApi = API_RE.test(raw);
             this.__bhListKind = ((method || '').toUpperCase() === 'GET') ? feedListKind(raw) : null;   // feed / search / related lists get the rules
@@ -1049,6 +1057,19 @@
         return origSRH.call(this, name, value);
     };
     XP.send = function (...args) {
+        if (this.__bhAdBlock) {
+            // exactly what a blocked request looks like to the page: readyState 4, status 0, an error event
+            const xhr = this; xhr.__bhFeedServed = true; adHit();
+            Ticker.after(() => {
+                const def = (k, v) => { try { Object.defineProperty(xhr, k, { configurable: true, get: () => v }); } catch (e) {} };
+                def('readyState', 4); def('status', 0); def('statusText', ''); def('response', xhr.responseType === 'json' ? null : ''); def('responseText', '');
+                def('getAllResponseHeaders', () => ''); def('getResponseHeader', () => null);
+                try { xhr.dispatchEvent(new Event('readystatechange')); } catch (e) {}
+                try { xhr.dispatchEvent(new ProgressEvent('error')); } catch (e) {}
+                try { xhr.dispatchEvent(new ProgressEvent('loadend')); } catch (e) {}
+            }, 5);
+            return;
+        }
         if (this.__bhFeedPage != null) {
             const xhr = this, page = this.__bhFeedPage;
             xhr.__bhFeedServed = true;
@@ -12194,6 +12215,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     vinylMode: false,
     fadeIn: 0.6, fadeOut: 2.5,           // 0..3 s, 0..8 s
     skipSilence: false,     // end-of-track silence trim (WP10): the last 30 s only, never mid-track
+    adSkip: true,           // audio ads: the ad calls fail like an ad blocker's; a creative that slips through is muted and finished in a second
     reverbAmt: 0,           // 0..100 → wet 0..0.35 through a generated 1.6 s IR (WP10 "Slowed + reverb")
     // ── toolbar buttons ──
     barSpeed: true, barCopy: true, barRestart: true, barAB: false, barInfo: true,
@@ -12699,6 +12721,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const sceBufNodes = new Set();   // captured AudioBufferSourceNodes
   let sceLastCtx = null;           // the AudioContext SoundCloud routes through (for output-latency)
   let sceLatMs = 0;                // smoothed output latency (ms) — avoids per-frame jitter
+  // the ad creatives' own paths (the filter lists neuter these as media): never a track's stream, which lives under
+  // the HLS / progressive media hosts
+  const AD_SRC_RE = /^https?:\/\/(?:[\w-]+\.)*(?:p-cdn\.us\/public\/|sndcdn\.com\/audio\/)/i;
+  function adHit() { try { const n = (GET('enh:adsSkipped', 0) | 0) + 1; SET('enh:adsSkipped', n); } catch (e) {} }
+  try { SUITE.adSkip = () => !!CFG.adSkip; SUITE.adHit = adHit; SUITE.adsSkipped = () => GET('enh:adsSkipped', 0) | 0; } catch (e) {}
   function captureMedia(m) {
     try {
       if (!m || (m.tagName !== 'AUDIO' && m.tagName !== 'VIDEO') || sceMediaEls.has(m)) return;
@@ -12710,7 +12737,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // only rejoins the set, so the bound can never turn into a re-registration loop
       if (m.__sceCap) return;
       m.__sceCap = true;
-      const re = () => { try { const w = wantedRate(); if (Math.abs((m.playbackRate || 1) - w) > 0.01) m.playbackRate = w; } catch (e) {} try { fadeCtl.onRate(m); } catch (e) {} };
+      const re = () => { if (m.__sceAd) return; try { const w = wantedRate(); if (Math.abs((m.playbackRate || 1) - w) > 0.01) m.playbackRate = w; } catch (e) {} try { fadeCtl.onRate(m); } catch (e) {} };
+      // an ad creative that still arrives (its own CDN paths): muted, run at 16× and sent to its end — a 30 s ad is over
+      // in about a second and the track follows; the element is handed back untouched when a track loads into it
+      const adCheck = () => {
+        try {
+          const src = String(m.getAttribute('src') || m.src || m.currentSrc || '');   // the attribute first: on a swap, currentSrc still names the old resource
+          const isAd = !!CFG.adSkip && AD_SRC_RE.test(src);
+          if (isAd && !m.__sceAd) { m.__sceAd = true; m.__sceAdMuted = !m.muted; m.muted = true; try { m.playbackRate = 16; } catch (e) {} try { if (isFinite(m.duration) && m.duration > 0.3) m.currentTime = Math.max(0, m.duration - 0.1); } catch (e) {} adHit(); }
+          else if (!isAd && m.__sceAd) { m.__sceAd = false; if (m.__sceAdMuted) { m.muted = false; m.__sceAdMuted = false; } try { m.playbackRate = wantedRate(); } catch (e) {} }
+        } catch (e) {}
+      };
+      m.addEventListener('loadstart', adCheck); m.addEventListener('loadedmetadata', adCheck); m.addEventListener('play', adCheck); m.addEventListener('playing', adCheck); m.addEventListener('emptied', adCheck);
       m.addEventListener('ratechange', re); m.addEventListener('play', re);
       m.addEventListener('playing', re); m.addEventListener('loadeddata', re);
       m.addEventListener('playing', () => { try { restoreTrackLoud(); } catch (e) {} });   // loudness memory: a track that starts (no-op while loudness is off)
@@ -12750,7 +12788,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try {
       const want = wantedRate();
       try { D.querySelectorAll('audio,video').forEach((m) => captureMedia(m)); } catch (e) {}
-      sceMediaEls.forEach((m) => { try { if (Math.abs((m.playbackRate || 1) - want) > 0.01) m.playbackRate = want; } catch (e) {} syncPitch(m); });
+      sceMediaEls.forEach((m) => { if (m.__sceAd) return; try { if (Math.abs((m.playbackRate || 1) - want) > 0.01) m.playbackRate = want; } catch (e) {} syncPitch(m); });
       // raw buffer sources: only real tracks (> 30 s) follow the speed — UI blips and previews stay put (2.31)
       if (sceBufNodes.size) sceBufNodes.forEach((n) => { try { if (n.playbackRate && n.buffer && n.buffer.duration > 30 && n.playbackRate.value !== want) n.playbackRate.value = want; } catch (e) {} });
     } catch (e) {}
@@ -16592,6 +16630,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['thinScroll', 'toggle', 'Slim scrollbars', ''],
     ['fontScale', 'range', 'Text size', '', 85, 120],
     ['SEC', 'Declutter'],
+    ['adSkip', 'toggle', 'Skip audio ads', 'The ad calls fail the way an ad blocker fails them, so the track plays instead; an ad file that still arrives is muted and finished in a second'],
     ['hideUpsell', 'toggle', 'Hide Go+ upsells', 'Upgrade nags & banners'],
     ['hideAppBanner', 'toggle', 'Hide app / cookie banners', ''],
     ['hidePromoted', 'toggle', 'Hide promoted items', 'Sponsored tracks in the stream'],
@@ -17193,6 +17232,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     try { L.push('theme=' + effTheme() + ' accent=' + CFG.accent + (CFG.accent === 'custom' ? ('(' + CFG.customAccent + ')') : '') + ' speed=' + CFG.speed + '% loop=' + !!CFG.loopTrack + ' abLoop=' + abOn); } catch (e) {}
     try { L.push('flags: hotkeys=' + !!CFG.hotkeys + ' keySeek=' + !!CFG.keySeek + ' speedPerTrack=' + !!CFG.speedPerTrack + ' rememberVol=' + !!CFG.rememberVol + ' mini=' + !!CFG.miniPlayer); } catch (e) {}
     try { L.push('clientId=' + ((SUITE.clientId && SUITE.clientId()) ? 'yes' : 'no')); } catch (e) {}
+    L.push('audio ads skipped: ' + (GET('enh:adsSkipped', 0) | 0) + ' (' + (CFG.adSkip ? 'on' : 'off') + ')');
     L.push('errors (' + errLog.length + '):');
     if (errLog.length) for (const ln of errLog) L.push('  ' + ln); else L.push('  (none captured)');
     try { L.push('suite log:'); L.push(Log.dump()); } catch (e) {}   // the caught-failure ring the modules write to
