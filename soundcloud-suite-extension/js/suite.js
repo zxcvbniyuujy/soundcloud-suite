@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.77.0
+// @version      4.78.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.77.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.78.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -467,8 +467,11 @@
         mutedByUs: [], muteWatch: null, queueHidden: false,
         itemH: 0, itemHAt: 0, total: null,
         startTime: 0, startCount: 0, lastCount: 0, stall: 0,
-        playingStarted: false, beganPlayback: false, earlyBegun: false, seeded: false,
+        playingStarted: false, beganPlayback: false, beginP: null, earlyBegun: false, seeded: false,
         auth: null, clientId: null, tpl: null,
+        pageUserId: '',   // the profile a GenericLikes run resolved, so the feed answers only that profile's pagination
+        listSeen: null,   // { page, path, ids } — the likes this page's list has loaded from the API (they head the queue)
+        reloading: false,   // a reshuffle reload is under way: the auto-run flag belongs to the next page
         apiFails: 0, apiNoticeShown: false,   // R23: api-v2 degradation watchdog (see ApiHealth)
         fetchAbort: null,
         sessionLib: null, sessionLibAt: 0, sessionLibKey: '',
@@ -477,7 +480,8 @@
         prevPoolList: null, prevPoolIdx: null, poolAssigned: false,   // cancel() decides which pool survives
         lastRunPath: '',  // where the last shuffle started, for context-aware reshuffle
     };
-    const F = { active: false, armed: false, sid: '', pages: [], served: 0 };
+    const F = { active: false, armed: false, sid: '', pages: [], served: 0, base: '', pageType: '' };   // base: the request the queue made for page 0, pageType: the run's
+    const fedPaths = new Set();   // page paths whose likes collection already holds a shuffled pool (page lifetime)
     const W = { last: 0, href: null, curMs: 0, saveTick: 0, stuckMs: 0, stuckKicks: 0 };
 
     const sess = Object.assign({ start: Date.now(), listenMs: 0, played: 0, skipped: 0 }, SS.get('bh_sc_sess', {}));
@@ -702,16 +706,26 @@
     /* ════════════════════════ NETWORK LAYER ════════════════════════
      *  1. SNIFF  – learn the page's api-v2 client_id, OAuth header, and a
      *              template likes request to replay for the full fetch.
-     *  2. FEED   – while a shuffle is loading, answer the queue's
-     *              track_likes pagination locally with pre-shuffled pages.
+     *  2. FEED   – while a shuffle is loading, answer the queue's likes
+     *              pagination locally with pre-shuffled pages.
      *  3. BOOST  – compatibility engine: raise limit≈30 → 200.
      *  4. END    – spot next_href == null so loaders can finish instantly. */
-    const LIKES_RE = /api-v2\.soundcloud\.com\/[^?]*track_likes/;
-    const BOOSTABLE = /api-v2\.soundcloud\.com\/[^?]*(?:track_likes|playlists\/\d+\/tracks)/;
+    // The likes COLLECTION in either shape SoundCloud pages it through: tracks only (…/track_likes, what the library
+    // fetch replays) or the mixed tracks-and-playlists list its likes pages and their queue paginate today (…/likes).
+    // Never …/track_likes/ids or a single like (…/track_likes/<id>): the trailing slash-or-query anchor keeps those out.
+    const LIKES_PATH = /^\/(?:me|users\/(\d+))\/(?:track_likes|likes)\/?$/;
+    const LIKES_RE = /api-v2\.soundcloud\.com\/(?:me|users\/\d+)\/(?:track_likes|likes)\/?(?:[?#]|$)/;
+    const BOOSTABLE = /api-v2\.soundcloud\.com\/(?:(?:me|users\/\d+)\/(?:track_likes|likes)|playlists\/\d+\/tracks)\/?(?:[?#]|$)/;
     const API_RE = /api-v2\.soundcloud\.com\//;
     const SC_API_ORIGIN = /^https:\/\/api(?:-v2)?\.soundcloud\.com\//;
     // The captured OAuth header must never travel anywhere but SoundCloud's API.
     function assertScApi(u) { if (!SC_API_ORIGIN.test(u)) throw new Error('refusing non-SoundCloud URL: ' + u); }
+    // SoundCloud's next_href carries no client_id: followed as written, page two answers 401 for a listener with no
+    // OAuth header (anyone signed out shuffling a public likes page), and the whole likes engine gave up on it
+    function withClientId(href) {
+        if (!href) return null;
+        try { const u = new URL(href, location.href); if (!u.searchParams.has('client_id') && S.clientId) u.searchParams.set('client_id', S.clientId); return u.href; } catch (e) { return href; }
+    }
     function cookieAuth() {
         try {
             const m = document.cookie.match(/(?:^|;\s*)oauth_token=([^;]+)/);
@@ -736,8 +750,8 @@
             const u = new URL(url, location.href);
             const cid = u.searchParams.get('client_id');
             if (cid) S.clientId = cid;
-            // template only a GET of the likes COLLECTION: a like/unlike PUT/DELETE
-            // (…/track_likes/<id>) or /me/track_likes/ids would poison the replay
+            // template only a GET of the track-likes COLLECTION: a like/unlike PUT/DELETE (…/track_likes/<id>) or
+            // /me/track_likes/ids would poison the replay, and the mixed …/likes list pages through playlists too
             if ((method || 'GET').toUpperCase() === 'GET' && LIKES_RE.test(url) && /\/track_likes\/?$/.test(u.pathname) && !u.searchParams.has('bh_sid')) S.tpl = u.href;
         } catch (e) { swallow(e, 'sniffUrl'); }
     }
@@ -752,6 +766,16 @@
     }
     function sniffBodyForEnd(json) {
         try { if (json && 'collection' in json && !json.next_href) S.endSeen = true; } catch (e) {}
+    }
+    // the page's own likes pages (never a served one): their tracks are in the collection the queue is built on
+    const listPageUrl = (url, method) => (method || 'GET').toUpperCase() === 'GET' && LIKES_RE.test(url) && !/[?&]bh_sid=/.test(url);
+    function noteListPage(url, json) {
+        try {
+            const p = new URL(url, location.href).pathname;
+            if (!LIKES_PATH.test(p) || !json || !Array.isArray(json.collection)) return;
+            if (!S.listSeen || S.listSeen.path !== p || S.listSeen.page !== location.pathname) S.listSeen = { page: location.pathname, path: p, ids: new Set() };
+            for (const it of json.collection) if (it && it.track && it.track.id) S.listSeen.ids.add(it.track.id);
+        } catch (e) {}
     }
 
     /* ──────────────────────── R23 · API HEALTH WATCHDOG ────────────────────
@@ -812,7 +836,10 @@
     }
     setTimeout(selectorHealth, 45000); setTimeout(selectorHealth, 180000);   // the bar renders late on a cold load; a second look for a slow one
     function mkNextHref(page) {
-        const base = new URL(S.tpl || `https://api-v2.soundcloud.com/me/track_likes?client_id=${S.clientId || ''}&limit=${CFG.boostedLimit}&linked_partitioning=1`);
+        // minted on the request the queue actually made (F.base), so every later page keeps its endpoint and passes
+        // the same ownership check; the template and the /me default only cover a page claimed before one was seen
+        const base = new URL(F.base || S.tpl || `https://api-v2.soundcloud.com/me/track_likes?client_id=${S.clientId || ''}&limit=${CFG.boostedLimit}&linked_partitioning=1`);
+        base.searchParams.delete('offset');
         base.searchParams.set('limit', String(CFG.boostedLimit));
         base.searchParams.set('bh_sid', F.sid);
         base.searchParams.set('bh_page', String(page));
@@ -823,14 +850,27 @@
         const coll = (!dead && F.active && F.pages[page]) || [];
         const last = dead || page + 1 >= F.pages.length;
         if (coll.length) F.served += coll.length;
+        // SoundCloud keeps this page's list (and the queue built on it) as one collection, cached for the life of
+        // the page and deduplicated by track: once it holds a shuffled pool, no later page can reorder it, so the
+        // next shuffle on this path starts from a reload (see runTrue)
+        if (page === 0 && coll.length) fedPaths.add(location.pathname.replace(/\/$/, ''));
         if (last && !dead) S.endSeen = true;
         log('feed page', page, coll.length, last ? '(last)' : '');
         return JSON.stringify({ collection: coll, next_href: (last || !F.active) ? null : mkNextHref(page + 1), query_urn: null });
     }
-    /* The "armed" hand-off claims the queue's FIRST real pagination request
-     * as page 0. v8: only claim it when the request targets the same likes
-     * endpoint we templated (path match), so a stray track_likes call from
-     * another widget can't hijack the shuffled order. */
+    /* The "armed" hand-off claims the queue's FIRST real pagination request as page 0 — whichever shape SoundCloud
+     * pages the list through — but only a request for THIS page's likes: another profile's queue keeps paginating
+     * after a navigation, and a stray call from it must never carry the shuffled order. /me/… is the signed-in
+     * listener's own list on either page type; a numeric path must name the profile the run resolved (a cache hit
+     * never resolves one, and then any profile path passes). */
+    function feedOwnerOk(pathname) {
+        const m = LIKES_PATH.exec(pathname);
+        if (!m) return false;
+        const id = m[1];
+        if (!id) return true;
+        if (F.pageType === 'Likes') { const me = userTag(); return !me || id === me; }
+        return !S.pageUserId || id === S.pageUserId;
+    }
     function resolveFeed(url) {
         try {
             if (!LIKES_RE.test(url)) return null;
@@ -844,10 +884,9 @@
                 return -1;
             }
             if (F.active && F.armed) {
-                if (S.tpl) {
-                    try { if (new URL(S.tpl).pathname !== u.pathname) return null; } catch (e) {}
-                }
+                if (!feedOwnerOk(u.pathname)) return null;
                 F.armed = false;
+                F.base = u.href;
                 return 0;
             }
         } catch (e) { swallow(e, 'resolveFeed'); }
@@ -1038,7 +1077,7 @@
                                 : origFetch(boosted, init);
                 return p.then(res => {
                     if (res && res.status >= 400) { S.boostFails++; return fallback(); }
-                    try { res.clone().json().then(sniffBodyForEnd).catch(() => {}); } catch (e) {}
+                    try { res.clone().json().then(j => { sniffBodyForEnd(j); if (listPageUrl(boosted, reqMethod)) noteListPage(boosted, j); }).catch(() => {}); } catch (e) {}
                     try { ApiHealth.markOk(); } catch (e) {}
                     return res;
                 }, () => { S.boostFails++; return fallback(); });
@@ -1056,11 +1095,13 @@
         let mth = 'GET';
         try { mth = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase(); } catch (e) {}
         const listKind = mth === 'GET' ? feedListKind(rawUrl) : null;
+        const likesPage = listPageUrl(rawUrl, mth);
         return p.then(res => {
             try {
                 if (res && (res.status === 404 || res.status >= 500)) ApiHealth.markFail(res.status);
                 else if (res && res.status < 400) ApiHealth.markOk();
             } catch (e) {}
+            if (likesPage && res && res.ok) { try { res.clone().json().then(j => noteListPage(rawUrl, j)).catch(() => {}); } catch (e) {} }
             if (listKind) { try { return filterListResponse(res, listKind); } catch (e) { return res; } }
             return res;
         });
@@ -1095,6 +1136,13 @@
                         else { try { sniffBodyForEnd(JSON.parse(this.responseText)); } catch (e) {} }
                     });
                 }
+            }
+            this.__bhLikesPage = listPageUrl(raw, method) ? u : null;   // the URL actually sent (boosted or not)
+            if (this.__bhLikesPage && !this.__bhLikesHooked) {
+                this.__bhLikesHooked = true;
+                this.addEventListener('load', () => {
+                    try { if (this.__bhLikesPage && this.status === 200) noteListPage(this.__bhLikesPage, this.responseType === 'json' ? this.response : JSON.parse(this.responseText)); } catch (e) {}
+                });
             }
             // R23: tally api-v2 health on every XHR (boosted or not). Same
             // hook-once guard so a re-used XHR can't double-count.
@@ -1742,6 +1790,7 @@
             if (!r.ok) throw new Error('resolve failed');
             const user = await r.json();
             if (!user || !user.id) throw new Error('no user id');
+            S.pageUserId = String(user.id);
             if (tplPath === '/users/' + user.id + '/track_likes') return fromTpl();
             return `https://api-v2.soundcloud.com/users/${user.id}/track_likes?client_id=${S.clientId}&limit=${limit}&linked_partitioning=1`;
         }
@@ -1817,7 +1866,7 @@
             badJson = 0;
             for (const it of (j.collection || [])) if (it && it.track) items.push(it);
             if (onProgress) onProgress(items.length);
-            url = j.next_href || null;
+            url = withClientId(j.next_href);
         }
         if (S.fetchAbort === ac) S.fetchAbort = null;
         return items;
@@ -1960,7 +2009,7 @@
                     fresh.push(it);
                 }
                 if (overlap || !j.next_href) break;   // reached known territory (or the end)
-                url = j.next_href;
+                url = withClientId(j.next_href);
             }
             if (!fresh.length) return;
             if (gen0 !== libGen) return;   // Forget / full refresh landed meanwhile — our merge is stale
@@ -2207,6 +2256,25 @@
     }
 
     /* ─────────────────────── SEED + PLAY ─────────────────────── */
+    // SoundCloud's sign-in nudge: a signed-out listener's first play click on a list opens "Create an account or
+    // sign in" instead of playing (once per session), and every seed click used to land on it — the run then fell
+    // to the compatibility engine with one track queued. Close the nudge our click raised, never one the listener
+    // had open, and press once more; the second press plays.
+    const authNag = () => document.querySelector('.modal.auth-modal .modal__closeButton, .modal.auth-modal .modal__close');
+    async function pressPlay(btn, rooted, waitMs) {
+        const had = !!authNag();
+        clickIt(btn);
+        if (await waitFor(rooted, waitMs, 50)) return true;
+        if (S.cancelled) return false;
+        const nag = authNag();
+        if (!nag || had) return false;
+        clickIt(nag);
+        await pause(200);
+        if (S.cancelled) return false;
+        clickIt(btn);
+        return !!(await waitFor(rooted, waitMs, 50));
+    }
+    const barPlaying = () => { const pc = q('playControl'); return !!(pc && pc.classList.contains('playing')); };
     async function seedFromLastRow(list) {
         const rows = Array.from(list.children).filter(r => q('playButton', r));
         if (!rows.length) return false;
@@ -2224,15 +2292,14 @@
             (rowLink && badge && rowLink.getAttribute('href') === badge.getAttribute('href'));
         if (isCurrent && rows.length > 1) {
             const other = q('playButton', rows[0]);
-            clickIt(other);
-            await waitFor(() => other.classList.contains('sc-button-pause'), T.seedSwapWait, 50);
+            await pressPlay(other, () => other.classList.contains('sc-button-pause'), T.seedSwapWait);
         }
         if (S.cancelled) return false;
 
-        clickIt(pLast);
+        // a seed that never roots is not fatal here: the queue hand-off below is the real arbiter, and a slow
+        // start on a cold page still makes it in time
+        await pressPlay(pLast, () => pLast.classList.contains('sc-button-pause') || barPlaying(), T.seedClickWait);
         toggleQueue('open');   // warm the queue panel while the track roots
-        await waitFor(() => pLast.classList.contains('sc-button-pause') ||
-            ((q('playControl') || { classList: { contains: () => false } }).classList.contains('playing')), T.seedClickWait, 50);
         if (S.cancelled) return false;
 
         // Pause while everything loads — playback begins only when ready.
@@ -2241,36 +2308,128 @@
         return true;
     }
 
-    /* Jump off the seed track into the shuffled region — verified, with one
-     * retry if SoundCloud swallowed the click. Guarded so the experimental
-     * early start and the normal completion path can't both fire it. */
+    /* The queue SoundCloud builds on the seed click holds every like its list had already loaded (a page of 24,
+     * more if the listener scrolled) ahead of the served pool, and the seed is only the last RENDERED row — so a
+     * skip from the seed would play the rest of that page in like order first. Instead, find the pool's first
+     * track in the queue panel (rows are rendered around the panel's scroll position) and press its play control:
+     * the shuffled order starts on its first track. */
+    const rowHref = (a) => { try { return new URL(a.getAttribute('href') || '', location.origin).pathname; } catch (e) { return ''; } };
+    async function jumpToPoolStart() {
+        const first = S.poolList && S.poolList[0] && S.poolList[0].u;
+        if (!first || !q('queueScrollable')) return false;
+        const want = new URL(first).pathname;
+        if (!queueOpen()) toggleQueue('open');
+        // on a cold page the panel exists before it is laid out or has a row; and the served page lands in the
+        // queue a moment after the hand-off, so an empty scan is retried a few times
+        const ready = () => { const s = q('queueScrollable'); return !!(s && s.clientHeight > 0 && s.scrollHeight > 0 && qa('queueItem').length); };
+        if (!(await waitFor(ready, 4000, 80))) { log('jump: the panel never rendered'); return false; }
+        // and let it settle: right after the hand-off the rows are still being rebuilt, and a play control pressed
+        // mid-rebuild has started the wrong item (seen once: the track after the seed)
+        let lastSig = '';
+        for (let n = 0; n < 8; n++) {
+            const h = q('queueHeights');
+            const sig = (h ? h.style.height : '') + '|' + qa('queueItem').length;
+            if (sig === lastSig) break;
+            lastSig = sig;
+            await pause(200);
+        }
+        const sc = q('queueScrollable');
+        if (!sc) return false;
+        // 'behind': the track is in the queue but behind the playhead (a like the page had loaded and the list
+        // capture missed) — no scan will find it ahead, so the skip fallback takes over at once
+        const find = () => {
+            for (const w of qa('queueItem')) {
+                const a = w.querySelector('.queueItemView__title a[href], .queueItemView__title[href]');
+                if (!a || rowHref(a) !== want) continue;
+                const view = w.querySelector('.queueItemView') || w;
+                return view.classList.contains('m-dimmed') ? 'behind' : w;
+            }
+            return null;
+        };
+        // the pool starts right after the likes the list had loaded: a page or a few, so a bounded scan from the top
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const step = Math.max(200, Math.floor(sc.clientHeight * 0.8));
+            let i = 0;
+            for (let y = 0; i < 60; i++, y += step) {
+                if (S.cancelled) return false;
+                sc.scrollTop = y;
+                try { sc.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e) {}
+                await pause(70);
+                const w = find();
+                if (w === 'behind') { log('jump: the first pool track is behind the playhead'); return false; }
+                if (w) {
+                    const play = w.querySelector('.queueItemView__playButton .sc-button-play:not(.sc-button-pause), .queueItemView__playButton .sc-button-play');
+                    if (!play) { log('jump: row found, no play control', i); return false; }
+                    clickIt(play);
+                    log('jump: row found, step', i, 'scrollTop', sc.scrollTop, 'attempt', attempt);
+                    return true;
+                }
+                if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2) break;
+            }
+            log('jump: not found, steps', i, 'rows', qa('queueItem').length, 'h', sc.clientHeight, sc.scrollHeight, 'attempt', attempt);
+            await pause(400);
+            if (S.cancelled) return false;
+        }
+        return false;
+    }
+    /* Start the shuffled playback — the pool's first track through the queue panel, else a skip off the seed —
+     * verified, with one retry if SoundCloud swallowed the click. Guarded so the early start and the completion
+     * path can't both fire it; the completion path waits for it before closing the panel. */
     function beginPlaybackTrue() {
-        if (S.beganPlayback) return;
-        S.beganPlayback = true;
+        // one start per run; a second caller (the loader finishing while the early start is still scanning the
+        // panel) gets the same promise, so the wrap-up never closes the panel under the scan
+        if (!S.beganPlayback) { S.beganPlayback = true; S.beginP = beginPlaybackNow().catch(e => swallow(e, 'beginPlaybackTrue')); }
+        return S.beginP || Promise.resolve();
+    }
+    async function beginPlaybackNow() {
         unmuteAll();
         const sh = q('shuffleControl');
         if (sh && sh.classList.contains('m-shuffling')) clickIt(sh); // our order IS the shuffle
         const badge = q('badgeTitle');
         const seedHref = badge && badge.getAttribute('href');
-        clickIt(q('skipNext'));
+        // the jump is verified on the player badge (a pool track playing) and repeated when SoundCloud started
+        // something else — up to three rounds; then the skip off the seed is the fallback
+        const onPool = () => { const b = q('badgeTitle'); const h = b && rowHref(b); return !!(h && S.poolIdx && S.poolIdx.has(location.origin + h)); };
+        let jumped = false;
+        for (let round = 0; round < 3 && !S.cancelled; round++) {
+            try { jumped = await jumpToPoolStart(); } catch (e) { swallow(e, 'jumpToPoolStart'); jumped = false; }
+            if (!jumped) break;
+            if (await waitFor(onPool, 1500, 80)) break;
+            log('jump: landed off the pool, round', round + 1);
+            jumped = false;
+            await pause(300);
+        }
+        if (S.cancelled) return;
+        if (!jumped) clickIt(q('skipNext'));
         S.playingStarted = true;
         const pc = q('playControl');
         if (pc) { if (!pc.classList.contains('playing')) clickIt(pc); focusIdle(pc); }
-        waitFor(() => {
+        const changed = await waitFor(() => {
             const b = q('badgeTitle');
             return b && b.getAttribute('href') !== seedHref;
-        }, T.playVerify).then(changed => {
-            if (!changed && S.playingStarted && !S.cancelled) {
-                clickIt(q('skipNext'));
-                const p2 = q('playControl');
-                if (p2 && !p2.classList.contains('playing')) clickIt(p2);
-            }
-        });
+        }, T.playVerify);
+        log('jump:', jumped ? 'through the panel' : 'skip fallback', changed ? 'track changed' : 'track unchanged');
+        if (!changed && S.playingStarted && !S.cancelled) {
+            clickIt(q('skipNext'));
+            const p2 = q('playControl');
+            if (p2 && !p2.classList.contains('playing')) clickIt(p2);
+        }
     }
 
     /* ─────────────────────── LIKES RUN (linear) ───────────────────────
      *  fetch everything → shuffle → load whole queue → play  */
     async function runTrue(btn, list, pageType) {
+        // 0. A second shuffle on a page whose likes collection already carries a pool: SoundCloud keeps that
+        // collection for the life of the page (SPA navigation included) and holds each track once, so no served
+        // page can give it a new order. Reload and run again on arrival — the library comes from the cache.
+        if (fedPaths.has(location.pathname.replace(/\/$/, ''))) {
+            S.reloading = true;   // the flag is for the page that comes next: this page's own auto-run check must not consume it
+            SS.set('bh_sc_autorun', location.pathname);
+            setBtn('Reshuffling…');
+            try { location.reload(); } catch (e) { S.reloading = false; SS.del('bh_sc_autorun'); throw e; }
+            await pause(4000);   // the page is on its way out; never fall through to the compatibility engine
+            return;
+        }
         // 1. FETCH — or reuse: memory (this session) → disk cache (last fetch) → network.
         // Own likes are keyed per ACCOUNT (user id from the OAuth token), so
         // switching accounts can never shuffle the other account's cache.
@@ -2378,7 +2537,20 @@
         }
 
         // 2. SHUFFLE
-        const { pool, stats } = buildPool(lib, pageType);
+        F.pageType = pageType;
+        const built = buildPool(lib, pageType);
+        const stats = built.stats;
+        let pool = built.pool;
+        // the likes this page's list has already loaded sit in the queue ahead of the served pool, and SoundCloud
+        // drops a served like whose track the collection already holds — so they leave the pool here, and the count
+        // and the Up-next list say what will actually play
+        const seen = S.listSeen && feedOwnerOk(S.listSeen.path) ? S.listSeen.ids : null;
+        if (seen && seen.size) {
+            const kept = pool.filter(it => !seen.has(it.track.id));
+            stats.inList = pool.length - kept.length;
+            if (kept.length >= 3) { pool = kept; stats.totalMs = pool.reduce((s, it) => s + Math.max(it.track.full_duration || 0, it.track.duration || 0), 0); }
+            else stats.inList = 0;
+        }
         if (pool.length < 3) throw new Error('pool too small');
         LS.set('bh_sc_lastpool', { n: pool.length, ms: stats.totalMs, t: Date.now() });
         S.poolList = pool.map(it => ({
@@ -2393,6 +2565,7 @@
         F.sid = Math.random().toString(36).slice(2, 9);
         F.pages = chunk(pool, CFG.feedPageSize);
         F.served = 0;
+        F.base = '';
         F.active = true;
         F.armed = true;
         S.poolSize = pool.length;
@@ -2429,6 +2602,7 @@
         if (stats.ageFiltered) bits.push(`${stats.ageFiltered} liked earlier`);
         if (stats.histFiltered) bits.push(`${stats.histFiltered} already heard`);
         if (stats.rotationBypassed) bits.push('nearly all heard — repeats included');
+        if (stats.inList) bits.push(`${stats.inList} newest already on the page`);
         showToast(`${pool.length.toLocaleString()} tracks · ${fmtH(stats.totalMs)}`, bits.length ? bits.join(' · ') : 'Shuffled fresh, every single one');
 
         // Instant playback (default): the first page is already in the queue,
@@ -2436,11 +2610,11 @@
         // loader keeps verifying; finish() still reports the honest count.
         if (CFG.earlyStart) { S.earlyBegun = true; beginPlaybackTrue(); }
 
-        // 4. PLAY — handled by onLoaderDone once the whole queue is in.
+        // 4. PLAY — handled by onLoaderDone once the whole queue is in. The jump to the pool's first track reads
+        // the open panel, so the wrap-up (which closes it) waits for it.
         function onLoaderDone(ok) {
             if (S.cancelled) return;
-            beginPlaybackTrue();
-            finish(ok);
+            beginPlaybackTrue().then(() => { if (!S.cancelled) finish(ok); });
         }
     }
 
@@ -2456,13 +2630,10 @@
         const pc0 = q('playControl');
         if (pc0 && pc0.classList.contains('playing')) clickIt(pc0);
 
-        clickIt(p2);
-        await waitFor(() => p2.classList.contains('sc-button-pause') ||
-            (q('playControl') || { classList: { contains: () => false } }).classList.contains('playing'), T.seedClickWait, 50);
+        await pressPlay(p2, () => p2.classList.contains('sc-button-pause') || barPlaying(), T.seedClickWait);
         if (S.cancelled) return false;
 
-        clickIt(p1);
-        await waitFor(() => p1.classList.contains('sc-button-pause'), T.seedClickWait, 50);
+        await pressPlay(p1, () => p1.classList.contains('sc-button-pause'), T.seedClickWait);
 
         const pc = q('playControl');
         if (pc && pc.classList.contains('playing')) clickIt(pc);
@@ -2562,12 +2733,14 @@
             const elapsed = Date.now() - S.startTime;
             const grew = n > S.startCount + 2;
             const fedAll = F.active && S.poolSize > 0 && F.served >= S.poolSize;
-            const done =
+            // a feed run is never done before its first page was handed over: a queue that already holds an
+            // earlier run's tracks would otherwise pass as loaded while the hand-off check is still waiting
+            const done = (!F.active || F.served > 0) && (
                 (fedAll && S.endSeen && S.stall >= 2) ||
                 (S.expected && (!F.active || fedAll) && n >= S.expected - 2 && S.stall >= 2) ||   // feed runs: n also counts rows loaded before the seed
                 (S.endSeen && grew && S.stall >= 4) ||
                 (q('queueFallback') && S.stall >= 12 && elapsed > 4000) ||
-                S.stall >= CFG.stallDoneTicks;
+                S.stall >= CFG.stallDoneTicks);
             if (done) { stopLoader(); onDone(true); return; }
 
             if (S.stall && S.stall % CFG.stallKickTicks === 0) {
@@ -2666,7 +2839,7 @@
     }
 
     function cleanupFeed() {
-        F.active = false; F.armed = false; F.pages = []; F.served = 0; F.sid = '';
+        F.active = false; F.armed = false; F.pages = []; F.served = 0; F.sid = ''; F.base = ''; F.pageType = '';
         if (S.fetchAbort) { try { S.fetchAbort.abort(); } catch (e) {} S.fetchAbort = null; }
     }
     function finish(ok) {
@@ -3656,26 +3829,32 @@
         maybeAutoRun();
     }
     let autoRunWaiting = false;
+    // the flag is 1 (the hotkey: your own /you/likes) or the path of a likes page a reshuffle reloaded (any profile)
+    const autoRunPath = () => { const v = SS.get('bh_sc_autorun', 0); if (!v) return ''; return (v === 1 || v === '1') ? '/you/likes' : String(v); };
+    const autoRunBtn = () => {
+        const bEl = document.querySelector('.bhx-shufbtn');
+        const want = autoRunPath();
+        if (!bEl || !want || (bEl.dataset.pageType !== 'Likes' && bEl.dataset.pageType !== 'GenericLikes')) return null;
+        return location.pathname.replace(/\/$/, '') === want.replace(/\/$/, '') ? bEl : null;
+    };
     async function maybeAutoRun() {
-        if (autoRunWaiting || !SS.get('bh_sc_autorun', 0)) return;
+        if (autoRunWaiting || S.reloading || !SS.get('bh_sc_autorun', 0)) return;
         autoRunWaiting = true;
         // the button mounts on the page header before the Likes list has any
         // rows — wait for both, or runOnce answers 'Too few tracks' straight away
         let btn = await waitFor(() => {
-            const bEl = document.querySelector('.bhx-shufbtn');
-            if (!bEl || bEl.dataset.pageType !== 'Likes') return null;
+            const bEl = autoRunBtn();
+            if (!bEl) return null;
             const l = q('likesList');
             return l && l.childElementCount >= 3 ? bEl : null;
         }, T.autorunWait, 200);
-        if (!btn) {
-            // a list that never fills (signed out, no likes) still gets the 'Too few tracks' feedback
-            const bEl = document.querySelector('.bhx-shufbtn');
-            if (bEl && bEl.dataset.pageType === 'Likes') btn = bEl;
-        }
+        // a list that never fills (signed out, no likes) still gets the 'Too few tracks' feedback
+        if (!btn) btn = autoRunBtn();
         autoRunWaiting = false;
         if (!SS.get('bh_sc_autorun', 0)) return;
+        const own = autoRunPath() === '/you/likes';
         SS.del('bh_sc_autorun');
-        if (!btn) { showToast('Couldn’t find your Likes to shuffle', 'Sign in and open /you/likes, then press Shuffle Play'); return; }
+        if (!btn) { showToast(own ? 'Couldn’t find your Likes to shuffle' : 'Couldn’t find the likes to shuffle', own ? 'Sign in and open /you/likes, then press Shuffle Play' : 'Open the likes page again and press Shuffle Play'); return; }
         if (!S.active) run(btn);
     }
     function ensureBarButtons() {
@@ -3751,6 +3930,7 @@
         if (p !== lastPath) {
             lastPath = p;
             S.tpl = null;   // templates are page-local: never replay another page's likes endpoint
+            S.pageUserId = '';   // and so is the resolved profile: the next page's feed must not answer to this one
             if (S.active) cancel('Shuffle Play');
             closeCard();
         }
@@ -9435,6 +9615,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🔀', 'Shuffle Play on today’s SoundCloud', 'The likes engine had gone quiet: SoundCloud now pages a likes list through a mixed tracks-and-playlists endpoint the feed never answered, a signed-out listener’s first play click opens a sign-in nudge instead of playing, and the queue keeps the page of likes the list had loaded ahead of the shuffle. The feed answers that endpoint, the nudge our click raised is closed and the click repeated, playback starts on the pool’s first track through the queue panel rather than a skip off the seed, likes already on the page leave the pool so the count says what will play, and a second shuffle on the same page reloads it for a fresh queue and starts on arrival from the cache.'],
           ['🌐', 'Every label in your language', 'A live collection of everything the English hub shows, checked against all eleven dictionaries, found labels no dictionary had at all — tab and segment names, audio terms, the hotkey legend, the engine footnote, tint styles — and each language got its own: 42 in German, 52 in Dutch, 277 in all. The Audio tab’s jump chips are now named after their sections, so nothing reads as a spacebar.'],
           ['🔍', 'A second review, three fixes', 'The per-track loudness measurement could pin itself to the previous track’s player element and then measure nothing for the whole track; it now waits for the element that plays. A script on the page that patched the browser’s own event functions after load could have glimpsed the relay channel; the shim keeps private copies taken before any page script runs. A token name that was really an inherited property is refused.'],
           ['🗝', 'Your tokens leave the page', 'A Genius API token or a ListenBrainz token used to sit in soundcloud.com’s own storage, where any script on the site could read it. It now lives in the extension’s storage: the page holds a placeholder, and the extension puts the token into a request only for that service. A token you set before moves over by itself and leaves the page.'],

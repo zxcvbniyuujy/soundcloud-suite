@@ -130,6 +130,26 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **Shuffle Play on today's SoundCloud** — the likes engine had gone quiet on
+  the current site and every run fell to the compatibility engine with one
+  track queued. Four causes, four fixes, all verified live on public likes
+  pages: SoundCloud pages a likes list through the mixed `/users/{id}/likes`
+  endpoint (tracks and playlists), which the feed now answers alongside
+  `track_likes`, minting later pages on the request the queue actually made
+  and claiming only this profile's pagination; a signed-out listener's first
+  play click opens the site's sign-in nudge instead of playing, so the seed
+  closes the nudge its own click raised and presses again; the queue holds the
+  page of likes the list had loaded (24, more if scrolled) ahead of the served
+  pool and the seed is only the last rendered row, so playback now starts on
+  the pool's first track through the queue panel instead of a skip off the
+  seed, and the likes already on the page leave the pool (they'd be
+  deduplicated anyway) so "N queued" and Up next say what will play; and since
+  SoundCloud keeps that collection for the life of the page and holds each
+  track once, a second shuffle on the same page reloads it and runs on arrival
+  from the cached library (instant), with a fresh order every time. Also:
+  `next_href` gets the page's `client_id` (page two answered 401 for a
+  signed-out listener), and a feed run can no longer report "queued" before
+  its first page was handed over.
 - **The relay answers to the suite alone** — the extension's background worker
   fetches lyrics with the extension's own host permissions, and any script on
   soundcloud.com used to be able to ask it to. Requests now travel over a private
