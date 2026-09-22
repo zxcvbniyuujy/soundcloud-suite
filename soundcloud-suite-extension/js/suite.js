@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.71.0
+// @version      4.72.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.71.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.72.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -7568,6 +7568,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel.max.stage::before { display: none; }
 .panel.max.stage .glow { top: -12vh; left: -12vw; right: -12vw; bottom: -12vh; height: auto; filter: blur(80px) saturate(170%) brightness(.62); opacity: 1 !important; transition: opacity 1s ease; }
 .panel.max.stage.st-dark .glow { opacity: .16 !important; }
+.panel.max.stage .stpulse { display: none; position: absolute; top: -8vh; left: -8vw; width: calc(100% + 16vw); height: calc(100% + 16vh); pointer-events: none; filter: blur(34px) saturate(130%); opacity: 0; transition: opacity 1s ease; }
+.panel.max.stage.st-pulse .stpulse { display: block; opacity: .9; }
+.panel.max.stage.st-pulse .glow { opacity: .22 !important; }
 .panel.max.stage .stveil { display: block; position: absolute; inset: 0; z-index: 0; background: linear-gradient(180deg, rgba(8,8,11,.34) 0%, rgba(8,8,11,.2) 38%, rgba(8,8,11,.72) 100%); }
 .panel.max.stage .tabs, .panel.max.stage .grip, .panel.max.stage .nxt, .panel.max.stage .prog, .panel.max.stage .tm, .panel.max.stage .hdr::after { display: none !important; }
 .panel.max.stage .hdr { position: absolute; top: 0; left: 0; right: 0; z-index: 4; padding: 22px 26px 14px; gap: 12px; cursor: default; background: linear-gradient(180deg, rgba(8,8,11,.55), rgba(8,8,11,0)); }
@@ -8114,6 +8117,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     let pinEl = null, pinI = -1;  // guessed timing: the pin that floats beside the hovered line
     let menuOn = false, keysOn = false, keysBuilt = false;
     let chipShown = false, lastTm = -1;
+    let pulseEl = null, pulseCtx = null, pulseAt = 0, pulseStatic = false; const pulseLv = new Float32Array(12);   // the stage's pulse backdrop
     let lastSearchDur = 0;       // playing track's duration during manual search
     let themeMode = 'auto';      // auto | dark | light
     try { themeMode = GM_getValue('sl:theme', 'auto') || 'auto'; } catch (e) {}
@@ -9211,6 +9215,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🎤', 'Sing along on the stage', 'A switch in the stage’s Style popover: on, the vocal band drops 20 dB while the lyrics run full-screen and the rest of the mix stays as it is; off, or leaving the stage, lifts it. The Vocals setting itself is never touched, and the switch is a preference that comes back with the stage.'],
+          ['🎹', 'The musical key beside the tempo', 'A chroma histogram from the audio, matched against key profiles: the key of the track, named the musician’s way and the DJ’s (Camelot) on the Audio tab’s tempo line and in the track-info popover, remembered per track beside the tempo. It listens while an effect is on, needs half a minute, and speaks only when two estimates in a row agree.'],
+          ['🔥', 'A pulse backdrop for the stage', 'A third backdrop: twelve soft blobs, one per band of the spectrum, breathing with the music behind the lyrics. A still frame under reduced motion.'],
           ['🌐', 'The whole suite in your language', 'Every string the suite shows — the stage, the pins, the pill, the regrouped Tweaks, the Audio tab, the command palette — now has an entry in all eleven languages (179 were missing), and a line built from parts, like “Queue · <track>” or “Focus mode: off”, is translated part by part. Lyric lines, track titles and artist names are never touched, tooltips included.'],
           ['🛡', 'Twelve fixes from a full review', 'The promo-banner sweep could hide the whole player bar when a track was called “100% Royalty Free”; Enter on a hub button toggled SoundCloud’s playback; a switch turned off left its work behind (timestamps, playlist runtime, hidden banners); the playing-chapter highlight sat on the wrong row under a shelf; a source-line tap from another tab searched into a hidden body; a stuck header drag; Ctrl+K losing your place; a clock or a pin that waited for play to repaint; the hub’s light/dark not following a theme pick; volume written to storage every two seconds; a pinned chip strip that let rows show through; a stats chart that painted a full bar for a few seconds of play.'],
           ['⇢', 'A wrapped line fills row by row', 'The karaoke wipe used to light every row of a two-row line from the left at once, so the first words of the second row lit before they were sung. The wipe now runs across the text as one strip: the first row fills completely, then the second starts — in the panel, on the stage and in the floating window.'],
@@ -10120,8 +10127,40 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       stageOn = want;
       panel.classList.toggle('stage', stageOn);
       if (!stageOn) stagePop(false);
+      try { if (SUITE.singAlong) SUITE.singAlong(stageOn && !!+stagePref.sing); } catch (e) {}   // sing along lives on the stage only
+      try { if (SUITE.pulseBackdrop) SUITE.pulseBackdrop(stageOn && stagePref.bg === 'pulse'); } catch (e) {}
+      if (stageOn && stagePref.bg === 'pulse') ensurePulse();
       stFillLast = ''; stTmLast = -1;
       activeI = -1; lastFrameNow = -1;   // the seek bar repaints, the sung line recentres
+    }
+    // the pulse backdrop: twelve soft blobs, one per band of the audible chain's spectrum (the accent's warm family, a
+    // little rose in the mids), drawn small and blurred up by CSS at 30 fps; under reduced motion one still frame
+    function ensurePulse() {
+      if (pulseEl || !glowEl) return;
+      pulseEl = document.createElement('canvas'); pulseEl.className = 'stpulse'; pulseEl.width = 320; pulseEl.height = 200; pulseEl.setAttribute('aria-hidden', 'true');
+      glowEl.after(pulseEl); pulseCtx = pulseEl.getContext('2d'); pulseStatic = false;
+    }
+    function drawPulse(playing) {
+      if (!pulseEl || !pulseCtx || !stageOn || stagePref.bg !== 'pulse') return;
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce && pulseStatic) return;
+      if (!reduce && !playing) return;
+      const pn = performance.now(); if (!reduce && pn - pulseAt < 33) return; pulseAt = pn;
+      let b = null; try { b = SUITE.audioBands && SUITE.audioBands(); } catch (e) {}
+      const W = pulseEl.width, H = pulseEl.height, g = pulseCtx;
+      g.globalCompositeOperation = 'source-over'; g.fillStyle = '#0b0b0d'; g.fillRect(0, 0, W, H);
+      g.globalCompositeOperation = 'lighter';
+      const hues = [16, 22, 28, 34, 340, 350, 8, 14, 20, 26, 32, 38];
+      for (let k = 0; k < 12; k++) {
+        const target = reduce ? 0.35 : (b ? Math.max(0, Math.min(1, b[k])) : 0.08);
+        pulseLv[k] += (target - pulseLv[k]) * (target > pulseLv[k] ? 0.5 : 0.12);   // fast up, slow down
+        const lv = pulseLv[k], x = W * ((k + 0.5) / 12), y = H * (0.62 - 0.22 * Math.sin(k * 1.7)), r = Math.max(6, (0.08 + 0.3 * lv) * Math.min(W, H) * 1.4);
+        const grad = g.createRadialGradient(x, y, 0, x, y, r);
+        grad.addColorStop(0, 'hsla(' + hues[k] + ', 95%, 58%, ' + (0.10 + 0.5 * lv).toFixed(3) + ')');
+        grad.addColorStop(1, 'hsla(' + hues[k] + ', 95%, 50%, 0)');
+        g.fillStyle = grad; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+      }
+      if (reduce) pulseStatic = true;
     }
     function applyStagePref() {
       panel.classList.toggle('st-s', stagePref.fs === 's');
@@ -10130,6 +10169,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       panel.classList.toggle('st-center', stagePref.al === 'c');
       panel.classList.toggle('st-noart', !+stagePref.art);
       panel.classList.toggle('st-dark', stagePref.bg === 'dark');
+      panel.classList.toggle('st-pulse', stagePref.bg === 'pulse');
+      if (stagePref.bg === 'pulse') ensurePulse();
+      try { if (SUITE.singAlong) SUITE.singAlong(stageOn && !!+stagePref.sing); } catch (e) {}   // the vocal band softens on the stage while the switch is on
+      try { if (SUITE.pulseBackdrop) SUITE.pulseBackdrop(stageOn && stagePref.bg === 'pulse'); } catch (e) {}   // the pulse needs the chain's analyser
       try { const b = panel.querySelector('#bArt'); if (b) { b.classList.toggle('on', !!+stagePref.art); b.setAttribute('aria-pressed', +stagePref.art ? 'true' : 'false'); } } catch (e) {}
     }
     function setStagePref(k, v) {
@@ -10157,7 +10200,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       row('Size', 'fs', [['s', 'S'], ['m', 'M'], ['l', 'L'], ['xl', 'XL']]);
       row('Lines', 'al', [['l', 'Left'], ['c', 'Centred']]);
       if (stagePref.al !== 'c') row('Cover', 'art', [[1, 'Show'], [0, 'Hide']]);   // centred lines carry the cover in the header
-      row('Backdrop', 'bg', [['art', 'Artwork'], ['dark', 'Dark']]);
+      row('Backdrop', 'bg', [['art', 'Artwork'], ['dark', 'Dark'], ['pulse', 'Pulse']]);
+      row('Sing along', 'sing', [[0, 'Off'], [1, 'On']]);
     }
     function stagePop(v) {
       stPopOn = !!v;
@@ -10743,6 +10787,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // Keep the rAF alive so playback resumes instantly. Guards: only when the
       // play→pause transition has already settled (playing === lastPlaying) and the
       // "back to live" chip isn't mid-display (so it can still hide on its own).
+      try { drawPulse(playing); } catch (e) {}
       if (!playing && playing === lastPlaying && now === lastFrameNow && !chipShown
         && performance.now() >= pauseScrollUntil) return;
       lastFrameNow = now;
@@ -13504,6 +13549,14 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   /* ───────── behavioural features (guarded, enforced on a slow tick) ───────── */
   const VOL_KEY = 'enh:vol';
   let mutedVol = null;   // the level M muted from (null = not muted); the 1 Hz volume memory skips saves while set
+  // sing along (WP16): the stage's switch softens the vocal band (the Vocals knob's "Softer 100": the 200 Hz – 7 kHz
+  // centre at 0.1) without touching the Vocals setting, and lifts when the stage closes or the switch goes off
+  let singOn = false;
+  function singAlong(on) { on = !!on; if (singOn !== on) { singOn = on; applyFx(); repaintAudioSoon(); } return singOn; }
+  // the stage's pulse backdrop reads the chain's analyser, so while it shows the chain routes (exact passthrough when
+  // nothing else is on — the same road the open Audio tab takes)
+  let pulseOn = false;
+  function pulseBackdrop(on) { on = !!on; if (pulseOn !== on) { pulseOn = on; applyFx(); } return pulseOn; }
   let lastVolSaved = 0, lastVolStr = '';   // lastVolStr: the value last written — the same value is not written again every other tick
   function saveVol(v) { const vs = String(v); lastVolStr = vs; SET(VOL_KEY, vs); }   // every writer goes through here, or the tick's guard would skip a real change after a bump
   // playback speed — SoundCloud plays through the WEB AUDIO API with NO <audio>
@@ -13659,7 +13712,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   function fxUserOn() {
     return !!(CFG.eqOn || CFG.loudnessOn || CFG.fadeOn || CFG.enhanceOn || CFG.peqOn || CFG.nightOn || CFG.loudCompOn
       || CFG.crossfeedOn || CFG.monoOn || CFG.swapLR
-      || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0
+      || (CFG.stereoWidth | 0) !== 100 || (+CFG.balance || 0) !== 0 || (+CFG.vocalAmt || 0) !== 0 || singOn || pulseOn
       || (+CFG.tiltDb || 0) !== 0 || (+CFG.bassDb || 0) !== 0 || (+CFG.bassHarm || 0) > 0 || (+CFG.reverbAmt || 0) > 0 || (CFG.boostAmt | 0) > 100 || CFG.skipSilence);   // the trim listens through the source taps
   }
   function fxOn() { return fxUserOn() || audioTabOn; }
@@ -14593,7 +14646,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const harm = fxBypass ? 0 : cl(CFG.bassHarm, 0, 100) / 100 * 0.5;
       const rv = fxBypass ? 0 : cl(CFG.reverbAmt, 0, 100) / 100 * 0.35;
       const tilt = fxBypass ? 0 : cl(CFG.tiltDb, -4, 4);
-      const vocal = fxBypass ? 0 : cl(CFG.vocalAmt, -100, 100) / 100;
+      const vocal = fxBypass ? 0 : singOn ? -1 : cl(CFG.vocalAmt, -100, 100) / 100;   // sing along: Softer 100 on top of the setting
       const lcDb = on('loudCompOn') ? contourK * cl(CFG.loudCompAmt, 0, 9) : 0;
       const width = fxBypass ? 1 : cl(CFG.stereoWidth == null ? 100 : CFG.stereoWidth, 0, 200) / 100;
       const bal = on('balance') ? cl(CFG.balance, -100, 100) : 0;
@@ -15332,6 +15385,103 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (want !== (CFG.speed | 0)) { CFG.speed = want; save(); applySpeed(); try { refreshBar(); } catch (e) {} repaintAudioSoon(); }
     return true;
   }
+  /* ── musical key (WP16): a chroma histogram from the source taps' spectrum, matched against Temperley's
+   * key profiles (the Krumhansl–Schmuckler method). Each second of routed playback adds one spectral frame (55 Hz – 2.2 kHz, magnitude-weighted, the
+   * octaves above 1 kHz half-weighted so harmonics do not vote twice, each frame one vote whatever its level); from
+   * 24 frames on, the twelve rotations of the major and of the minor profile are correlated with the histogram, and the
+   * best wins when it stands clear of the runner-up and agrees with the previous estimate. Named the musician's way and
+   * the DJ's (Camelot), remembered per track for a year beside the tempo, under the same "Detect tempo & key" switch. ── */
+  const KEY_KEY = 'enh:key', KEY_MAX = 300;
+  // Temperley's profiles rather than Krumhansl's: on real uploads Krumhansl's read two F♯ major tracks as B♭ minor (the
+  // mediant minor shares six of seven notes and its profile rewards the third), Temperley's read both right
+  const KEY_MAJ = [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0];
+  const KEY_MIN = [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0];
+  const KEY_NAMES = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+  const CAMELOT_MAJ = ['8B', '3B', '10B', '5B', '12B', '7B', '2B', '9B', '4B', '11B', '6B', '1B'];
+  const CAMELOT_MIN = ['5A', '12A', '7A', '2A', '9A', '4A', '11A', '6A', '1A', '8A', '3A', '10A'];
+  const keyDet = { chroma: new Float64Array(12), bass: new Float64Array(12), frames: 0, last: null, stable: 0, pub: null, href: null, buf: null };
+  function keyReset(href) { keyDet.chroma.fill(0); keyDet.bass.fill(0); keyDet.frames = 0; keyDet.last = null; keyDet.stable = 0; keyDet.pub = null; keyDet.href = href || ''; }
+  function keyFeed(c, sr) {   // one spectral frame: the left and the right source tap, summed per pitch class
+    if (!c || !c.kL) return;
+    const n = c.kL.frequencyBinCount; if (!keyDet.buf || keyDet.buf.length !== n) keyDet.buf = new Float32Array(n);
+    const binHz = (sr || 48000) / (2 * n), frame = new Float64Array(12), low = new Float64Array(12); let peak = -Infinity;
+    for (const an of [c.kL, c.kR]) {
+      if (!an) continue;
+      an.getFloatFrequencyData(keyDet.buf);
+      const lo = Math.max(1, Math.floor(55 / binHz)), hi = Math.min(n - 1, Math.ceil(2200 / binHz));
+      for (let i = lo; i <= hi; i++) {
+        const db = keyDet.buf[i]; if (!(db > -90)) continue; if (db > peak) peak = db;
+        const f = i * binHz, pc = ((Math.round(69 + 12 * Math.log2(f / 440)) % 12) + 12) % 12;
+        const w = Math.pow(10, db / 20) * (f > 1000 ? 0.5 : 1);
+        frame[pc] += w; if (f < 260) low[pc] += w;
+      }
+    }
+    if (!(peak > -60)) return;   // silence is not a vote
+    let tot = 0; for (let i = 0; i < 12; i++) tot += frame[i]; if (!(tot > 0)) return;
+    for (let i = 0; i < 12; i++) keyDet.chroma[i] += frame[i] / tot;
+    let lt = 0; for (let i = 0; i < 12; i++) lt += low[i]; if (lt > 0) for (let i = 0; i < 12; i++) keyDet.bass[i] += low[i] / lt;
+    keyDet.frames++;
+  }
+  function keyEstimate() {
+    if (keyDet.frames < 24) return null;
+    const x = Array.from(keyDet.chroma), mx = x.reduce((a, b) => a + b, 0) / 12;
+    const corr = (prof, rot) => { const mp = prof.reduce((a, b) => a + b, 0) / 12; let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < 12; i++) { const a = x[(i + rot) % 12] - mx, b = prof[i] - mp; sxy += a * b; sxx += a * a; syy += b * b; } return sxx > 0 && syy > 0 ? sxy / Math.sqrt(sxx * syy) : 0; };
+    const scores = [];
+    for (let r = 0; r < 12; r++) { scores.push({ pc: r, minor: false, r: corr(KEY_MAJ, r) }); scores.push({ pc: r, minor: true, r: corr(KEY_MIN, r) }); }
+    scores.sort((a, b) => b.r - a.r);
+    let best = scores[0], tie = '';
+    const a = scores[0], b = scores[1], maj = a.minor ? b : a, min = a.minor ? a : b;
+    if (a.minor !== b.minor && min.pc === (maj.pc + 9) % 12 && a.r - b.r < 0.08) {   // relatives, close: the bass names the tonic
+      const bm = keyDet.bass[maj.pc], bn = keyDet.bass[min.pc];
+      if (bm !== bn) { best = bm > bn ? maj : min; tie = 'bass'; }
+    }
+    return { pc: best.pc, minor: best.minor, r: Math.round(best.r * 1000) / 1000, margin: Math.round(Math.abs(a.r - b.r) * 1000) / 1000, tie, frames: keyDet.frames };
+  }
+  function keyShort(p) { return p ? KEY_NAMES[p.pc] + (p.minor ? 'm' : '') : ''; }
+  function keyCamelot(p) { return p ? (p.minor ? CAMELOT_MIN : CAMELOT_MAJ)[p.pc] : ''; }
+  function keyMem() { const o = GET(KEY_KEY, null); return (o && typeof o === 'object') ? o : {}; }
+  function keyTick(m) {   // 1 Hz beside the tempo: a frame per second of routed playback, an estimate every 4 s, published when two agree
+    if (!CFG.bpmDetect) { if (keyDet.pub) keyDet.pub = null; return; }
+    const href = curTrackHref();
+    if (href !== keyDet.href) {
+      keyReset(href);
+      const mem = href ? keyMem()[href] : null;
+      if (mem && mem.k != null && Date.now() - (mem.t || 0) < 365 * 864e5) { keyDet.pub = { pc: mem.k % 12, minor: mem.k >= 12, conf: mem.c || 0, src: 'remembered' }; repaintAudioSoon(); }
+    }
+    if (m.paused) return;
+    const e = activeEntry(); if (!e || !e.chain) return;
+    keyFeed(e.chain, e.ctx && e.ctx.sampleRate);
+    if (keyDet.frames < 24 || keyDet.frames % 4) return;
+    const est = keyEstimate();
+    if (!est || est.r < 0.55 || est.margin < 0.03) { keyDet.last = null; keyDet.stable = 0; return; }
+    const same = keyDet.last && keyDet.last.pc === est.pc && keyDet.last.minor === est.minor;
+    keyDet.stable = same ? keyDet.stable + 1 : 0; keyDet.last = est;
+    if (keyDet.stable < 1) return;
+    const conf = Math.round(Math.min(1, est.margin / 0.12) * 100) / 100;
+    if (!keyDet.pub || keyDet.pub.src !== 'measured' || keyDet.pub.pc !== est.pc || keyDet.pub.minor !== est.minor) {
+      keyDet.pub = { pc: est.pc, minor: est.minor, conf, src: 'measured' };
+      if (href) { try { const map = keyMem(); map[href] = { k: est.pc + (est.minor ? 12 : 0), c: conf, t: Date.now() }; const keys = Object.keys(map); if (keys.length > KEY_MAX) { keys.sort((a, b) => (map[a].t || 0) - (map[b].t || 0)); keys.slice(0, keys.length - KEY_MAX).forEach((k) => delete map[k]); } SET(KEY_KEY, map); } catch (e) {} }
+      repaintAudioSoon();
+    }
+  }
+  function keyText() { const p = keyDet.pub; return p ? keyShort(p) + ' (' + keyCamelot(p) + ')' : ''; }
+  // twelve log-spaced band levels 0..1 (40 Hz – 12 kHz) from the audible chain's analyser, for the stage's pulse backdrop
+  let bandBuf = null;
+  function audioBands() {
+    try {
+      const e = activeEntry(); if (!e || !e.chain || !e.chain.analyser) return null;
+      const a = e.chain.analyser, n = a.frequencyBinCount, sr = (e.ctx && e.ctx.sampleRate) || 48000;
+      if (!bandBuf || bandBuf.length !== n) bandBuf = new Uint8Array(n);
+      a.getByteFrequencyData(bandBuf);
+      const out = new Array(12), binHz = sr / (2 * n);
+      for (let k = 0; k < 12; k++) {
+        const i0 = Math.max(1, Math.floor(40 * Math.pow(300, k / 12) / binHz)), i1 = Math.max(i0 + 1, Math.ceil(40 * Math.pow(300, (k + 1) / 12) / binHz));
+        let mx = 0; for (let i = i0; i < i1 && i < n; i++) if (bandBuf[i] > mx) mx = bandBuf[i];
+        out[k] = mx / 255;
+      }
+      return out;
+    } catch (e) { return null; }
+  }
   function bpmTick(m) {   // 1 Hz: track changes reset (and recall), an estimate every 4 s of routed playback
     if (!CFG.bpmDetect) { if (bpm.pub) bpm.pub = null; return; }
     if (m && m !== bpm.el) { bpm.el = m; bpm.n = 0; }   // a new element, a fresh envelope
@@ -15570,7 +15720,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const m = activeMedia();
       if (!m) { try { mediaSessionSync(null); } catch (e) {} return; }
       try { offerResume(m); recordResume(m); applyResume(m); applyPendingJump(m); mediaSessionSync(m); } catch (e) {}
-      try { bpmTick(m); recordPlayed(m); } catch (e) {}
+      try { bpmTick(m); keyTick(m); recordPlayed(m); } catch (e) {}
       try { if (CFG.pauseUnplug && !devWatching) watchDevices(); } catch (e) {}   // switched on later: start watching then
       // end-of-track silence trim (WP10): source peak < −60 dBFS for 2 s with under 30 s left → seek to the end.
       // Never mid-track (HLS seeks rebuffer, and ambient music has real silences); a rumble-free read is the tap's own.
@@ -16150,6 +16300,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (genre) metaChips.push(['Genre', genre]);
     if (bpm) metaChips.push(['BPM', String(bpm)]);
     else if (bpmText(false) && curTrackHref() === (d.permalink_url ? new URL(d.permalink_url).pathname : '')) metaChips.push(['BPM', bpmText(false).replace(/ BPM$/, '')]);
+    if (CFG.bpmDetect && keyDet.pub && curTrackHref() === (d.permalink_url ? new URL(d.permalink_url).pathname : '')) metaChips.push(['Key', keyShort(keyDet.pub) + ' · ' + keyCamelot(keyDet.pub)]);
     if (date) metaChips.push(['Released', date]);
     metaChips.push(['Length', len]);
     let chipHtml = '';
@@ -16634,7 +16785,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
       const bpmLine = D.createElement('div'); bpmLine.className = 'tw-note'; bpmLine.style.cssText = 'margin-top:8px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px'; bodyEl.appendChild(bpmLine);
       const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); bpmLine.append(bpmTxt, bpmUnlock);
-      const paintBpm = () => { const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); if (bpmTxt.textContent !== t) bpmTxt.textContent = t; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; };
+      const paintBpm = () => { const kt = (CFG.bpmDetect && keyDet.pub) ? ' · Key ' + keyText() + (keyDet.pub.src === 'remembered' && !(bpm.pub && bpm.pub.src === 'remembered') ? ' · remembered' : '') : ''; const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); const t2 = t + kt; if (bpmTxt.textContent !== t2) bpmTxt.textContent = t2; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; };
       paintBpm(); liveSync.push(paintBpm);
       paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
@@ -17131,7 +17282,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), scene: (op, name) => (op === 'save' ? sceneSave(name) : op === 'load' ? sceneLoad(name) : op === 'delete' ? sceneDelete(name) : sceneNames()), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, key: () => keyDet.pub, keyRaw: () => keyEstimate(), keyFrames: () => keyDet.frames, keyClear: () => { keyReset(''); keyDet.href = null; SET(KEY_KEY, {}); }, keyChroma: () => ({ c: Array.from(keyDet.chroma), b: Array.from(keyDet.bass), n: keyDet.frames }), singAlong: (on) => singAlong(on), singOn: () => singOn, pulseBackdrop: (on) => pulseBackdrop(on), pulseOn: () => pulseOn, audioBands: () => audioBands(), devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), scene: (op, name) => (op === 'save' ? sceneSave(name) : op === 'load' ? sceneLoad(name) : op === 'delete' ? sceneDelete(name) : sceneNames()), bpmDiag: () => { let hits = 0, mx = 0; for (let i = 0; i < bpm.n; i++) { if (bpm.env[i] > 0.25) hits++; if (bpm.env[i] > mx) mx = bpm.env[i]; } return { n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, hits, max: Math.round(mx * 100) / 100, last: bpm.last, stable: bpm.stable }; },
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -17364,7 +17515,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         ['Cue points', ['scssgm:sl:cues'], ''],
         ['Resume positions', ['scssgm:enh:resumeMap'], ''],
         ['Played tracks', ['scssgm:enh:played'], 'What the feed rule and the ✓ marks read'],
-        ['Measured tempos', ['scssgm:enh:bpm'], ''],
+        ['Measured tempos', ['scssgm:enh:bpm', 'scssgm:enh:key'], ''],
         ['Listen later', ['scssgm:enh:later'], ''],
         ['Notes', ['scssgm:enh:notes'], ''],
         ['Audio scenes', ['scssgm:enh:scenes'], ''],
@@ -17447,7 +17598,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     ['smartRewind', 'toggle', 'Rewind a little after a long pause', 'On tracks of five minutes or more: a pause of three minutes resumes 5 s back, fifteen minutes 15 s back'],
     ['resumePos', 'select', 'Resume long tracks', 'Mixes and podcasts over 10 minutes remember where you stopped, for a month', [['ask', 'Offer to resume'], ['auto', 'Resume automatically'], ['off', 'Off']]],
     ['startPage', 'select', 'Start on', 'Where soundcloud.com opens when you come back to it', [['', 'SoundCloud’s choice'], ['/feed', 'Feed'], ['/you/library', 'Library'], ['/you/likes', 'Likes'], ['/discover', 'Discover']]],
-    ['bpmDetect', 'toggle', 'Detect tempo', 'The BPM, measured from the audio while an effect is on, in the Audio tab and track info'],
+    ['bpmDetect', 'toggle', 'Detect tempo & key', 'The BPM and the musical key with its Camelot code, measured from the audio while an effect is on, in the Audio tab and track info'],
     ['laterAutoClear', 'toggle', 'Clear Listen later after playing', 'Thirty seconds into a saved track takes it off the shelf'],
     ['quietHours', 'toggle', 'Quiet hours', 'Night mode and the −18 LUFS loudness target between the hours below; both go back at the end'],
     ['quietFrom', 'select', 'Quiet from', 'When the quiet window starts', [['20', '8 pm'], ['21', '9 pm'], ['22', '10 pm'], ['23', '11 pm'], ['0', 'Midnight']]],
@@ -17965,6 +18116,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   /* ── audio commands for the palette: toggles, speeds and the tempo lock, with the live state for labels ── */
   try {
     SUITE.audioState = () => ({ night: !!CFG.nightOn, enhance: !!CFG.enhanceOn, loudness: !!CFG.loudnessOn, eq: !!CFG.eqOn, mono: !!CFG.monoOn, crossfeed: !!CFG.crossfeedOn, speed: CFG.speed | 0, tempoLock: CFG.tempoLock | 0, bpm: bpm.pub && bpm.pub.bpm > 0 ? bpm.pub.bpm : 0 });
+    SUITE.singAlong = singAlong; SUITE.audioBands = audioBands; SUITE.pulseBackdrop = pulseBackdrop;
     SUITE.audioCmd = (name, arg) => {
       const flip = (key, label) => { CFG[key] = !CFG[key]; save(); applyFx(); repaintAudioSoon(); toast(label + (CFG[key] ? ' on' : ' off')); return true; };
       switch (name) {

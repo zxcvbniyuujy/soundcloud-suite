@@ -66,6 +66,9 @@ const FIXTURE_SRC = `
     C: () => wav((t) => sine(t) * Math.pow(10, -20 / 20), 10),
     // K: a 128 BPM kick pattern (60 Hz decaying bursts, a soft 8th-note tick between), 15 s, for the tempo estimator
     K: () => wav((t) => { const beat = 60 / 128, p = t % beat, q = (t + beat / 2) % beat; const kick = p < 0.12 ? Math.sin(2 * Math.PI * 60 * t) * Math.exp(-p * 28) * 0.85 : 0; const tick = q < 0.02 ? Math.sin(2 * Math.PI * 4000 * t) * Math.exp(-q * 250) * 0.2 : 0; return kick + tick; }, 15),
+    // Q: a C major progression (C · F · G · Am, two seconds each: root, third, fifth and the octave with two harmonics,
+    //    the root an octave down), 32 s — the key estimator's C major / 8B
+    Q: () => { const chords = [[48, 52, 55, 60], [53, 57, 60, 65], [55, 59, 62, 67], [45, 48, 52, 57]]; const hz = (m) => 440 * Math.pow(2, (m - 69) / 12); return wav((t) => { const ch = chords[Math.floor(t / 2) % 4]; let v = 0; for (const m of ch) { const f = hz(m); v += Math.sin(2 * Math.PI * f * t) + 0.4 * Math.sin(2 * Math.PI * 2 * f * t) + 0.2 * Math.sin(2 * Math.PI * 3 * f * t); } v += 0.8 * Math.sin(2 * Math.PI * hz(ch[0] - 12) * t); return v * 0.06; }, 32); },
     // D: 997 Hz tone bursts, peak −3 dBFS, 50 ms on / 350 ms off, 12 s (≈ −13 LUFS)
     D: () => wav((t) => ((t % 0.4) < 0.05 ? sine(t) * Math.pow(10, -3 / 20) : 0), 12),
     // E: 997 Hz bed at −26 dBFS with 10 ms bursts at −3 dBFS every 400 ms, 12 s (≈ −18.2 LUFS, peak 0.708):
@@ -2295,6 +2298,46 @@ const FIXTURE_SRC = `
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseenter'))); await sleep(100);
     eq((await hubBtn()).tipText, 'Lyrics hub', 'the plain label is back');
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseleave')));
+    await closeHub(); await stopPlay();
+  });
+
+  scenario('key-detect', async () => {
+    // WP16 musical key: a chroma histogram from the source taps against the Krumhansl profiles. A C major progression
+    // reads C major / 8B within 45 s of routed playback (a frame a second, 24 frames, two agreeing estimates); the
+    // Audio tab's tempo line names it
+    await dbg(`d.keyClear();`);
+    await play('Q', { loop: true });
+    await audioTab();   // routes the chain: the taps exist only when routed
+    let k = null; for (let i = 0; i < 45; i++) { await sleep(1000); k = await dbg(`return d.key();`); if (k) break; }
+    assert(k, 'a key published within 45 s (frames ' + (await dbg(`return d.keyFrames();`)) + ', raw ' + JSON.stringify(await dbg(`return d.keyRaw();`)) + ')');
+    eq(k.pc, 0, 'C'); eq(k.minor, false, 'major'); eq(k.src, 'measured', 'measured');
+    const raw = await dbg(`return d.keyRaw();`); assert(raw && raw.r >= 0.6, 'a clear profile match (r ' + (raw && raw.r) + ', margin ' + (raw && raw.margin) + ')');
+    await sleep(400); const txt = await abody(`return a.textContent;`); assert(/Key C \(8B\)/.test(txt), 'the Audio tab names it: ' + ((txt.match(/Key[^·]{0,14}/) || [''])[0]));
+    await closeHub(); await stopPlay();
+  });
+
+  scenario('sing-along', async () => {
+    // WP16 sing along: the stage's switch softens the vocal band (0.1 = −20 dB on the 200 Hz – 7 kHz centre) without
+    // touching the Vocals setting, routes the chain while on, and leaves both as they were when off
+    await play('F', { loop: true });
+    eq(await dbg(`return d.get('vocalAmt');`), 0, 'Vocals at Normal');
+    eq(await dbg(`return d.singAlong(true);`), true, 'on');
+    await sleep(800); let s = await snap(); eq(s.routed, true, 'routed while singing'); approx(s.params.vGain.gain, 0.1, 0.01, 'vocal band at 0.1');
+    eq(await dbg(`return d.get('vocalAmt');`), 0, 'the Vocals setting untouched');
+    eq(await dbg(`return d.singAlong(false);`), false, 'off');
+    await sleep(800); s = await snap(); approx(s.params.vGain.gain, 1, 0.01, 'vocal band back to 1');
+    await stopPlay();
+  });
+
+  scenario('audio-bands', async () => {
+    // WP16 the stage's pulse backdrop reads twelve band levels from the audible chain: nothing routed reads null, music
+    // lights the bands with the kick and the bass in the low ones
+    await play('M', { loop: true });
+    eq(await dbg(`return d.audioBands();`), null, 'nothing routed → null');
+    await audioTab(); await sleep(900);
+    const b = await dbg(`return d.audioBands();`);
+    assert(Array.isArray(b) && b.length === 12, 'twelve bands'); assert(Math.max(...b) > 0.2, 'music lights the bands (max ' + Math.max(...b).toFixed(2) + ')');
+    assert(b[0] + b[1] + b[2] > b[9] + b[10] + b[11], 'the kick and the bass sit in the low bands (' + b.map((x) => x.toFixed(2)).join(' ') + ')');
     await closeHub(); await stopPlay();
   });
 

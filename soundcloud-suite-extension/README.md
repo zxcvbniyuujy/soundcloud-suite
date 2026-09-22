@@ -117,6 +117,16 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **Sing along on the stage** — a switch in the stage's Style popover softens the
+  vocal band by 20 dB while the lyrics run full-screen; off, or leaving the
+  stage, lifts it. The Vocals setting is never touched.
+- **The musical key beside the tempo** — a chroma histogram from the audio
+  matched against Temperley's key profiles (the Krumhansl–Schmuckler method),
+  a bass-line tie-break between a major and its relative minor; named the
+  musician's way and the DJ's (Camelot) on the Audio tab and in track info,
+  remembered per track under "Detect tempo & key".
+- **A pulse backdrop for the stage** — twelve soft blobs, one per spectrum band,
+  breathing with the music behind the lyrics; a still frame under reduced motion.
 - **The whole suite in your language** — every string the suite shows has an
   entry in all eleven languages (179 were missing after the stage, pins, pill
   and Tweaks waves), and a line built from parts, like “Queue · <track>” or
