@@ -116,6 +116,7 @@ const TOKENS = {
   gtok: (h) => h === 'api.genius.com' || h === 'genius.com' || h.endsWith('.genius.com'),
   lbtok: (h) => h === 'api.listenbrainz.org',
 };
+const hasTok = (name) => Object.prototype.hasOwnProperty.call(TOKENS, name);   // "constructor" is not a token
 const TOKEN_KEY = (name) => 'scss:tok:' + name;
 const TOKEN_PH = /\$SCSS_TOKEN\(([a-z]+)\)/g;
 function readTokens(names) {
@@ -131,7 +132,7 @@ function fillTokens(headers, host) {
   const wanted = new Set();
   for (const k of Object.keys(headers)) { const v = String(headers[k]); let m; TOKEN_PH.lastIndex = 0; while ((m = TOKEN_PH.exec(v))) wanted.add(m[1]); }
   if (!wanted.size) return Promise.resolve(headers);
-  for (const n of wanted) if (!TOKENS[n] || !TOKENS[n](host)) return Promise.reject(new Error('token not for this host: ' + n));
+  for (const n of wanted) if (!hasTok(n) || !TOKENS[n](host)) return Promise.reject(new Error('token not for this host: ' + n));
   return readTokens([...wanted]).then((toks) => {
     for (const n of wanted) if (!toks[n]) throw new Error('no token: ' + n);
     const out = {};
@@ -144,7 +145,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!sender || !sender.tab || !SC_FRAME.test(String(sender.url || ''))) { sendResponse({ ok: false }); return; }
   if (msg.scss === 'tok-set') {
     const name = String(msg.name || '');
-    if (!TOKENS[name]) { sendResponse({ ok: false }); return; }
+    if (!hasTok(name)) { sendResponse({ ok: false }); return; }
     const value = typeof msg.value === 'string' ? msg.value.trim().slice(0, 512) : '';
     try {
       if (value) chrome.storage.local.set({ [TOKEN_KEY(name)]: value }, () => { void chrome.runtime.lastError; sendResponse({ ok: true, has: true }); });

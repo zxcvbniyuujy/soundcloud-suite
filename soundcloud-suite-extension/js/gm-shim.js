@@ -16,6 +16,13 @@
   window.__SCSS_SHIM__ = true;
 
   const PFX = 'scssgm:';
+  // Built-ins taken now, before any page script runs: the channel's traffic goes through these copies, so a script
+  // that later patches dispatchEvent, CustomEvent, the detail getter or JSON sees none of it and never gets the element
+  const apply = Reflect.apply, CE = CustomEvent, dispatch = EventTarget.prototype.dispatchEvent;
+  const detailOf = Object.getOwnPropertyDescriptor(CustomEvent.prototype, 'detail').get;
+  const parse = JSON.parse, stringify = JSON.stringify, Str = String;
+  const emit = (el, type, init) => apply(dispatch, el, [new CE(type, init)]);
+  const detailOfEvent = (e) => apply(detailOf, e, []);
 
   // the suite asks for unsafeWindow; in the main world we ARE the page
   window.unsafeWindow = window;
@@ -100,12 +107,12 @@
   let chan = null, linked = false;
   try {
     chan = document.createElement('span');
-    chan.addEventListener('scss-xhr-res', (e) => { let d = null; try { d = JSON.parse(String(e.detail)); } catch (err) { d = null; } settle(d); });
+    chan.addEventListener('scss-xhr-res', (e) => { let d = null; try { d = parse(Str(detailOfEvent(e))); } catch (err) { d = null; } settle(d); });
     chan.addEventListener('scss-chan!', () => { linked = true; });
     const offer = () => {
       const root = document.documentElement || document.head || document.body;
       if (linked || !root) return;
-      try { root.appendChild(chan); chan.dispatchEvent(new CustomEvent('scss-chan', { bubbles: true })); } catch (e) {}
+      try { root.appendChild(chan); emit(chan, 'scss-chan', { bubbles: true }); } catch (e) {}
       try { chan.remove(); } catch (e) {}
     };
     document.addEventListener('scss-chan?', offer);
@@ -120,7 +127,7 @@
   // there is no way to reach them, and the answer is null
   let mseq = 0;
   const mpending = new Map();
-  if (chan) chan.addEventListener('scss-msg-res', (e) => { let d = null; try { d = JSON.parse(String(e.detail)); } catch (err) { d = null; } const cb = d && mpending.get(d.id); if (!cb) return; mpending.delete(d.id); cb(d.res); });
+  if (chan) chan.addEventListener('scss-msg-res', (e) => { let d = null; try { d = parse(Str(detailOfEvent(e))); } catch (err) { d = null; } const cb = d && mpending.get(d.id); if (!cb) return; mpending.delete(d.id); cb(d.res); });
   const ask = (msg) => new Promise((res) => {
     const send = (tries) => {   // the suite asks at boot, which may land a tick before the bridge has linked: wait up to 2 s
       if (!chan) { res(null); return; }
@@ -128,7 +135,7 @@
       const id = ++mseq;
       mpending.set(id, res);
       setTimeout(() => { if (mpending.delete(id)) res(null); }, 5000);
-      try { chan.dispatchEvent(new CustomEvent('scss-msg', { detail: JSON.stringify({ id, msg }) })); } catch (e) { mpending.delete(id); res(null); }
+      try { emit(chan, 'scss-msg', { detail: stringify({ id, msg }) }); } catch (e) { mpending.delete(id); res(null); }
     };
     send(40);
   });
@@ -175,7 +182,7 @@
           anonymous: !!opts.anonymous,
         },
       };
-      if (linked && chan) chan.dispatchEvent(new CustomEvent('scss-xhr', { detail: JSON.stringify(msg) }));
+      if (linked && chan) emit(chan, 'scss-xhr', { detail: stringify(msg) });
       else window.postMessage(msg, location.origin);
     } catch (e) {
       clearTimeout(guard);

@@ -15194,7 +15194,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   //    source, so the value is the track's — ReplayGain semantics — whatever the chain does) ──
   const newestRouted = activeEntry;   // the audible chain (see activeEntry)
   function loudReset(href) {
-    lnorm.href = href; lnorm.blocks = []; lnorm.recent = []; lnorm.trackPeak = 0; lnorm.curGainDb = 0; lnorm.lint = NaN; lnorm.dur = NaN; lnorm.el = null;
+    lnorm.href = href; lnorm.blocks = []; lnorm.recent = []; lnorm.trackPeak = 0; lnorm.curGainDb = 0; lnorm.lint = NaN; lnorm.dur = NaN; lnorm.el = null; lnorm.elIdle = 0;
     lnorm.measuring = true; lnorm.src = ''; lnorm.pending = false; lnorm.lastWrite = 0;
     delete meter.m; delete meter.s; delete meter.i; delete meter.gainDb;
   }
@@ -15244,7 +15244,17 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       restoreTrackLoud();   // a track change, or a restore deferred until the duration is known
       const m = activeMedia();
       if (!m || m.paused || !(m.readyState > 0)) return;
-      if (lnorm.el && m !== lnorm.el) return;   // the next track on a fresh element before the badge caught up: not this track's audio
+      if (lnorm.el && m !== lnorm.el) {
+        // another element plays. While the pinned one still plays too, or stopped less than two seconds ago, this is
+        // the next track arriving on a fresh element before the badge caught up: not this track's audio, hold the pin.
+        // Past that, the pin was taken on the old element while this track's own element still buffered (the badge
+        // changed first), and the element that plays is this track's audio: measure it
+        if (!lnorm.el.paused && !lnorm.el.ended) { lnorm.elIdle = 0; return; }
+        if (!lnorm.elIdle) { lnorm.elIdle = Date.now(); return; }
+        if (Date.now() - lnorm.elIdle < 2000) return;
+        lnorm.el = m; lnorm.elIdle = 0;
+      }
+      if (!lnorm.el) lnorm.el = m;   // pinned lazily when the badge changed before any element played
       if (isFinite(m.duration) && m.duration > 0) lnorm.dur = m.duration;
       if (!lnorm.measuring) return;   // a complete remembered value is applied — nothing to measure
       // SoundCloud's own volume slider sits before the capture point (the source node hears the attenuated signal):
@@ -15312,7 +15322,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (href !== lastLoudUrl) {
         rememberLoud(true);
         lastLoudUrl = href; loudReset(href);
-        lnorm.el = activeMedia();   // the element this measurement belongs to
+        const am = activeMedia();   // the element this measurement belongs to — only one that plays now; else the tick pins the first that does
+        lnorm.el = (am && !am.paused && am.readyState > 0) ? am : null;
         lnorm.pending = !!href;
       }
       if (!lnorm.pending) return;
@@ -17396,7 +17407,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // ── the jump strip: five chips above the header that scroll to a section and follow the scroll ──
       const nav = D.createElement('nav'); nav.className = 'tw-nav'; nav.setAttribute('aria-label', 'Audio sections');
       const secEl = (t) => [...bodyEl.querySelectorAll('.tw-sec')].find((s) => s.textContent === t);
-      const jumps = [['EQ', hd], ['Play', secEl('Playback')], ['Tone', secEl('Tone')], ['Level', secEl('Loudness & dynamics')], ['Space', secEl('Stereo')]].filter((j) => j[1]);
+      // the chips carry the sections' own names: "Play" and "Space" read as the play button and the spacebar in the dictionaries
+      const jumps = [['EQ', hd], ['Playback', secEl('Playback')], ['Tone', secEl('Tone')], ['Level', secEl('Loudness & dynamics')], ['Stereo', secEl('Stereo')]].filter((j) => j[1]);
       const jumpBtns = jumps.map(([name, target]) => {
         const b = D.createElement('button'); b.type = 'button'; b.className = 'tw-chip'; b.textContent = name;
         b.addEventListener('click', () => {
