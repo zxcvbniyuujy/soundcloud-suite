@@ -118,7 +118,7 @@ never plays.
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
 - **A tempo you can trust** — the onset feed is now spectral flux: a 1024-point
-  FFT of the decimated mix 172 times a second in the audio worklet, the rise of
+  FFT of the decimated mix about 172 times a second (at 44.1 kHz) in the audio worklet, the rise of
   24 log-spaced bands summed per frame. Every 4 s the last 32 s are gated (real
   onsets, not silence, a held note or speech) and autocorrelated; each estimate
   is a vote, votes within 3 % cluster and fade with a 30 s half-life, and the
@@ -126,6 +126,13 @@ never plays.
   tempo change in the track wins within half a minute. On eight recorded uploads
   with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and
   an 87 BPM track with a triplet feel reads its 130 BPM pulse.
+- **A dot on the beat** — beside the tempo readout a dot blinks on each beat and
+  the stage's pulse backdrop swells on it. The phase comes from the onset
+  envelope: over the last 12 s, the comb at a period within 1.5 % of the
+  published tempo that gathers the most onset strength, refitted every 2 s and
+  trusted only once two fits in a row land on the same beat within 25 ms; a
+  track whose beat the comb cannot hold shows no clock. The output latency is
+  added so the dot and the sound agree. Hidden under reduced motion.
 - **No stranger's sheet on an unknown upload** — a candidate that only matched
   the title (a famous song's Genius page, a synced entry of the wrong length)
   could score 0.9 and render: the random lyrics on underground tracks. Every

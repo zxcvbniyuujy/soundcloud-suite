@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.73.0
+// @version      4.74.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.73.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.74.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -4769,12 +4769,12 @@
     if (c.full && !titles.some((t) => normKey(t) === normKey(c.full))) titles.push(c.full);
 
     const hints = [];
-    const hint = (a, conf) => {
+    const hint = (a, conf, feat) => {   // feat: a credit from the title's "(feat. …)" — it vouches for a candidate that credits the feature too, never for the featured artist's own song
       a = (a || '').trim();
       if (!a) return;
       const k = normKey(a);
       if (!k || hints.some((h) => normKey(h.a) === k)) return;
-      hints.push({ a, conf });
+      hints.push(feat ? { a, conf, feat: 1 } : { a, conf });
     };
     if (c.artist) hint(c.artist, c.src === 'parens' ? 0.8 : 1.0);
     if (c.handle) hint(c.handle, 0.85);   // "@HANDLE Title" uploads: the handle IS the artist
@@ -4784,8 +4784,8 @@
         .map((p) => p.trim()).filter((p) => p.length > 1).slice(0, 3)
         .forEach((p) => hint(p, 0.75));
     }
-    if (c.artist && featStr) hint(c.artist + ' ' + featStr, 0.85);
-    c.feats.slice(0, 2).forEach((f) => hint(f, 0.55));
+    if (c.artist && featStr) hint(c.artist + ' ' + featStr, 0.85, true);
+    c.feats.slice(0, 2).forEach((f) => hint(f, 0.55, true));
     hint(upC, 0.7);   // artists usually upload their own tracks — trust the uploader more
     if (normKey(up) !== normKey(upC)) hint(up, 0.5);
     if (c.artist) hint(c.title, 0.35);
@@ -6421,10 +6421,10 @@
   function confirmCand(c, G, dur) {
     if (c.picked) return 'pick';
     if (c.dur > 0 && dur > 0 && Math.abs(c.dur - dur) <= Math.max(3, 0.015 * dur)) return 'dur';
-    const parts = artistParts(c);
+    const parts = artistParts(c), primary = normKey(c.a || '');
     for (const h of G.hints) {
       if (h.d || h.conf < 0.5) continue;
-      for (const p of parts) if (p && sim(h.a, p) >= 0.75) return 'artist';
+      for (const p of parts) if (p && !(h.feat && normKey(p) === primary) && sim(h.a, p) >= 0.75) return 'artist';
     }
     // "Title - Artist" uploads split the wrong way round: a candidate matching BOTH sides crosswise is the song itself
     const cl = G.clean || {};
@@ -6550,6 +6550,15 @@
     } catch (e) {}
     const G = buildGuesses(meta);
     const FLAGS = (G.clean && G.clean.flags) || {};
+    // a real vouch for an artist (SoundCloud's metadata, the description, a length-matched store entry): a hint a
+    // candidate derived for the same name becomes real instead of being skipped as a duplicate
+    const vouch = (a, conf, front) => {
+      const k = normKey(a); if (!k) return false;
+      const h = G.hints.find((x) => normKey(x.a) === k);
+      if (!h) { if (front) G.hints.unshift({ a, conf }); else G.hints.push({ a, conf }); return true; }
+      if (!h.d) return false;
+      h.d = 0; h.conf = Math.max(h.conf, conf); return true;
+    };
     // collective aliases: the uploader (e.g. a crew/label) maps to the real
     // credited artist(s). User-taught and remembered, so a whole collective
     // resolves correctly after one correction.
@@ -6575,6 +6584,7 @@
     } catch (e) {}
     const banTag = (it) => (it.src || '') + '|' + normKey((it.a || '') + ' ' + (it.t || ''));
     const descBanned = () => !!(banned && banned.includes('scdesc|' + normKey((meta.uploader || '') + ' ' + (meta.title || ''))));
+    const nearRun = (meta.nearRun = (meta.nearRun || 0) + 1);   // only the newest run for this track may write meta.near
     Trail.add(`find "${meta.title}" · up:${meta.uploader} · dur:${meta.dur || '?'} · gmode:${Gmode.get()}`);
     return new Promise((resolve, reject) => {
       const t0 = performance.now();
@@ -6598,7 +6608,7 @@
           if (!v.synced && v.src !== 'ovh' && v.src !== 'mxm') return true;
           let ref = null;
           for (const p of pool) {
-            if (p.src !== 'genius' || p.score < 0.6) continue;
+            if (p.src !== 'genius' || (p.raw != null ? p.raw : p.score) < 0.6) continue;   // an unsure Genius page still makes a fine reference text
             const b = bodies.get(p.id);
             if (b && b.state === 'ok' && b.lines && b.lines.length >= 8) { ref = b; break; }
           }
@@ -6629,7 +6639,7 @@
         if (!done) {
           done = true; resolved = v || null; stop();
           // the strangers that fit the title and nothing else: the "no lyrics" card names them, and Search starts from the first
-          try { meta.near = v ? null : pool.filter((c) => !c.sure && c.a && (c.ts || 0) >= 0.8).sort((a, b) => (b.raw || 0) - (a.raw || 0)).slice(0, 3).map((c) => ({ a: c.a, t: c.t })); } catch (e) {}
+          try { if (meta.nearRun === nearRun) meta.near = v ? null : pool.filter((c) => !c.sure && c.a && (c.ts || 0) >= 0.8).sort((a, b) => (b.raw || 0) - (a.raw || 0)).filter((c, i, arr) => arr.findIndex((o) => normKey(o.a) === normKey(c.a)) === i).slice(0, 3).map((c) => ({ a: c.a, t: c.t })); } catch (e) {}
           Trail.add(v ? `→ ${v.src}${v.synced ? '/synced' : '/text'} "${v.t}" (${(v.score || 0).toFixed(2)}${v.low ? ' low' : ''})` : '→ no match');
           resolve(v);
         }
@@ -6673,7 +6683,7 @@
         // lookups at the catalogs that ARE reachable (the trail showed
         // NetEase naming the right song at 0.77 and the engine giving up)
         const pivot = () => {
-          if (pivotFired || done || (c.score || 0) < 0.6 || !c.a) return;
+          if (pivotFired || done || (c.raw != null ? c.raw : (c.score || 0)) < 0.6 || !c.a) return;
           pivotFired = true;
           Trail.add(`body failed for strong "${c.t}" — pivoting to exact synced lookups`);
           track(lrcGet({ track: c.t, artist: c.a, dur: meta.dur > 0 ? meta.dur : (c.dur || 0) }));
@@ -7067,7 +7077,7 @@
             if (pm.writer_composer) {
               String(pm.writer_composer).split(/\s*(?:,|&|\/|\band\b)\s*/i).slice(0, 3).forEach((w) => {
                 w = w.trim();
-                if (w.length > 1 && !G.hints.some((h) => normKey(h.a) === normKey(w))) G.hints.push({ a: w, conf: 0.6 });
+                if (w.length > 1) vouch(w, 0.6, false);
               });
             }
             const altT = (pm.release_title || '').trim() || (d.title || '').trim();
@@ -7093,8 +7103,7 @@
               if (dl) { meta.descLyrics = dl; Trail.add(`sc description: possible lyrics (${dl.filter(Boolean).length} lines)`); }
             }
           }
-          if (newArtist && !G.hints.some((h) => normKey(h.a) === normKey(newArtist))) {
-            G.hints.unshift({ a: newArtist, conf: 0.95 });
+          if (newArtist && vouch(newArtist, 0.95, true)) {
             rescoreAll(); judge();
             fireForArtist(newArtist);
           } else {
@@ -7123,7 +7132,7 @@
             // the store's pick vouches for an artist only when its length matches this upload or its artist was already
             // a real hint — by title alone it names a same-title stranger as readily as any catalog
             const vouched = (best.dur > 0 && meta.dur > 0 && Math.abs(best.dur - meta.dur) <= Math.max(3, 0.015 * meta.dur)) || G.hints.some((h) => !h.d && h.conf >= 0.5 && sim(h.a, best.a) >= 0.75);
-            if (!G.hints.some((h) => normKey(h.a) === normKey(best.a))) G.hints.push({ a: best.a, conf: 0.9, d: vouched ? 0 : 1 });
+            if (vouched) vouch(best.a, 0.9, false); else if (!G.hints.some((h) => normKey(h.a) === normKey(best.a))) G.hints.push({ a: best.a, conf: 0.9, d: 1 });
             if (!G.titles.some((t) => sameTitle(t, best.t))) G.titles.push(best.t);
             rescoreAll(); judge();
             track(lrcGet({ track: best.t, artist: best.a, album: best.al, dur: best.dur }));
@@ -7329,6 +7338,7 @@
   })();
 
   const Inflight = new Map();
+  const nearByKey = new Map();   // the same-title strangers a search refused, per track key, for the card on a cached miss
   // a miss found while a provider was parked (LRCLIB cooling down, Genius behind Cloudflare, Musixmatch's token dead,
   // the network gone) says little about the track: remember it for this session, not for two days
   function searchDegraded() { try { return lrcCooldownActive() || Gmode.get() !== 'direct' || MXM.dead() || navigator.onLine === false; } catch (e) { return false; } }
@@ -7856,6 +7866,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel .tw-bar { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); margin: 12px 0 6px; overflow: hidden; }
 .panel .tw-bar i { display: block; height: 100%; border-radius: 4px; background: #ff5500; }
 .panel .tw-note { font-size: 10.5px; color: #85858d; line-height: 1.5; }
+.panel .tw-beat { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--acc); opacity: .22; transform: scale(.85); transition: opacity .24s ease-out, transform .24s ease-out; flex: none; }
+.panel .tw-beat.on { opacity: 1; transform: scale(1.3); transition: none; }
 .panel .tw-empty { text-align: center; color: #7c7c84; font-size: 12px; padding: 34px 0 10px; }
 .panel .tw-chip:focus-visible, .panel .tw-sw:focus-visible, .panel .tw-btn:focus-visible, .panel .tw-card:focus-visible, .panel .tw-chips button:focus-visible, .panel .tw-color:focus-visible { outline: 2px solid var(--acc, #ff5500); outline-offset: 2px; }
 .panel .tw-head { display: flex; align-items: center; gap: 10px; margin: 6px 0 12px; }
@@ -7872,7 +7884,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel .tw-field { flex: 1; min-width: 0; background: rgba(255,255,255,0.05); border: 0; border-radius: 10px; color: #e6e6ea; font: inherit; font-size: 12px; font-weight: 500; padding: 8px 11px; outline: 0; }
 .panel .tw-field:focus { background: rgba(255,255,255,0.07); box-shadow: 0 0 0 2px rgba(255,85,0,0.4); }
 .panel .tw-foot { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
-@media (prefers-reduced-motion: reduce) { .panel .tw-sw, .panel .tw-sw i, .panel .tw-card i, .panel .tw-chip, .panel .tw-btn { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .panel .tw-sw, .panel .tw-sw i, .panel .tw-card i, .panel .tw-chip, .panel .tw-btn { transition: none !important; } .panel .tw-beat { display: none !important; } }
 
 /* ── mini lyric bar: the current line floats above the player even with
       the panel closed; click it to open the full panel ── */
@@ -9256,7 +9268,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
-          ['♩', 'A tempo you can trust', 'The onset feed was two band energies per block with a flux that saturated on every frame, so Best Friend read 139, 148 and 72 BPM across one play. The worklet now takes a thousand-point FFT of the mix 172 times a second and reports spectral flux across 24 bands; every 4 s the last 32 s vote, votes within 3 % cluster and fade with a 30 s half-life, and the heaviest cluster publishes — one odd window never flips the figure, a real change of tempo in the track wins within half a minute. On eight recorded uploads with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and an 87 BPM track with a triplet feel reads its 130 BPM pulse.'],
+          ['◉', 'A dot on the beat', 'Beside the tempo readout a dot blinks on each beat, and the stage’s pulse backdrop swells on it. The beat’s phase comes from the same onset envelope the tempo does: over the last 12 s, the comb that gathers the most onset strength at a period within 1.5 % of the published tempo, refitted every 2 s and trusted only once two fits in a row land on the same beat within 25 ms — a track whose beat the comb cannot hold shows no clock rather than a wrong one. The output latency is added, so the dot and the sound agree.'],
+          ['🔎', 'Nine fixes from a review of the last release', 'A silence-to-signal edge (a seek, a resume, a track’s first frame) rose in every band at once and owned the tempo window for 32 s — it is clipped now. A speed change drops the window that mixed two rates. A remembered tempo keeps its standing against a stray vote and becomes measured once the track confirms it; figures the old detector measured are never recalled. Devices at 96 or 192 kHz decimate properly. In the lyrics finder, SoundCloud’s own artist credit now vouches even after a candidate named the same artist, a title’s feature credit cannot vouch for the featured artist’s own song, the cross-check against a Genius text works again for unvouched pages, and sheets cached before the gate are searched once more (a nudge or pins on the same sheet carry over). The “no lyrics” card names each artist once and keeps its list for the session.'],
+          ['♩', 'A tempo you can trust', 'The onset feed was two band energies per block with a flux that saturated on every frame, so Best Friend read 139, 148 and 72 BPM across one play. The worklet now takes a thousand-point FFT of the mix about 172 times a second (at 44.1 kHz) and reports spectral flux across 24 bands; every 4 s the last 32 s vote, votes within 3 % cluster and fade with a 30 s half-life, and the heaviest cluster publishes — one odd window never flips the figure, a real change of tempo in the track wins within half a minute. On eight recorded uploads with published tempos, six land within 1.5 %, a re-upload reads 2 % slow and an 87 BPM track with a triplet feel reads its 130 BPM pulse.'],
           ['⛔', 'No stranger’s sheet on an unknown upload', 'A candidate that only matched the title — a famous song’s Genius page, a synced entry of the wrong length — could score 0.9 and render: that was the random lyrics on underground tracks. Every render now passes one gate: the artist agrees with a hint that did not come from a candidate, the length agrees to a few seconds, or a confirmed candidate names the same song. Anything less is capped under every rendering floor, the trail says so, and the “no lyrics” card names the same-title strangers, with Search starting from the first.'],
           ['🎤', 'Sing along on the stage', 'A switch in the stage’s Style popover: on, the vocal band drops 20 dB while the lyrics run full-screen and the rest of the mix stays as it is; off, or leaving the stage, lifts it. The Vocals setting itself is never touched, and the switch is a preference that comes back with the stage.'],
           ['🎹', 'The musical key beside the tempo', 'A chroma histogram from the audio, matched against key profiles: the key of the track, named the musician’s way and the DJ’s (Camelot) on the Audio tab’s tempo line and in the track-info popover, remembered per track beside the tempo. It listens while an effect is on, needs half a minute, and speaks only when two estimates in a row agree.'],
@@ -10190,6 +10204,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (!reduce && !playing) return;
       const pn = performance.now(); if (!reduce && pn - pulseAt < 33) return; pulseAt = pn;
       let b = null; try { b = SUITE.audioBands && SUITE.audioBands(); } catch (e) {}
+      // on the beat the whole backdrop swells and settles over the next quarter: a flash that fades, never a strobe
+      let bg = 1; try { const bc = !reduce && SUITE.beatClock && SUITE.beatClock(); if (bc) { const ph = ((pn - bc.anchor) / bc.period) % 1; bg = 1 + 0.35 * Math.exp(-5 * (ph < 0 ? ph + 1 : ph)); } } catch (e) {}
       const W = pulseEl.width, H = pulseEl.height, g = pulseCtx;
       g.globalCompositeOperation = 'source-over'; g.fillStyle = '#0b0b0d'; g.fillRect(0, 0, W, H);
       g.globalCompositeOperation = 'lighter';
@@ -10197,9 +10213,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       for (let k = 0; k < 12; k++) {
         const target = reduce ? 0.35 : (b ? Math.max(0, Math.min(1, b[k])) : 0.08);
         pulseLv[k] += (target - pulseLv[k]) * (target > pulseLv[k] ? 0.5 : 0.12);   // fast up, slow down
-        const lv = pulseLv[k], x = W * ((k + 0.5) / 12), y = H * (0.62 - 0.22 * Math.sin(k * 1.7)), r = Math.max(6, (0.08 + 0.3 * lv) * Math.min(W, H) * 1.4);
+        const lv = pulseLv[k], x = W * ((k + 0.5) / 12), y = H * (0.62 - 0.22 * Math.sin(k * 1.7)), r = Math.max(6, (0.08 + 0.3 * lv) * Math.min(W, H) * 1.4) * (1 + 0.12 * (bg - 1));
         const grad = g.createRadialGradient(x, y, 0, x, y, r);
-        grad.addColorStop(0, 'hsla(' + hues[k] + ', 95%, 58%, ' + (0.10 + 0.5 * lv).toFixed(3) + ')');
+        grad.addColorStop(0, 'hsla(' + hues[k] + ', 95%, 58%, ' + Math.min(1, (0.10 + 0.5 * lv) * bg).toFixed(3) + ')');
         grad.addColorStop(1, 'hsla(' + hues[k] + ', 95%, 50%, 0)');
         g.fillStyle = grad; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
       }
@@ -11846,6 +11862,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // Musixmatch richsync tracks; capped so a giant song can't bloat storage
       wt: (l.wt && typeof l.wt === 'object' && Object.keys(l.wt).length <= 400) ? l.wt : 0,
       low: !!l.low, picked: !!l.picked, off: off || 0, ts: Date.now(),
+      g: 2,   // written by the finder with the confirmation gate — an unstamped, unpicked sheet is searched again once
     });
     const fromCache = (c) => c && (c.v === 4 || (c.v === 3 && (c.picked || c.instr))) ? {
       src: c.src, synced: c.synced, scaled: !!c.scaled, instr: c.instr, lines: c.lines,
@@ -12048,9 +12065,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const myToken = token;
       const myGen = keyGen.get(key) || 0;
 
+      let stale = null;   // a sheet cached before the confirmation gate: searched again; its nudge and pins carry over if the same sheet returns
       if (!force) {
         const entry = Cache.get(key);
-        const c = fromCache(entry);
+        let c = fromCache(entry);
+        if (c && !c.picked && !c.instr && entry.g !== 2) { stale = entry; c = null; }
         if (c) {
           unstretch(c, entry, key);   // stretched by an older build, before the vocals had a say
           off = (entry && entry.off) || 0;
@@ -12060,7 +12079,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           if (!c.synced && !c.instr && !entry.picked) quietUpgrade(entry, key, myToken);
           return;
         }
-        if (Miss.has(key)) { apply(null, myToken); return; }
+        if (Miss.has(key)) { meta.near = nearByKey.get(key) || null; apply(null, myToken); return; }
         if (Inflight.has(key)) {
           if (UI.isOpen() && !UI.inSearch()) UI.showLoading();
           try { UI.setBusy(true); } catch (e) {}
@@ -12083,6 +12102,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       off = 0;
       anch = [];
       let partial = null;   // best-ready candidate rendered while verification continues
+      const metaRun = meta;   // the object this run writes its strangers to, whatever meta points at when it ends
       const p = findLyrics(meta, (late) => {
         if (!late) return;
         if ((keyGen.get(key) || 0) === myGen) {
@@ -12124,9 +12144,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         if ((keyGen.get(key) || 0) === myGen) {
           if (fin) {
             const e2 = toCache(fin);
+            if (stale && stale.src === e2.src && stale.a === e2.a && stale.t === e2.t) { e2.off = stale.off || 0; if (stale.anch) e2.anch = stale.anch; if (stale.aoff) e2.aoff = stale.aoff; if (stale.vf) e2.vf = stale.vf; }
             if (myToken !== token) e2.off = 0;   // finished after a track change: cache it, but not with the new track's offset
             Cache.set(key, e2);
-          } else Miss.add(key, searchDegraded());
+          } else { Miss.add(key, searchDegraded()); nearByKey.set(key, metaRun.near || null); if (nearByKey.size > 200) nearByKey.delete(nearByKey.keys().next().value); }
         }
         return fin;
       }, (err) => {
@@ -14022,16 +14043,16 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
   }
   registerProcessor('sce-tp-limiter', SceTpLimiter);
-  // Onset feed for the tempo estimator (spectral flux): the mono mix decimated by two, 1024-point Hann frames every
+  // Onset feed for the tempo estimator (spectral flux): the mono mix decimated to about 22 kHz, 1024-point Hann frames every
   // 128 decimated samples (about 172 a second at 44.1 kHz), the power in 24 log-spaced bands 50 Hz – 8 kHz compressed
   // as log(1 + 1000·p), and the rise of every band since the previous frame, summed, as one onset strength per frame.
   // Sixteen values per message. The node outputs silence; a thousand-point FFT 172 times a second is small work.
   class SceOnset extends AudioWorkletProcessor {
     constructor() {
       super();
-      var N = 1024, nb = 24, sr = sampleRate / 2, i, j, bit;
+      var D = 2 * Math.max(1, Math.round(sampleRate / 44100)), N = 1024, nb = 24, sr = sampleRate / D, i, j, bit;   // by two at 44.1 / 48 kHz, more at higher device rates
       this.N = N; this.hop = 128; this.fs = sr / this.hop; this.nb = nb;
-      this.buf = new Float32Array(N); this.fill = 0; this.odd = false; this.hold = 0;
+      this.buf = new Float32Array(N); this.fill = 0; this.D = D; this.cnt = 0; this.hold = 0;
       this.win = new Float32Array(N); for (i = 0; i < N; i++) this.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
       this.re = new Float32Array(N); this.im = new Float32Array(N);
       this.rev = new Uint16Array(N); for (i = 1, j = 0; i < N; i++) { bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; this.rev[i] = j; }
@@ -14069,14 +14090,13 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     process(inputs) {
       var inp = inputs[0]; if (!inp || !inp.length || !inp[0]) return true;
-      var L = inp[0], R = inp[1] || inp[0], n = L.length, buf = this.buf, N = this.N, hop = this.hop, i, x;
+      var L = inp[0], R = inp[1] || inp[0], n = L.length, buf = this.buf, N = this.N, hop = this.hop, D = this.D, i;
       for (i = 0; i < n; i++) {
-        x = (L[i] + R[i]) * 0.5;
-        if (this.odd) {
-          buf[this.fill++] = (this.hold + x) * 0.5;
+        this.hold += (L[i] + R[i]) * 0.5;
+        if (++this.cnt >= D) {
+          buf[this.fill++] = this.hold / D; this.hold = 0; this.cnt = 0;
           if (this.fill >= N) { this.frame(); buf.copyWithin(0, hop); this.fill = N - hop; }
-        } else this.hold = x;
-        this.odd = !this.odd;
+        }
       }
       return true;
     }
@@ -15429,11 +15449,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
    * published tempo only yields to a cluster a quarter heavier, so one odd window never flips it, while a real change
    * of tempo in the track wins within half a minute. A track's BPM is remembered for a year. ── */
   const BPM_KEY = 'enh:bpm', BPM_MAX = 300, BPM_HALF = 30, BPM_SWAP = 1.25, BPM_SAME = Math.log2(1.03);
-  const bpm = { env: new Float32Array(8192), n: 0, fs: 0, votes: [], last: null, stable: 0, pub: null, href: '', tick: 0, resets: 0, feeds: 0, el: null };
+  const bpm = { env: new Float32Array(8192), n: 0, fs: 0, votes: [], last: null, stable: 0, pub: null, href: '', tick: 0, resets: 0, feeds: 0, fedAt: 0, rate: 1, el: null };
   function bpmReset(href) { bpm.resets++; bpm.n = 0; bpm.votes = []; bpm.last = null; bpm.stable = 0; bpm.pub = null; bpm.href = href || ''; }
   function bpmFeed(vals, fs) {
     if (!CFG.bpmDetect || !vals) return;
-    bpm.feeds++;
+    bpm.feeds++; bpm.fedAt = performance.now();   // the last value is the worklet's now: the beat clock hangs its anchor on it
     if (fs && fs !== bpm.fs) { bpm.fs = fs; bpm.n = 0; }
     for (let i = 0; i < vals.length; i++) {
       if (bpm.n >= bpm.env.length) { bpm.env.copyWithin(0, 1024); bpm.n -= 1024; }
@@ -15450,8 +15470,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     const sorted = Float32Array.from(x).sort(), med = sorted[N >> 1], p99 = sorted[Math.floor(N * 0.99)];
     let hits = 0; for (let i = 0; i < N; i++) if (x[i] > 3 * med + 0.5) hits++;
     if (!(p99 >= 1) || hits < 3 * N / fs) return null;
+    // a silence-to-signal edge (a seek, a resume, a track's first frame) rises in every band at once — ten beats' worth
+    // in one frame, enough to own the whole autocorrelation: clipped at twice the 99th percentile
+    const cap = 2 * p99, xc = Float32Array.from(x, (v) => (v > cap ? cap : v));
     const w = Math.round(fs), d = new Float32Array(N); let acc = 0;
-    for (let i = 0; i < N; i++) { acc += x[i]; if (i >= w) acc -= x[i - w]; d[i] = x[i] - acc / Math.min(i + 1, w); }   // 1 s detrend
+    for (let i = 0; i < N; i++) { acc += xc[i]; if (i >= w) acc -= xc[i - w]; d[i] = xc[i] - acc / Math.min(i + 1, w); }   // 1 s detrend
     let a0 = 0; for (let i = 0; i < N; i++) a0 += d[i] * d[i]; a0 /= N; if (!(a0 > 1e-9)) return null;
     const Lmax = Math.ceil(fs * 60 / 60) * 2 + 3, acs = new Float32Array(Lmax + 2);
     for (let L = 1; L < acs.length && L < N; L++) { let sum = 0; for (let i = L; i < N; i++) sum += d[i] * d[i - L]; acs[L] = sum / (N - L) / a0; }
@@ -15475,6 +15498,37 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     }
     cl.sort((p, q) => q.w - p.w);
     return cl;
+  }
+  /* ── beat clock: where the beats fall. Over the last 12 s of onset strength, the comb (a period within 1.5 % of the
+   * published tempo, at every phase) that gathers the most strength gives the phase; the anchor is a wall-clock beat
+   * time, later beats are anchor + k·period, the output latency added so the sound and the dot agree. Refitted every 2 s
+   * while something reads it, and trusted only when two fits in a row land on the same beat within 25 ms — a track
+   * whose beat the comb cannot hold (a wandering feel, a half-beat that reads as strong as the beat) shows no clock. ── */
+  const beat = { anchor: 0, period: 0, at: 0, sure: false };
+  function beatFit(m) {
+    const p = bpm.pub, fs = bpm.fs;
+    if (!p || !(p.bpm > 0) || !fs || !m || m.paused || !bpm.fedAt) { beat.period = 0; beat.sure = false; return null; }
+    const rate = m.playbackRate > 0 ? m.playbackRate : 1, P0 = 60 * fs / (p.bpm * rate);
+    const N = Math.min(bpm.n, Math.round(fs * 12)); if (!(P0 > 4) || N < P0 * 4) { beat.period = 0; beat.sure = false; return null; }
+    const x = bpm.env.subarray(bpm.n - N, bpm.n), sorted = Float32Array.from(x).sort(), cap = 2 * sorted[Math.floor(N * 0.99)];   // an edge clipped, as in the estimator
+    const w = Math.round(fs), d = new Float32Array(N); let acc = 0;
+    for (let i = 0; i < N; i++) { const v = x[i] > cap ? cap : x[i], u = i >= w ? (x[i - w] > cap ? cap : x[i - w]) : 0; acc += v - u; d[i] = v - acc / Math.min(i + 1, w); }
+    const at = (q) => { const l = Math.floor(q), fr = q - l; if (l < 0 || l + 1 >= N) return 0; return d[l] * (1 - fr) + d[l + 1] * fr; };
+    let best = -Infinity, bestPh = 0, bestP = P0;
+    for (let pct = -1.5; pct <= 1.51; pct += 0.3) {
+      const P = P0 * (1 + pct / 100);
+      for (let ph = 0; ph < P; ph += 0.5) { let sum = 0, k = 0; for (let q = N - 1 - ph; q >= 0; q -= P) { sum += at(q); k++; } sum /= k; if (sum > best) { best = sum; bestPh = ph; bestP = P; } }
+    }
+    let lat = 0; try { lat = SUITE.audioLatency ? (+SUITE.audioLatency() || 0) : 0; } catch (e) {}
+    const period = 1000 * bestP / fs, anchor = bpm.fedAt - 1000 * bestPh / fs + (lat > 0 && lat < 600 ? lat : 0);
+    if (beat.period > 0) { const dphi = ((anchor - beat.anchor) % period + period) % period; beat.sure = Math.min(dphi, period - dphi) <= 25; } else beat.sure = false;
+    beat.period = period; beat.anchor = anchor; beat.at = performance.now();
+    return beat;
+  }
+  function beatClock() {   // { anchor, period } in performance.now() ms, or null: no tempo, nothing playing, or a beat not yet steady
+    if (!CFG.bpmDetect || !bpm.pub) { beat.period = 0; beat.sure = false; return null; }
+    if (performance.now() - beat.at > 2000) beatFit(activeMedia());
+    return beat.period > 0 && beat.sure ? { anchor: beat.anchor, period: beat.period } : null;
   }
   function bpmMem() { const o = GET(BPM_KEY, null); return (o && typeof o === 'object') ? o : {}; }
   // tempo lock: once a track's tempo is known, the speed is set so it plays at the chosen BPM (0.5×–2×);
@@ -15589,28 +15643,31 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     if (href !== bpm.href) {
       bpmReset(href);
       const e = href && bpmMem()[href];
-      if (e && e.b > 0 && Date.now() - (e.t || 0) < 365 * 864e5) { bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' }; applyTempoLock(); }
+      // v: the detector's generation — figures the old feed measured (it drifted by whole octaves) are never recalled
+      if (e && e.b > 0 && e.v === 2 && Date.now() - (e.t || 0) < 365 * 864e5) { bpm.pub = { bpm: e.b, conf: e.c || 0, src: 'remembered' }; applyTempoLock(); }
     }
     if (!m || m.paused || (++bpm.tick % 4)) return;
-    if (bpm.pub && !CFG.vinylMode && Math.abs((m.playbackRate || 1) - 1) > 0.01) return;   // time-stretching smears the onsets: a known tempo is never replaced while the speed is off 1× (pitch-follows-speed has no stretch)
+    const rate = (m.playbackRate > 0 ? m.playbackRate : 1);
+    if (Math.abs(rate - bpm.rate) > 0.001) { bpm.rate = rate; bpm.n = 0; return; }   // the window held audio at the old speed: start it over (the votes are rate-corrected already and stay)
+    if (bpm.pub && !CFG.vinylMode && Math.abs(rate - 1) > 0.01) return;   // time-stretching smears the onsets: a known tempo is never replaced while the speed is off 1× (pitch-follows-speed has no stretch)
     const est = bpmEstimate(); if (!est || est.ac < 0.06) return;
-    const rate = (m.playbackRate > 0 ? m.playbackRate : 1), b = est.bpm / rate, now = performance.now() / 1000;
+    const b = est.bpm / rate, now = performance.now() / 1000;
     bpm.last = b;
     bpm.votes.push({ b, w: 0.3 + est.conf, t: now }); if (bpm.votes.length > 40) bpm.votes.shift();
     const cl = bpmClusters(now), top = cl[0], run = cl[1]; if (!top || top.n < 2) return;
     const pubB = bpm.pub ? bpm.pub.bpm : 0, cur = pubB ? cl.find((k) => Math.abs(Math.log2(pubB / k.c)) < BPM_SAME) : null;
-    const curW = cur ? cur.w : (bpm.pub && bpm.pub.src === 'remembered' ? 3 : 0);   // a remembered tempo stands as three confident votes until the track itself votes
+    const curW = Math.max(cur ? cur.w : 0, bpm.pub && bpm.pub.src === 'remembered' ? 3 : 0);   // a remembered tempo stands as three confident votes, however few the track has cast on it yet
     let next = null;
     if (!bpm.pub) { if (!run || top.w >= 1.3 * run.w) next = top; }
     else if (top !== cur) { if (top.w >= BPM_SWAP * curW) next = top; }
-    else if (Math.abs(cur.c - pubB) >= 0.5) next = cur;   // the cluster's centre refines the figure as votes gather
+    else if (Math.abs(cur.c - pubB) >= 0.5 || bpm.pub.src !== 'measured') next = cur;   // the cluster's centre refines the figure as votes gather; a remembered tempo the track confirms is measured again
     if (!next) return;
     bpm.stable = next.n;
     const rounded = Math.round(next.c * 10) / 10;
     if (!bpm.pub || bpm.pub.src !== 'measured' || Math.abs(bpm.pub.bpm - rounded) >= 0.5) {
       bpm.pub = { bpm: rounded, conf: Math.round(Math.min(1, next.w / 3) * 100) / 100, src: 'measured' };
       applyTempoLock();
-      if (href) { const map = bpmMem(); map[href] = { b: rounded, c: bpm.pub.conf, t: Date.now() }; const keys = Object.keys(map); if (keys.length > BPM_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete map[k]; }); } SET(BPM_KEY, map); }
+      if (href) { const map = bpmMem(); map[href] = { b: rounded, c: bpm.pub.conf, t: Date.now(), v: 2 }; const keys = Object.keys(map); if (keys.length > BPM_MAX) { keys.sort((p, q) => (map[p].t || 0) - (map[q].t || 0)); keys.slice(0, keys.length - BPM_MAX).forEach((k) => { delete map[k]; }); } SET(BPM_KEY, map); }
       repaintAudioSoon();
     }
   }
@@ -16892,9 +16949,22 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       });
       slowRow.appendChild(slowChip); bodyEl.appendChild(slowRow);
       const bpmLine = D.createElement('div'); bpmLine.className = 'tw-note'; bpmLine.style.cssText = 'margin-top:8px;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px'; bodyEl.appendChild(bpmLine);
-      const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); bpmLine.append(bpmTxt, bpmUnlock);
+      const bpmTxt = D.createElement('span'); const bpmUnlock = mkBtn('Unlock tempo'); bpmUnlock.style.cssText += ';padding:3px 9px;font-size:10px;display:none'; bpmUnlock.title = 'Stop locking every track to one BPM; the speed stays where it is'; bpmUnlock.addEventListener('click', () => { if (SUITE.audioCmd) SUITE.audioCmd('tempoLock', 0); }); const bpmDot = D.createElement('span'); bpmDot.className = 'tw-beat'; bpmDot.setAttribute('aria-hidden', 'true'); bpmDot.style.display = 'none'; bpmLine.append(bpmTxt, bpmDot, bpmUnlock);
+      // the beat dot: one timeout per beat, nothing between beats; polls once a second while paused or the beat is unsteady,
+      // stops when the tab is gone
+      let dotT = 0;
+      const dotTick = () => {
+        dotT = 0;
+        if (!audioTabOn || !bodyEl.isConnected) { bpmDot.classList.remove('on'); bpmDot.style.display = 'none'; return; }
+        const m = activeMedia(); let bc = null; try { bc = (m && !m.paused) ? beatClock() : null; } catch (e) {}
+        if (!bc) { bpmDot.classList.remove('on'); if (bpmDot.style.display !== 'none') bpmDot.style.display = 'none'; dotT = setTimeout(dotTick, 1000); return; }
+        if (bpmDot.style.display) bpmDot.style.display = '';
+        const now = performance.now(); let next = bc.anchor + Math.ceil((now - bc.anchor) / bc.period) * bc.period; if (next - now < 10) next += bc.period;
+        dotT = setTimeout(() => { bpmDot.classList.add('on'); setTimeout(() => bpmDot.classList.remove('on'), 80); dotTick(); }, next - now);
+      };
+      const dotArm = () => { if (!dotT && bpm.pub && audioTabOn && bodyEl.isConnected) dotTick(); };
       const paintBpm = () => { const kt = (CFG.bpmDetect && keyDet.pub) ? ' · Key ' + keyText() + (keyDet.pub.src === 'remembered' && !(bpm.pub && bpm.pub.src === 'remembered') ? ' · remembered' : '') : ''; const t = !CFG.bpmDetect ? '' : bpm.pub ? 'Tempo ' + bpmText(true) + (bpm.pub.src === 'remembered' ? ' · remembered' : '') + (CFG.tempoLock > 0 ? ' · locked to ' + (CFG.tempoLock | 0) + ' BPM' : '') : (fxRouted ? 'Listening for the tempo…' : 'Tempo shows once an effect is on') + (CFG.tempoLock > 0 ? ' · lock ' + (CFG.tempoLock | 0) + ' BPM waits for it' : ''); const t2 = t + kt; if (bpmTxt.textContent !== t2) bpmTxt.textContent = t2; const u = CFG.tempoLock > 0 ? '' : 'none'; if (bpmUnlock.style.display !== u) bpmUnlock.style.display = u; };
-      paintBpm(); liveSync.push(paintBpm);
+      paintBpm(); liveSync.push(paintBpm, dotArm); dotArm();
       paintSpeed = () => { tempoChips.forEach((b) => b._paint()); paintVinyl(); tintSlow(); };
       paintVinyl();
       // fade in / out (2.21): the lengths dim while off and wake the switch like Intensity does
@@ -17390,7 +17460,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           pasteAutoEq: applyAutoEqText, clearAutoEq, exportAudio, importAudio: importAudioText, resetAudio,
           gm: (k, v) => { if (v === undefined) return GET(k, null); SET(k, v); }, contourK: () => contourK,
           feedStats: () => (SUITE.feedStats ? SUITE.feedStats() : null), feedRules: () => (SUITE.feedRules ? SUITE.feedRules() : null),
-          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmEnv: () => ({ env: Array.from(bpm.env.subarray(0, bpm.n)), n: bpm.n, fs: bpm.fs }), bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, key: () => keyDet.pub, keyRaw: () => keyEstimate(), keyFrames: () => keyDet.frames, keyClear: () => { keyReset(''); keyDet.href = null; SET(KEY_KEY, {}); }, keyChroma: () => ({ c: Array.from(keyDet.chroma), b: Array.from(keyDet.bass), n: keyDet.frames }), singAlong: (on) => singAlong(on), singOn: () => singOn, pulseBackdrop: (on) => pulseBackdrop(on), pulseOn: () => pulseOn, audioBands: () => audioBands(), devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), scene: (op, name) => (op === 'save' ? sceneSave(name) : op === 'load' ? sceneLoad(name) : op === 'delete' ? sceneDelete(name) : sceneNames()), bpmDiag: () => ({ n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, last: bpm.last, stable: bpm.stable, votes: bpm.votes.map((v) => Math.round(v.b * 10) / 10), clusters: bpmClusters(performance.now() / 1000).map((c) => ({ b: Math.round(c.c * 10) / 10, w: Math.round(c.w * 100) / 100, n: c.n })) }),
+          bpm: () => bpm.pub, bpmRaw: () => bpmEstimate(), bpmFed: () => bpm.n, bpmEnv: () => ({ env: Array.from(bpm.env.subarray(0, bpm.n)), n: bpm.n, fs: bpm.fs }), bpmClear: () => { bpmReset(''); bpm.el = null; SET(BPM_KEY, {}); }, key: () => keyDet.pub, keyRaw: () => keyEstimate(), keyFrames: () => keyDet.frames, keyClear: () => { keyReset(''); keyDet.href = null; SET(KEY_KEY, {}); }, keyChroma: () => ({ c: Array.from(keyDet.chroma), b: Array.from(keyDet.bass), n: keyDet.frames }), singAlong: (on) => singAlong(on), singOn: () => singOn, pulseBackdrop: (on) => pulseBackdrop(on), pulseOn: () => pulseOn, audioBands: () => audioBands(), devSim: (ids) => { devCount = () => Promise.resolve(Array.isArray(ids) ? ids : []); onDeviceChange(); }, devOut: () => (devPrev ? devPrev.length : -1), rewindSim: (secAgo) => { if (rewindAt) rewindAt = Date.now() - secAgo * 1000; }, themeNow: () => effTheme(), audioCmd: (n, a) => SUITE.audioCmd(n, a), scene: (op, name) => (op === 'save' ? sceneSave(name) : op === 'load' ? sceneLoad(name) : op === 'delete' ? sceneDelete(name) : sceneNames()), beat: () => beatClock(), beatCheck: () => { const m = activeMedia(), bc = beatClock(); return { period: beat.period, sure: beat.sure, lat: SUITE.audioLatency ? SUITE.audioLatency() : 0, phaseMs: (bc && m) ? (((bc.anchor - (SUITE.audioLatency ? SUITE.audioLatency() : 0) - performance.now()) + m.currentTime * 1000) % bc.period + bc.period) % bc.period : null }; }, bpmDiag: () => ({ n: bpm.n, fs: bpm.fs, href: bpm.href, cur: curTrackHref(), resets: bpm.resets, feeds: bpm.feeds, last: bpm.last, stable: bpm.stable, votes: bpm.votes.map((v) => Math.round(v.b * 10) / 10), clusters: bpmClusters(performance.now() / 1000).map((c) => ({ b: Math.round(c.c * 10) / 10, w: Math.round(c.w * 100) / 100, n: c.n })) }),
         };
       };
       try { W.__sceAudioDebug = SUITE.audioDebug; } catch (e) {}
@@ -18224,7 +18294,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   /* ── audio commands for the palette: toggles, speeds and the tempo lock, with the live state for labels ── */
   try {
     SUITE.audioState = () => ({ night: !!CFG.nightOn, enhance: !!CFG.enhanceOn, loudness: !!CFG.loudnessOn, eq: !!CFG.eqOn, mono: !!CFG.monoOn, crossfeed: !!CFG.crossfeedOn, speed: CFG.speed | 0, tempoLock: CFG.tempoLock | 0, bpm: bpm.pub && bpm.pub.bpm > 0 ? bpm.pub.bpm : 0 });
-    SUITE.singAlong = singAlong; SUITE.audioBands = audioBands; SUITE.pulseBackdrop = pulseBackdrop;
+    SUITE.singAlong = singAlong; SUITE.audioBands = audioBands; SUITE.pulseBackdrop = pulseBackdrop; SUITE.beatClock = beatClock;
     SUITE.audioCmd = (name, arg) => {
       const flip = (key, label) => { CFG[key] = !CFG[key]; save(); applyFx(); repaintAudioSoon(); toast(label + (CFG[key] ? ' on' : ' off')); return true; };
       switch (name) {

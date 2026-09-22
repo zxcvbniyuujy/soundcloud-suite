@@ -1871,6 +1871,24 @@ const FIXTURE_SRC = `
     await closeHub(); await stopPlay();
   });
 
+  scenario('beat-clock', async () => {
+    // the beat clock: on the 128 BPM pattern the fitted period is the beat, two fits in a row agree, and the predicted beats
+    // fall on the pattern's pulses (the kick, or the tick half a beat later); the tempo line shows the dot
+    await play('K', { loop: true, href: '/test/beat' });
+    await audioTab(); await sleep(30000);
+    const b = await dbg(`return d.bpm();`); assert(b && Math.abs(b.bpm - 128) < 2, 'tempo known (got ' + JSON.stringify(b) + ')');
+    await dbg(`d.beat();`); await sleep(2300);
+    const c = await dbg(`return d.beatCheck();`);
+    assert(c && Math.abs(c.period - 468.75) < 5, 'the period is the beat (got ' + JSON.stringify(c) + ')');
+    assert(c && c.sure, 'two fits in a row agree (got ' + JSON.stringify(c) + ')');
+    const half = 468.75 / 2, ph = c.phaseMs % half, off = Math.min(ph, half - ph);
+    assert(off < 50, 'the beats fall on the pulses (off by ' + Math.round(off) + ' ms; ' + JSON.stringify(c) + ')');
+    await sleep(1500);
+    const dot = await abody(`const el = a.querySelector('.tw-beat'); return el ? getComputedStyle(el).display : null;`);
+    assert(dot && dot !== 'none', 'the tempo line shows the beat dot (display ' + dot + ')');   // a flex item computes to block
+    await closeHub(); await stopPlay();
+  });
+
   scenario('tempo-lock', async () => {
     // the palette's "170 bpm": once the tempo is known the speed follows (lock ÷ tempo, 0.5×–2×), the estimator keeps
     // reporting the track's own tempo under the new rate, a remembered tempo applies the lock at once on the next
