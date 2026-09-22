@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.81.0
+// @version      4.82.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.81.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.82.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9979,7 +9979,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const x = document.createElement('button'); x.className = 'chx'; x.textContent = '✕'; x.title = 'Remove from Listen later'; x.setAttribute('aria-label', 'Remove ' + e.n + ' from Listen later');
         x.addEventListener('click', (ev) => { ev.stopPropagation(); try { SUITE.laterForget(e.href); } catch (er) {} renderQueue(); });
         r.append(n, qt, qa, x);
-        r.title = 'Open and play';
+        r.title = 'Open and play'; r.setAttribute('data-i18n', '');   // the row is a skipped container (it holds a title), the tooltip is the suite's
         const go = () => playHref(e.href);
         r.addEventListener('click', go);
         r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); swallowNextKeyup(ev.key); go(); } });
@@ -10347,7 +10347,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
               if (!histExpanded && shown >= 8) break;
               const day = dayOf(e.ts);
               if (day !== lastDay) { lastDay = day; const dh = document.createElement('div'); dh.className = 'qhead'; dh.style.cssText = 'font-size:10px;opacity:.75;margin-top:4px'; dh.textContent = day; box.appendChild(dh); }
-              const r = document.createElement('div'); r.className = 'qrow ch hist'; r.tabIndex = 0; r.setAttribute('role', 'button'); r.title = 'Open and play';
+              const r = document.createElement('div'); r.className = 'qrow ch hist'; r.tabIndex = 0; r.setAttribute('role', 'button'); r.title = 'Open and play'; r.setAttribute('data-i18n', '');
               const n = document.createElement('span'); n.className = 'n'; n.textContent = clock(e.ts);
               const qt = document.createElement('span'); qt.className = 'qt'; qt.textContent = e.t;
               const qa = document.createElement('span'); qa.className = 'qa'; qa.textContent = e.a || '';

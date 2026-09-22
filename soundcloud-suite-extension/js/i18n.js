@@ -63,6 +63,7 @@
   // attributes: a skipped container's title / aria-label carries the same content as its text (a track title as a
   // tooltip), so the class and data-i18n-skip rules apply — but not the tag rule: a field's placeholder is the suite's
   function skipAttr(el) {
+    if (el.hasAttribute('data-i18n')) return false;   // the element opts its own tooltip in (a row that holds a track title but carries the suite's tooltip)
     let n = el, k = 0;
     while (n && n.nodeType === 1 && k++ < 6) {
       if (n.hasAttribute('data-i18n-skip') || SKIP_CLASS.test(n.className || '')) return true;
