@@ -2269,28 +2269,29 @@ const FIXTURE_SRC = `
   });
 
   scenario('fx-glow', async () => {
-    // WP10 player-bar FX glow: the pill's hub button wears the speed pill's accent while the listener's own settings are
-    // engaged — an open Audio tab alone (which routes the chain) does not light it; the tooltip names the boost
-    const hubBtn = () => page.evaluate(() => { const w = document.querySelector('.sce-barwrap'), b = w && w.querySelector('.sce-hub'); return b ? { color: b.style.color, shadow: b.style.textShadow, opacity: b.style.opacity, tip: b._tip || '', title: b.title, tipText: w.firstChild.textContent, tipOpacity: w.firstChild.style.opacity } : null; });
+    // WP10 player-bar FX marker: the pill's hub button wears a dot (class fx, drawn by the pill's stylesheet) while the
+    // listener's own settings are engaged — an open Audio tab alone (which routes the chain) does not mark it; the tooltip
+    // names the boost. The accent colour itself now means "hub open"
+    const hubBtn = () => page.evaluate(() => { const w = document.querySelector('.sce-barwrap'), b = w && w.querySelector('.sce-hub'); const t = w.querySelector('.tip'); return b ? { fx: b.classList.contains('fx'), tip: b._tip || '', title: b.title, tipText: t ? t.textContent : '', tipOn: !!(t && t.classList.contains('on')) } : null; });
     await play('A', { loop: true });
     let b = await hubBtn(); assert(b, 'the player-bar pill exists');
-    eq(b.color, '', 'nothing on → no glow'); eq(b.title, 'Open / close the lyrics hub', 'plain title');
+    eq(b.fx, false, 'nothing on → no marker'); eq(b.title, 'Open / close the lyrics hub', 'plain title');
     await audioTab(); await sleep(200);
-    eq((await snap()).routed, true, 'the open tab routes the chain'); b = await hubBtn(); eq(b.color, '', 'the open tab alone does not glow');
+    eq((await snap()).routed, true, 'the open tab routes the chain'); b = await hubBtn(); eq(b.fx, false, 'the open tab alone does not mark it');
     await set('bassDb', 4); await sleep(150);
-    b = await hubBtn(); eq(b.color, 'rgb(255, 106, 31)', 'bass on → accent colour'); assert(/10px/.test(b.shadow), 'accent glow'); eq(b.opacity, '0.95', 'opacity .95');
+    b = await hubBtn(); eq(b.fx, true, 'bass on → the marker');
     eq(b.tip, 'Audio FX on', 'tooltip'); eq(b.title, 'Open / close the lyrics hub · Audio FX on', 'title carries it');
     await set('boostAmt', 200); await sleep(150); b = await hubBtn(); eq(b.tip, 'Audio FX on · boost 200 %', 'boost in the tooltip');
     // hovering shows the live tooltip text
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseenter'))); await sleep(100);
-    b = await hubBtn(); eq(b.tipText, 'Audio FX on · boost 200 %', 'the floating tip reads it'); eq(b.tipOpacity, '1', 'tip shown');
+    b = await hubBtn(); eq(b.tipText, 'Audio FX on · boost 200 %', 'the floating tip reads it'); eq(b.tipOn, true, 'tip shown');
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseleave'))); await sleep(100);
-    b = await hubBtn(); eq(b.color, 'rgb(255, 106, 31)', 'still lit after the hover ends');
+    b = await hubBtn(); eq(b.fx, true, 'still marked after the hover ends');
     await set('bassDb', 0); await sleep(150); b = await hubBtn(); eq(b.tip, 'Audio FX on · boost 200 %', 'boost alone is an FX');
     // Compare (parameter bypass) lifts the glow while held
-    await dbg(`d.bypass(true);`); await sleep(150); b = await hubBtn(); eq(b.color, '', 'compare held → no glow');
-    await dbg(`d.bypass(false);`); await sleep(150); b = await hubBtn(); eq(b.color, 'rgb(255, 106, 31)', 'released → lit');
-    await set('boostAmt', 100); await sleep(150); b = await hubBtn(); eq(b.color, '', 'all off → plain'); eq(b.title, 'Open / close the lyrics hub', 'title restored');
+    await dbg(`d.bypass(true);`); await sleep(150); b = await hubBtn(); eq(b.fx, false, 'compare held → no marker');
+    await dbg(`d.bypass(false);`); await sleep(150); b = await hubBtn(); eq(b.fx, true, 'released → marked');
+    await set('boostAmt', 100); await sleep(150); b = await hubBtn(); eq(b.fx, false, 'all off → plain'); eq(b.title, 'Open / close the lyrics hub', 'title restored');
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseenter'))); await sleep(100);
     eq((await hubBtn()).tipText, 'Lyrics hub', 'the plain label is back');
     await page.evaluate(() => document.querySelector('.sce-barwrap .sce-hub').dispatchEvent(new Event('mouseleave')));
