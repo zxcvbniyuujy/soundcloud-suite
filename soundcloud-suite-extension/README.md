@@ -92,6 +92,24 @@ never plays.
   which is what its lyric service wants from outside China; when a sheet still
   will not load, the toast says what happened (no answer, a placeholder, no
   timed lines) and the Copy diagnostics trail records it.
+- **Skip audio ads** (Tweaks → Declutter, on by default) — the two
+  first-party ad calls that ad-blocking filter lists fail (…/audio-ad…,
+  …/promoted…) fail here exactly the way a blocked request looks to the
+  page (fetch rejects, XHR reports status 0 with an error event), so the
+  player goes on to the track; a creative that still arrives from the ad
+  CDN paths is muted, run at 16× and sent to its end, and the element is
+  handed back untouched when a track loads into it. A tally sits in the
+  debug snapshot.
+- **In your language** — the suite’s own text (tabs, rows, menus, toasts,
+  tooltips, sheets, the tour, the floating window) in German, French,
+  Spanish, Portuguese, Italian, Dutch, Polish, Turkish, Russian, Japanese or
+  Korean. Auto follows the browser; Tweaks → Appearance → Language picks one.
+  A translator (js/i18n.js) follows the suite’s own roots and looks every
+  text node and title up as written, numbers folded to #, so track titles,
+  artists and lyric lines are never touched; the dictionary is a packaged
+  file the background worker hands over through the relay, and English is an
+  exact no-op. The store listing itself carries a name and summary in twelve
+  languages.
 - **Floating lyrics window** — **P** in the hub, ⋯ → Floating lyrics window,
   or Ctrl+K: a small always-on-top window (Document Picture-in-Picture,
   Chrome 116+) with the artwork, the sung line and its karaoke wipe, the next

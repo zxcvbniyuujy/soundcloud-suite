@@ -37,6 +37,7 @@
         "https://soundcloud.com/*"
       ],
       "js": [
+        "js/i18n.js",
         "js/gm-shim.js",
         "js/suite.js"
       ],

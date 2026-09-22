@@ -99,6 +99,13 @@ async function focusPlayingTab() {   // bring the SoundCloud tab that plays (els
 try { chrome.commands.onCommand.addListener((name) => { if (name === 'focus-tab') focusPlayingTab(); else dispatchCommand(name); }); } catch (e) {}
 if (typeof module !== 'undefined' && module.exports) module.exports = { dispatchCommand, focusPlayingTab, cmdTabs, hostAllowed };   // the unit test
 
+// the suite's own text in the listener's language: the dictionary is a packaged file, read here and handed back
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.scss !== 'dict' || typeof msg.lang !== 'string' || !/^[a-z]{2}$/.test(msg.lang)) return;
+  if (!sender || !sender.tab || !SC_FRAME.test(String(sender.url || ''))) { sendResponse({ ok: false }); return; }
+  fetch(chrome.runtime.getURL('i18n/' + msg.lang + '.json')).then((r) => (r.ok ? r.text() : Promise.reject(new Error('no dictionary')))).then((json) => sendResponse({ ok: true, json })).catch(() => sendResponse({ ok: false }));
+  return true;
+});
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.scss !== 'xhr' || !msg.req) return;
   if (!sender || !sender.tab || !SC_FRAME.test(String(sender.url || ''))) {

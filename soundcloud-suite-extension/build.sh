@@ -135,7 +135,7 @@ fi
 if [ "$ZIP" = "1" ]; then
   OUT="$EXT_DIR/../soundcloud-suite-$VER.zip"
   rm -f "$OUT"
-  ( cd "$EXT_DIR" && zip -qr "$OUT" manifest.json icons js _locales -x '*/.*' '.*' )
+  ( cd "$EXT_DIR" && zip -qr "$OUT" manifest.json icons js _locales i18n -x '*/.*' '.*' )
   note "store package → $OUT"
 fi
 echo "✓ build complete — reload the extension in chrome://extensions"

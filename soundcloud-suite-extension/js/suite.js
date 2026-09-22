@@ -1394,6 +1394,7 @@
                 clearTimeout(toastTimer);
             });
             document.body.appendChild(toastEl);
+            try { if (window.__scsI18n) window.__scsI18n.watch(toastEl); } catch (e) {}
         }
         toastEl.classList.toggle('shifted', !!(SUITE.lyricsOpen && SUITE.lyricsOpen()));
         if (sub) {
@@ -2679,6 +2680,7 @@
         card.style.visibility = 'hidden';
         build(card);
         document.body.appendChild(card);
+        try { if (window.__scsI18n) window.__scsI18n.watch(card); } catch (e) {}
         const r = anchor.getBoundingClientRect();
         const cw = card.offsetWidth || 294, ch = card.offsetHeight || 320;
         let left = Math.min(Math.max(8, r.left + r.width / 2 - cw / 2), innerWidth - cw - 8);
@@ -7827,6 +7829,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       host.style.cssText = 'position:fixed;inset:0 0 auto auto;width:0;height:0;z-index:2147483000;pointer-events:none;';
       (document.body || document.documentElement).appendChild(host);
       root = host.attachShadow({ mode: 'open' });
+      try { if (window.__scsI18n) window.__scsI18n.watch(root); } catch (e) {}
       // SoundCloud sees every key typed in here as landing on the host <div> and runs its shortcuts
       // (S focuses search, Space toggles play, digits seek); keep field input inside the panel
       // typing inside the hub never reaches SoundCloud's own shortcuts: its Space toggle listens on keyup
@@ -8143,6 +8146,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         d.title = 'SoundCloud Suite';
         const st = d.createElement('style'); st.textContent = PIP_CSS; d.head.appendChild(st);
         d.body.innerHTML = PIP_HTML;
+        try { if (window.__scsI18n) window.__scsI18n.watch(d.body); } catch (e) {}
         const q = (s) => d.querySelector(s);
         const cmd = (n) => { try { if (SUITE.command) SUITE.command(n); } catch (e) {} };
         q('.prev').addEventListener('click', () => cmd('prev-track'));
@@ -8731,6 +8735,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⊘', 'No more audio ads', 'The ad calls fail the way an ad blocker fails them, so the next track plays instead; an ad file that still arrives is muted and over in a second. On by default — Tweaks → Declutter → Skip audio ads turns it off.'],
+          ['🌐', 'In your language', 'The suite’s own text in German, French, Spanish, Portuguese, Italian, Dutch, Polish, Turkish, Russian, Japanese or Korean, following your browser; Tweaks → Appearance → Language picks one. SoundCloud itself and the lyrics stay as they are.'],
           ['⧉', 'Lyrics that float above everything', 'Press P in the hub (or ⋯ → Floating lyrics window) for a small window that stays on top of every app: artwork, the sung line with the karaoke wipe, the next line, a progress bar and prev / play / next. It keeps moving while the SoundCloud tab is hidden. Chrome 116 or newer.'],
           ['★', 'A tour, and a way to spread the word', 'New listeners get three spotlights on the real buttons after the setup choice; Ctrl+K → Take the tour repeats it. Ctrl+K also has Share SoundCloud Suite (a line with the store link on the clipboard) and Rate SoundCloud Suite; after a week and thirty tracks a small card asks once.'],
           ['⚙', 'Sturdier everywhere', 'The toolbar icon toggles the hub without reloading the tab. Meters, loudness normalize and every current-track action follow the element that is playing, not the one SoundCloud keeps ready for the next track. Lyric requests you wait for go first, NetEase and Kugou are parked when they keep timing out, and the “no lyrics” card says which sources were unavailable. A failed shuffle says why, a rate-limited fetch counts down on the button, toasts in a hidden tab go away on their own, the dark theme lands before first paint, and slider drags no longer rebuild the page.'],
@@ -12215,6 +12221,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     vinylMode: false,
     fadeIn: 0.6, fadeOut: 2.5,           // 0..3 s, 0..8 s
     skipSilence: false,     // end-of-track silence trim (WP10): the last 30 s only, never mid-track
+    uiLang: 'auto',         // the suite's own text: auto follows the browser (i18n.js)
     adSkip: true,           // audio ads: the ad calls fail like an ad blocker's; a creative that slips through is muted and finished in a second
     reverbAmt: 0,           // 0..100 → wet 0..0.35 through a generated 1.6 s IR (WP10 "Slowed + reverb")
     // ── toolbar buttons ──
@@ -15354,6 +15361,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + 'font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:14px';
     infoEl.innerHTML = '<div style="opacity:.6;font-size:12px">Loading track info…</div>';
     (D.body || D.documentElement).appendChild(infoEl);
+    try { if (window.__scsI18n) window.__scsI18n.watch(infoEl); } catch (e) {}
     // tap-away closes it (handler stored so it's always cleaned up)
     setTimeout(() => {
       infoAway = (e) => { try { if (infoEl && !infoEl.contains(e.target) && !(e.target.closest && e.target.closest('.sce-info'))) closeInfo(); } catch (e2) {} };
@@ -16407,6 +16415,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     miniEl.addEventListener('pointermove', (e) => { if (!dg) return; dg.moved = true; const x = Math.min(Math.max(4, e.clientX - dg.dx), innerWidth - 232); const y = Math.min(Math.max(4, e.clientY - dg.dy), innerHeight - 60); miniEl.style.left = x + 'px'; miniEl.style.top = y + 'px'; miniEl.style.right = 'auto'; });
     miniEl.addEventListener('pointerup', () => { if (dg && dg.moved) { try { SET('enh:minipos', { x: parseInt(miniEl.style.left, 10) || 0, y: parseInt(miniEl.style.top, 10) || 0 }); } catch (e) {} } dg = null; miniEl.style.cursor = 'grab'; });   // a plain click must not save x:0
     (D.body || D.documentElement).appendChild(miniEl);
+    try { if (window.__scsI18n) window.__scsI18n.watch(miniEl); } catch (e) {}
   }
   function ensureMini() {
     try {
@@ -16507,6 +16516,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const ab = barWrap.querySelector('.sce-ab');
       if (ab) ab.addEventListener('contextmenu', (e) => { e.preventDefault(); abClear(); });
       host.appendChild(barWrap);
+      try { if (window.__scsI18n) window.__scsI18n.watch(barWrap); } catch (e) {}
       // the pill now owns Suite + Shuffle, so clear out the old standalone
       // shuffle bolt + lyrics button if they slipped in before us
       try { D.querySelectorAll('.bhx-barwrap').forEach((e) => e.remove()); } catch (e) {}
@@ -16522,6 +16532,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         toastEl = D.createElement('div');
         toastEl.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%) translateY(7px);z-index:2147483400;background:rgba(24,24,28,.92);color:#fff;font:600 12px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.01em;padding:9px 16px;border-radius:99px;box-shadow:0 12px 34px -8px rgba(0,0,0,.62),inset 0 0 0 1px rgba(255,255,255,.09);backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);opacity:0;transition:opacity .22s ease,transform .28s cubic-bezier(.3,1,.4,1);pointer-events:none';
         (D.body || D.documentElement).appendChild(toastEl);
+        try { if (window.__scsI18n) window.__scsI18n.watch(toastEl); } catch (e) {}
       }
       toastEl.textContent = msg; toastEl.style.opacity = '1'; toastEl.style.transform = 'translateX(-50%) translateY(0)';
       clearTimeout(toastT); toastT = setTimeout(() => { if (toastEl) { toastEl.style.opacity = '0'; toastEl.style.transform = 'translateX(-50%) translateY(7px)'; } }, 1900);
@@ -16613,6 +16624,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   }
   const ROWS = [
     ['SEC', 'Appearance'],
+    ['uiLang', 'select', 'Language', 'The suite’s own text. Auto follows the browser; SoundCloud itself and lyrics stay as they are', [['auto', 'Auto'], ['en', 'English'], ['de', 'Deutsch'], ['fr', 'Français'], ['es', 'Español'], ['pt', 'Português'], ['it', 'Italiano'], ['nl', 'Nederlands'], ['pl', 'Polski'], ['tr', 'Türkçe'], ['ru', 'Русский'], ['ja', '日本語'], ['ko', '한국어']]],
     ['theme', 'select', 'Theme', 'Real dark themes + tints', [['none', 'Default (light)'], ['dark', '🌙 Dark'], ['amoled', '⬛ AMOLED black'], ['midnight', '🌌 Midnight blue'], ['dracula', '🧛 Dracula'], ['nord', '❄ Nord'], ['ocean', '🌊 Ocean'], ['gruvbox', '🟫 Gruvbox'], ['rosepine', '🌹 Rosé Pine'], ['solar', '☀ Solarized'], ['coffee', '☕ Coffee'], ['slate', '🪨 Slate'], ['dim', 'Dim (tint)'], ['dimmer', 'Dimmer (tint)'], ['warm', 'Night warm (tint)'], ['cool', 'Cool (tint)'], ['vivid', 'Vivid (tint)'], ['muted', 'Muted (tint)'], ['vintage', 'Vintage (tint)'], ['rose', 'Rosé (tint)'], ['sunset', 'Sunset (tint)'], ['forest', 'Forest (tint)'], ['neon', 'Neon (tint)'], ['noir', 'Noir (tint)'], ['cyber', 'Cyberpunk (tint)'], ['pastel', 'Pastel (tint)'], ['gray', 'Grayscale (tint)'], ['contrast', 'High contrast (tint)'], ['custom', '🎨 Custom…']]],
     ['autoDark', 'toggle', 'Auto dark', 'A dark theme by night and light by day, or whatever the system says — overrides the theme above while on'],
     ['autoDarkMode', 'select', 'Auto dark follows', 'The clock, or the OS colour scheme', [['clock', 'The clock (dark 7pm–7am)'], ['system', 'The system colour scheme']]],
@@ -16707,6 +16719,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     host.style.cssText = 'position:fixed;inset:0 0 auto auto;width:0;height:0;z-index:2147483300';
     (D.body || D.documentElement).appendChild(host);
     root = host.attachShadow({ mode: 'open' });
+    try { if (window.__scsI18n) window.__scsI18n.watch(root); } catch (e) {}
     // typing in the panel's fields must not trigger SoundCloud's shortcuts (its Space toggle listens on keyup too)
     for (const ev of ['keydown', 'keypress', 'keyup']) root.addEventListener(ev, (e) => {
       const t = (e.composedPath ? e.composedPath()[0] : null) || e.target;
@@ -17162,7 +17175,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   // a manual pick wins over auto-dark so the choice actually sticks
   try { SUITE.setTheme = (id) => { try { if (typeof id !== 'string') return; CFG.theme = id; CFG.autoDark = false; save(); applyAll(); } catch (e) {} }; } catch (e) {}
 
-  function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); ensureTop(); }
+  function applyAll() { applyCss(); applyFx(); enforce(); refreshBar(); ensureMini(); ensureTop(); try { if (W.__scsI18n) W.__scsI18n.setLang(CFG.uiLang || 'auto'); } catch (e) {} }
   // a slider fires ~60 input events a second: the speed slider sets the rate and the bar, the text-size slider the
   // stylesheet — not a full CSS rebuild, graph write, DOM scan and banner sweep per event
   let rememberSpeedT = null;
@@ -17323,6 +17336,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     D.addEventListener('keydown', tourEsc, true);
     tourRs = () => tourPaint(); W.addEventListener('resize', tourRs);
     (D.body || D.documentElement).appendChild(tourEl);
+    try { if (window.__scsI18n) window.__scsI18n.watch(tourEl); } catch (e) {}
     tourPaint();
     try { card.querySelector('.sce-tour-next').focus({ preventScroll: true }); } catch (e) {}
   }
@@ -17360,6 +17374,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + '<button type="button" data-a="later" style="border:0;background:none;color:#8a8a92;border-radius:10px;padding:8px 8px;font:700 12px inherit;cursor:pointer">Not now</button></div>';
     rateEl.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button[data-a]') : null; if (!b) return; const a = b.dataset.a; if (a === 'later') SET('sce:rated', 1); else rateShare(a); try { rateEl.remove(); } catch (er) {} rateEl = null; });
     (D.body || D.documentElement).appendChild(rateEl);
+    try { if (window.__scsI18n) window.__scsI18n.watch(rateEl); } catch (e) {}
     try { requestAnimationFrame(() => { if (rateEl) { rateEl.style.opacity = '1'; rateEl.style.transform = 'none'; } }); } catch (e) { rateEl.style.opacity = '1'; }
   }
   function showOnboarding() {
@@ -17388,6 +17403,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     onbEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); SET('sce:onboarded', 1); closeOnboarding(); } };
     D.addEventListener('keydown', onbEsc, true);
     (D.body || D.documentElement).appendChild(onbEl);
+    try { if (window.__scsI18n) window.__scsI18n.watch(onbEl); } catch (e) {}
     try { rec.focus({ preventScroll: true }); } catch (e) {}
     try { requestAnimationFrame(() => { if (onbEl) { onbEl.style.opacity = '1'; card.style.transform = 'none'; } }); } catch (e) { onbEl.style.opacity = '1'; }
   }

@@ -30,6 +30,10 @@
   window.addEventListener('message', (e) => {
     const d = e.data;
     if (e.source === window && d && d.scss === 'state') tell({ playing: d.playing === true ? true : d.playing === false ? false : undefined, focus: !!d.focus });
+    // the page asks for a language dictionary (i18n/<lang>.json): the background reads the packaged file
+    if (e.source === window && d && d.scss === 'dict?' && typeof d.lang === 'string' && /^[a-z]{2}$/.test(d.lang)) {
+      try { chrome.runtime.sendMessage({ scss: 'dict', lang: d.lang }, (res) => { void chrome.runtime.lastError; if (res && res.ok && typeof res.json === 'string') { try { window.postMessage({ scss: 'dict', lang: d.lang, json: res.json }, location.origin); } catch (err) {} } }); } catch (err) {}
+    }
     // the page asks for the extension id: it builds the Chrome Web Store link from it (Rate & share)
     if (e.source === window && d && d.scss === 'ext-id?') { try { window.postMessage({ scss: 'ext-id', id: String(chrome.runtime.id || '') }, location.origin); } catch (err) {} }
   });
