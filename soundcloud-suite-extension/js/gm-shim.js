@@ -22,7 +22,7 @@
 
   // GM_info: the suite reads GM_info.script.version as its single source of truth
   // for the displayed version. build.sh keeps this in lockstep with the manifest.
-  window.GM_info = { script: { name: 'SoundCloud Suite', version: '4.69.0' } };
+  window.GM_info = { script: { name: 'SoundCloud Suite', version: '4.70.0' } };
 
   window.GM_getValue = function (key, fallback) {
     try {

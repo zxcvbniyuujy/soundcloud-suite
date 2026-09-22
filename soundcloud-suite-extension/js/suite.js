@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.69.0
+// @version      4.70.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -104,7 +104,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.69.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.70.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -7389,12 +7389,6 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .line.sk-click:hover:not(.act) { color: #d8d8de; transform: translateX(1px); background: rgba(255,255,255,0.035); }
 .line.past { color: #4c4c53; }
 .line.act {
-  color: transparent;
-  /* TRUE karaoke wipe: --fill (0→100%) is driven every frame from the real
-     playback position WITHIN this line, so the bright "sung" portion sweeps
-     left→right exactly in time with the music — sung text white, not-yet gray */
-  background: linear-gradient(90deg, #ffffff 0%, #ffe9d6 calc(var(--fill, 0%) - 1.5%), var(--acc2) var(--fill, 0%), #83838d calc(var(--fill, 0%) + 0.5%), #83838d 100%);
-  -webkit-background-clip: text; background-clip: text;
   transform: translateX(2px) scale(1.015);
   filter: drop-shadow(0 1px 9px rgba(255, 120, 0, 0.09));
   font-weight: 700;
@@ -7403,7 +7397,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
      late at lead 0). Leaving .act keeps the slower .line ease, so past lines still dim gently. */
   transition: color 0.06s linear, opacity 0.1s ease, transform 0.22s cubic-bezier(.22,1,.36,1);
 }
-@supports not (-webkit-background-clip: text) { .line.act { color: #fff; background: none; } }
+/* TRUE karaoke wipe: --fill (0→100%) is driven every frame from the real playback position WITHIN this line, so the
+   bright "sung" portion sweeps left→right exactly in time with the music — sung text white, not-yet gray. It paints
+   the inline text span, not the block: an inline's background runs across wrapped rows as one strip, so a two-row
+   line fills its first row before its second starts */
+.line.act .tx {
+  color: transparent;
+  /* the theme and stage rules below override background-image only: the shorthand would reset the text clip */
+  background-image: linear-gradient(90deg, #ffffff 0%, #ffe9d6 calc(var(--fill, 0%) - 1.5%), var(--acc2) var(--fill, 0%), #83838d calc(var(--fill, 0%) + 0.5%), #83838d 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-box-decoration-break: slice; box-decoration-break: slice;
+}
+@supports not (-webkit-background-clip: text) { .line.act .tx { color: #fff; background: none; } }
 .line.u { font-weight: 500; color: #c9c9cf; cursor: default; padding: 4px 14px; font-size: calc(var(--fs, 16px) - 1px); opacity: .92; }
 .tline { padding: 0 14px 5px; margin-top: -3px; font-size: calc(var(--fs, 16px) - 4px); line-height: 1.35; font-weight: 500; font-style: italic; color: #6f6f78; letter-spacing: 0.1px; animation: lin 0.38s ease both; }
 .rline { padding: 0 14px 2px; margin-top: -3px; font-size: calc(var(--fs, 16px) - 3px); line-height: 1.35; font-weight: 500; color: #8f8f98; letter-spacing: 0.2px; animation: lin 0.38s ease both; }
@@ -7586,10 +7591,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   transform-origin: left center; transition: color .35s ease, opacity .35s ease, transform .45s cubic-bezier(.2,.7,.2,1); }
 .panel.max.stage .line.past { color: rgba(255,255,255,.26); }
 .panel.max.stage .line.sk-click:hover:not(.act) { color: rgba(255,255,255,.88); transform: none; }
-.panel.max.stage .line.act { color: transparent; font-weight: 800; filter: none; transform: scale(1.03);
-  background: linear-gradient(90deg, #fff 0%, #fff calc(var(--fill, 0%) - 1.2%), var(--acc2) var(--fill, 0%), rgba(255,255,255,.42) calc(var(--fill, 0%) + .6%), rgba(255,255,255,.42) 100%);
-  -webkit-background-clip: text; background-clip: text; }
-@supports not (-webkit-background-clip: text) { .panel.max.stage .line.act { color: #fff; background: none; } }
+.panel.max.stage .line.act { font-weight: 800; filter: none; transform: scale(1.03); }
+.panel.max.stage .line.act .tx { background-image: linear-gradient(90deg, #fff 0%, #fff calc(var(--fill, 0%) - 1.2%), var(--acc2) var(--fill, 0%), rgba(255,255,255,.42) calc(var(--fill, 0%) + .6%), rgba(255,255,255,.42) 100%); }
+@supports not (-webkit-background-clip: text) { .panel.max.stage .line.act .tx { color: #fff; background: none; } }
 .panel.max.stage .line.u { font-size: calc(var(--st-fs) * .8); font-weight: 600; color: rgba(255,255,255,.74); padding: .22em 0; }
 .panel.max.stage .sec { font-size: 12.5px; letter-spacing: .16em; color: rgba(255,255,255,.45); padding: 1.6em 0 .5em; opacity: 1; }
 .panel.max.stage .tline { font-size: calc(var(--st-fs) * .48); font-style: normal; color: rgba(255,255,255,.5); padding: 0 0 .5em; margin-top: -.1em; }
@@ -7933,8 +7937,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
 .panel.lite .line.past { color: #c6c6cd; }
 .panel.lite .line.sk-click:hover:not(.act) { color: #4a4a52; }
 .panel.lite .line.u { color: #3c3c44; }
-.panel.lite .line.act { background: linear-gradient(90deg, #111114 0%, #2a1c12 calc(var(--fill, 0%) - 1.5%), var(--acc) var(--fill, 0%), #b4b4bc calc(var(--fill, 0%) + 0.5%), #b4b4bc 100%); -webkit-background-clip: text; background-clip: text; }
-@supports not (-webkit-background-clip: text) { .panel.lite .line.act { color: #111; background: none; } }
+.panel.lite .line.act .tx { background-image: linear-gradient(90deg, #111114 0%, #2a1c12 calc(var(--fill, 0%) - 1.5%), var(--acc) var(--fill, 0%), #b4b4bc calc(var(--fill, 0%) + 0.5%), #b4b4bc 100%); }
+@supports not (-webkit-background-clip: text) { .panel.lite .line.act .tx { color: #111; background: none; } }
 .panel.lite .sec { color: #9a9aa2; }
 .panel.lite .state { color: #76767e; }
 .panel.lite .state .h { color: #2c2c33; }
@@ -8035,7 +8039,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   .panel::before { display: none; }
   .hdr::after, .nxt, .prog, .tabs { border-color: CanvasText !important; }
   .prog { background: Highlight !important; }
-  .line.act { color: Highlight !important; -webkit-text-fill-color: Highlight !important; }
+  .line.act .tx { color: Highlight !important; -webkit-text-fill-color: Highlight !important; background: none !important; }
   .hbtn, .tab, .mi, .btn, .res, .qrow, .fab { color: CanvasText !important; background: ButtonFace !important; border: 1px solid ButtonBorder !important; }
   .hbtn:focus-visible, .tab:focus-visible, .mi:focus-visible, .res:focus-visible, .btn:focus-visible, .qrow:focus-visible, .fab:focus-visible { outline: 2px solid Highlight !important; outline-offset: 2px; }
   .badge, .badge.sync { color: CanvasText !important; background: ButtonFace !important; }
@@ -8566,9 +8570,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + '.open{width:30px;height:30px;border-radius:50%;color:rgba(255,255,255,.72);display:flex;align-items:center;justify-content:center;flex:none;transition:background .15s,color .15s}.open:hover{background:rgba(255,255,255,.12);color:#fff}.open svg{width:15px;height:15px}'
       + '.ln{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;gap:4px}'
       + '.pv,.nx{font-size:12.5px;line-height:1.3;color:rgba(255,255,255,.58);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.3em}.pv{opacity:.6}'
-      + '.cur{font-size:22px;font-weight:800;letter-spacing:-.35px;line-height:1.16;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%;'
-      + 'background:linear-gradient(90deg,#fff var(--fill),rgba(255,255,255,.34) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}'
-      + '.cur.idle{-webkit-text-fill-color:rgba(255,255,255,.7);color:rgba(255,255,255,.7);background:none;font-weight:600;font-size:15px;letter-spacing:0}'
+      + '.cur{font-size:22px;font-weight:800;letter-spacing:-.35px;line-height:1.16;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;--fill:0%}'
+      + '.cur span{background:linear-gradient(90deg,#fff var(--fill),rgba(255,255,255,.34) var(--fill));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;-webkit-box-decoration-break:slice;box-decoration-break:slice}'
+      + '.cur.idle{font-weight:600;font-size:15px;letter-spacing:0}.cur.idle span{-webkit-text-fill-color:rgba(255,255,255,.7);color:rgba(255,255,255,.7);background:none}'
       + '.bot{display:flex;align-items:center;gap:12px}.tm{font-size:11px;font-weight:600;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums;flex:none;min-width:32px}.tm.r{text-align:right}'
       + '.bar{flex:1;height:4px;border-radius:4px;background:rgba(255,255,255,.16);overflow:hidden}.bar i{display:block;height:100%;width:0;background:#fff;border-radius:4px}'
       + '.ctl{display:flex;align-items:center;gap:4px;margin-left:6px}.ctl button{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.8);transition:background .15s,color .15s,transform .1s}'
@@ -8576,7 +8580,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       + '.ctl .pp{width:40px;height:40px;background:#fff;color:#0a0a0d;box-shadow:0 8px 20px -6px rgba(0,0,0,.7)}.ctl .pp:hover{background:#fff;color:#000;transform:scale(1.05)}.ctl .pp svg{width:20px;height:20px}';
     const PIP_HTML = '<div class="w"><div class="bg"></div><div class="veil"></div>'
       + '<div class="top"><div class="art"></div><div class="meta"><div class="t"></div><div class="a"><span class="an"></span><span class="k"></span></div></div><button class="open" title="Show the SoundCloud tab" aria-label="Show the SoundCloud tab">' + ICONS.open + '</button></div>'
-      + '<div class="ln"><div class="pv"></div><div class="cur idle">Waiting for lyrics…</div><div class="nx"></div></div>'
+      + '<div class="ln"><div class="pv"></div><div class="cur idle"><span>Waiting for lyrics…</span></div><div class="nx"></div></div>'
       + '<div class="bot"><span class="tm">0:00</span><div class="bar"><i></i></div><span class="tm r">0:00</span>'
       + '<div class="ctl"><button class="prev" title="Previous track" aria-label="Previous track">' + ICONS.prev + '</button><button class="pp" title="Play / pause" aria-label="Play or pause">' + ICONS.pause + '</button><button class="next" title="Next track" aria-label="Next track">' + ICONS.next + '</button></div></div></div>';
     function floatSupported() { try { return !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow); } catch (e) { return false; } }
@@ -8600,7 +8604,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         q('.pp').addEventListener('click', () => cmd('play-pause'));
         q('.open').addEventListener('click', () => { try { window.focus(); } catch (e) {} });
         d.addEventListener('keydown', (e) => { if (e.key === ' ') { e.preventDefault(); cmd('play-pause'); } else if (e.key === 'ArrowRight') cmd('next-track'); else if (e.key === 'ArrowLeft') cmd('prev-track'); });
-        pip = { win, d, bg: q('.bg'), art: q('.art'), t: q('.t'), an: q('.an'), k: q('.k'), pv: q('.pv'), cur: q('.cur'), nx: q('.nx'), fill: q('.bar i'), tm: q('.tm'), tm2: q('.tm.r'), pp: q('.pp'), key: '', kind: '', lastI: -2, lastPlaying: null, lastFill: '' };
+        pip = { win, d, bg: q('.bg'), art: q('.art'), t: q('.t'), an: q('.an'), k: q('.k'), pv: q('.pv'), cur: q('.cur'), ct: q('.cur span'), nx: q('.nx'), fill: q('.bar i'), tm: q('.tm'), tm2: q('.tm.r'), pp: q('.pp'), key: '', kind: '', lastI: -2, lastPlaying: null, lastFill: '' };
         win.addEventListener('pagehide', () => pipStop());
         pipT = Ticker.every(pipTick, 100);   // the worker ticker keeps it moving while the tab is hidden
         pipTick();
@@ -8630,7 +8634,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         const tm = ck(now); if (P.tm.textContent !== tm) P.tm.textContent = tm;
         const tm2 = dur ? ck(dur) : ''; if (P.tm2.textContent !== tm2) P.tm2.textContent = tm2;
         if (!miniData) {
-          if (P.lastI !== -1) { P.lastI = -1; P.cur.textContent = m ? (miniKind === 'text' ? 'Lyrics without timing for this one' : 'No lyrics for this one') : 'Play something on SoundCloud'; P.cur.classList.add('idle'); P.pv.textContent = ''; P.nx.textContent = ''; P.cur.style.removeProperty('--fill'); }
+          if (P.lastI !== -1) { P.lastI = -1; (P.ct || P.cur).textContent = m ? (miniKind === 'text' ? 'Lyrics without timing for this one' : 'No lyrics for this one') : 'Play something on SoundCloud'; P.cur.classList.add('idle'); P.pv.textContent = ''; P.nx.textContent = ''; P.cur.style.removeProperty('--fill'); }
           return;
         }
         const i = curMiniLine();
@@ -8638,7 +8642,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           P.lastI = i;
           P.cur.classList.remove('idle');
           P.pv.textContent = i > 0 && miniData[i - 1] ? miniData[i - 1][1] : '';
-          P.cur.textContent = i >= 0 ? miniData[i][1] : '♪';
+          (P.ct || P.cur).textContent = i >= 0 ? miniData[i][1] : '♪';
           P.nx.textContent = miniData[i + 1] ? miniData[i + 1][1] : '';
           try { P.cur.animate([{ opacity: 0.35, transform: 'translateY(7px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }); } catch (e) {}
         }
@@ -9206,6 +9210,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['⇢', 'A wrapped line fills row by row', 'The karaoke wipe used to light every row of a two-row line from the left at once, so the first words of the second row lit before they were sung. The wipe now runs across the text as one strip: the first row fills completely, then the second starts — in the panel, on the stage and in the floating window.'],
+          ['◌', 'A cleaner pill in the player bar', 'One capsule that takes its tint from the bar, round 26 px buttons, a hairline between the suite’s own buttons and the track tools, a label that floats above the hovered button, a ring for the keyboard, and the hub button lit while the hub is open. On narrow windows the bar and the title badge give way, so the gear never runs off the edge again.'],
           ['⇄', 'The vocals decide how a sheet is read', 'A sheet from a master of another length can be read two ways: as written, with an intro or outro of another length (the same master, cut differently), or stretched by the length ratio (a sped-up upload). Stretching by length alone put every line seconds off. Now a sheet starts as written unless the upload says sped-up or slowed, and each look scores both readings on the vocals: a clearly better one takes over — the panel, the mini bar, the floating window and the cache entry all switch, and the trail says why.'],
           ['✂', 'Fewer switches, clearer groups', 'Eight gimmicks left the Tweaks tab with their code: grayscale and square artwork, the bigger play button, the taller waveform, slim scrollbars, the back-to-top button, hiding the Upload button and the stories bar. What remains is grouped as Look · Declutter · Feed rules · Player · Track pages · Player bar · Accessibility · Advanced · Your data, each switch saying what it does.'],
           ['⚑', 'A sheet that is not these vocals says so', 'When the vocal aligner looks twice at a synced sheet, on a dozen lines each time, and finds no clear lag either time, the sheet is probably for another version or another song. The source line now says “Not these vocals? tap to pick” and opens the search; the trail says why. A sheet the aligner confirms, or one you picked, is never doubted.'],
@@ -10436,6 +10442,10 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       activeI = -1; lastFrameNow = -1; pauseScrollUntil = 0;
     }
 
+    // a line's text sits in an inline span. The karaoke wipe is a text-clipped gradient: on an inline box the gradient
+    // spans the text as one run, so a wrapped line fills row by row in reading order; on the block it painted every
+    // row from its left edge at once, and a two-row line lit the first words of its second row before they were sung
+    function setLineText(el, text) { const sp = document.createElement('span'); sp.className = 'tx'; sp.textContent = text; el.appendChild(sp); }
     function renderLyrics(lyr) {
       curLyr = lyr;
       exitSearch(true);
@@ -10492,7 +10502,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           } else {
             el = document.createElement('div');
             el.className = 'line sk-click';
-            el.textContent = en.txt;
+            setLineText(el, en.txt);
             // CONFIRMED SYNCED lyrics are already accurate — clicking a line just
             // SEEKS to it. No tap-to-anchor here: anchoring real synced timing has
             // no point and could only RUIN it. (Calibration is estimated-only.) [user]
@@ -10527,7 +10537,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
           }
           const el = document.createElement('div');
           el.className = 'line sk-click';
-          el.textContent = en.text;
+          setLineText(el, en.text);
           const idx = lineEls.length;
           let ct = 0;
           el.addEventListener('click', (ev) => {
@@ -10571,7 +10581,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
             el.textContent = text.slice(1, -1);
           } else {
             el.className = 'line u';
-            el.textContent = text;
+            setLineText(el, text);
             el.addEventListener('contextmenu', (ev) => { ev.preventDefault(); copyLine(text); });
           }
           stagger(el);
@@ -11115,6 +11125,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       fab.classList.toggle('on', v);
       fab.classList.toggle('has', ready && !v);
       if (barBtn) { barBtn.style.color = v ? '#ff5500' : 'inherit'; barBtn.style.opacity = v ? '1' : '.55'; }
+      try { const hb = document.querySelector('.sce-barwrap .sce-hub'); if (hb) hb.classList.toggle('on', !!v); } catch (e) {}   // the pill's hub button reads on while the hub is open
       if (barDot) barDot.style.display = (ready && !v) ? 'block' : 'none';
       if (v && !rafOn) { rafOn = true; requestAnimationFrame(loop); }
       if (v) {
@@ -17170,43 +17181,60 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       if (sp) {
         sp.textContent = (CFG.speed / 100) + '×';
         const on = (CFG.speed | 0) !== 100;   // not 1× → a subtle accent so it's clearly engaged
-        sp.style.color = on ? '#ff6a1f' : ''; sp.style.opacity = on ? '.95' : '.55';
-        sp.style.textShadow = on ? '0 0 10px rgba(255,106,31,.55)' : '';
+        sp.classList.toggle('on', on);
       }
       show('.sce-speed', CFG.barSpeed);
       show('.sce-copy', CFG.barCopy);
       show('.sce-restart', CFG.barRestart);
       show('.sce-info', CFG.barInfo);
       const ab = barWrap.querySelector('.sce-ab');
-      if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.style.color = (abOn ? '#ff6a1f' : ''); ab.style.opacity = abOn ? '.95' : '.55'; ab.style.textShadow = abOn ? '0 0 10px rgba(255,106,31,.55)' : ''; }
+      if (ab) { ab.style.display = CFG.barAB ? 'inline-flex' : 'none'; ab.classList.toggle('on', !!abOn); }
+      const anyTool = !!(CFG.barRestart || CFG.barSpeed || CFG.barAB || CFG.barInfo || CFG.barCopy);   // no track tools shown: no hairlines around an empty group
+      barWrap.querySelectorAll('.sep').forEach((el) => { el.style.display = anyTool ? '' : 'none'; });
       // FX glow (WP10): the hub button wears the speed pill's accent while the listener's own audio settings are
       // engaged (an open tab alone routes the chain but changes nothing audible); the tooltip names it and the boost
       abMarkers();
       const hb = barWrap.querySelector('.sce-hub');
       if (hb) {
         const fx = fxUserOn() && !fxBypass, bst = CFG.boostAmt | 0;
-        hb.style.color = fx ? '#ff6a1f' : ''; hb.style.opacity = fx ? '.95' : '.55'; hb.style.textShadow = fx ? '0 0 10px rgba(255,106,31,.55)' : '';
+        hb.classList.toggle('fx', fx);   // a dot on the hub button: the listener's own audio settings are engaged
         hb._tip = fx ? 'Audio FX on' + (bst > 100 ? ' · boost ' + bst + ' %' : '') : '';
         const t = 'Open / close the lyrics hub' + (hb._tip ? ' · ' + hb._tip : ''); if (hb.title !== t) hb.title = t;
       }
     } catch (e) {}
   }
+  // the pill's look lives in one sheet: a glassy capsule that takes its tint from the bar's own text colour (so it
+  // reads on SoundCloud's light bar and on every dark theme), 26 px round buttons, states as classes (on · fx), a
+  // hairline between the suite's own buttons and the track tools, one label that floats above the hovered button.
+  // Below SoundCloud's 960 px floor its bar keeps a fixed width and the last item — this pill — ran past the window
+  // edge (the gear was the first to go); there the bar, its wrapper and the title badge may shrink instead
+  const BAR_CSS = '.sce-barwrap{position:relative;display:inline-flex;align-items:center;gap:2px;flex:0 0 auto;margin:0 0 0 10px;padding:2px;border-radius:999px;vertical-align:middle;color:inherit;background:color-mix(in srgb,currentColor 7%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,currentColor 9%,transparent);font:700 10.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;letter-spacing:.02em}'
+    + '.sce-barwrap>button{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 8px;margin:0;border:0;border-radius:999px;background:none;color:inherit;opacity:.62;cursor:pointer;font:inherit;font-variant-numeric:tabular-nums;transition:opacity .15s ease,background-color .15s ease,color .15s ease,transform .18s cubic-bezier(.2,.7,.2,1)}'
+    + '.sce-barwrap>button.i{width:26px;padding:0}.sce-barwrap>button svg{display:block;width:15px;height:15px}'
+    + '.sce-barwrap>button:hover{opacity:1;background:color-mix(in srgb,currentColor 10%,transparent)}.sce-barwrap>button:active{transform:scale(.93)}'
+    + '.sce-barwrap>button.on{opacity:1;color:#ff5500;background:rgba(255,85,0,.13)}.sce-barwrap>button.on:hover{background:rgba(255,85,0,.2)}'
+    + '.sce-barwrap>button.fx::after{content:"";position:absolute;top:4px;right:4px;width:5px;height:5px;border-radius:50%;background:#ff5500;box-shadow:0 0 5px rgba(255,85,0,.8)}'
+    + '.sce-barwrap>button:focus-visible{outline:2px solid #ff5500;outline-offset:1px;opacity:1}'
+    + '.sce-barwrap>.sep{width:1px;height:14px;margin:0 2px;border-radius:1px;background:color-mix(in srgb,currentColor 16%,transparent);flex:none}'
+    + '.sce-barwrap>.tip{position:absolute;bottom:calc(100% + 8px);left:0;transform:translateX(-50%) translateY(3px);background:rgba(18,18,22,.96);color:#fff;font:600 10.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;letter-spacing:.01em;padding:6px 9px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s ease,transform .12s ease;box-shadow:0 4px 14px rgba(0,0,0,.35),inset 0 0 0 1px rgba(255,255,255,.08);z-index:30}'
+    + '.sce-barwrap>.tip.on{opacity:1;transform:translateX(-50%) translateY(0)}'
+    + '@media (max-width:1000px){.playControls__wrapper.l-container,.playControls__elements{width:auto !important;min-width:0 !important}'
+    + '.playControls__elements>.playControls__soundBadge{flex:0 1 328px !important;min-width:150px !important}.playControls__soundBadge>.playbackSoundBadge{width:auto !important;min-width:0 !important;max-width:100%}.playbackSoundBadge__titleContextContainer{min-width:0 !important}}'
+    + '@media (prefers-reduced-motion:reduce){.sce-barwrap>button,.sce-barwrap>.tip{transition:none}}';
   function ensureBar() {
     try {
       const host = D.querySelector('.playControls__elements') || D.querySelector('.playControls');
       if (!host || (barWrap && barWrap.isConnected)) { refreshBar(); return; }
       barWrap = D.createElement('span');
       barWrap.className = 'sce-barwrap';
-      // a small, minimal glassy pill that reads on both light and dark bars;
-      // position:relative anchors the hover tooltip; flex:none + a little right
-      // clearance keeps the last (gear) button from being clipped
-      barWrap.style.cssText = 'position:relative;display:inline-flex;align-items:center;gap:1px;flex:0 0 auto;margin:0 10px 0 2px;padding:3px;border-radius:11px;vertical-align:middle;background:rgba(124,124,134,.1);box-shadow:inset 0 0 0 1px rgba(150,150,160,.12);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)';
+      if (!D.getElementById('sce-bar-css')) { const st = D.createElement('style'); st.id = 'sce-bar-css'; st.textContent = BAR_CSS; (D.head || D.documentElement).appendChild(st); }
       // one shared minimalist tooltip that floats above the hovered button
       const tip = D.createElement('div');
-      tip.style.cssText = 'position:absolute;bottom:calc(100% + 9px);left:0;transform:translateX(-50%);background:rgba(18,18,22,.97);color:#fff;font:600 10px/1 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.02em;padding:5px 8px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s ease;box-shadow:0 6px 18px rgba(0,0,0,.5);z-index:30';
+      tip.className = 'tip';
       barWrap.appendChild(tip);
-      const showTip = (b, text) => { tip.textContent = text; tip.style.left = (b.offsetLeft + b.offsetWidth / 2) + 'px'; tip.style.opacity = '1'; };
-      const hideTip = () => { tip.style.opacity = '0'; };
+      const showTip = (b, text) => { tip.textContent = text; tip.style.left = (b.offsetLeft + b.offsetWidth / 2) + 'px'; tip.classList.add('on'); };
+      const hideTip = () => { tip.classList.remove('on'); };
+      const sep = () => { const i = D.createElement('i'); i.className = 'sep'; i.setAttribute('aria-hidden', 'true'); return i; };
       const I = {
         restart: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14"/><path d="M19 5 9 12l10 7Z"/></svg>',
         info: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.7" r="1.15" fill="currentColor" stroke="none"/></svg>',
@@ -17220,10 +17248,11 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       const mk = (cls, content, label, title, fn, isHtml) => {
         const b = D.createElement('button');
         b.type = 'button'; b.className = cls; b.title = title; b.setAttribute('aria-label', title);
-        b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;background:none;border:0;color:inherit;opacity:.55;cursor:pointer;font:800 10px/1 inherit;padding:0 ' + (isHtml ? '0' : '5px') + ';min-width:28px;height:28px;border-radius:7px;transition:opacity .14s ease,background .14s ease,color .14s ease';
+        if (isHtml) b.classList.add('i');
         if (isHtml) b.innerHTML = content; else b.textContent = content;
-        b.addEventListener('mouseenter', () => { b.style.opacity = '1'; b.style.background = 'rgba(255,90,0,.13)'; b.style.color = '#ff6a1f'; showTip(b, b._tip || label); });
-        b.addEventListener('mouseleave', () => { b.style.background = 'none'; b.style.color = ''; b.style.opacity = '.55'; hideTip(); refreshBar(); });
+        b.addEventListener('mouseenter', () => showTip(b, b._tip || label));
+        b.addEventListener('mouseleave', hideTip);
+        b.addEventListener('blur', hideTip);
         b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
         return b;
       };
@@ -17231,15 +17260,18 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
       // (the lyrics module suppresses its own standalone button when this exists)
       barWrap.appendChild(mk('sce-hub', I.hub, 'Lyrics hub', 'Open / close the lyrics hub', () => { try { if (SUITE.toggleLyrics) SUITE.toggleLyrics(); else if (SUITE.openLyrics) SUITE.openLyrics(); else openSettings(); } catch (e) {} }, true));
       barWrap.appendChild(mk('sce-shuffle', I.shuffle, 'Shuffle Likes', 'Shuffle your entire Likes library', () => { try { const m = SUITE.shuffleNow ? SUITE.shuffleNow() : 'Open your Likes to shuffle'; if (m) toast(m); } catch (e) {} }, true));
+      barWrap.appendChild(sep());
       barWrap.appendChild(mk('sce-restart', I.restart, 'Restart track', 'Restart this track from the beginning', restartTrack, true));
       barWrap.appendChild(mk('sce-speed', (CFG.speed / 100) + '×', 'Playback speed', 'Playback speed — click to cycle 0.5×–2×', cycleSpeed, false));
       barWrap.appendChild(mk('sce-ab', 'A·B', 'A–B loop', 'A–B loop: click for A, again for B (right-click clears)', abMark, false));
       barWrap.appendChild(mk('sce-info', I.info, 'Track info', 'Track info & artist links', showInfo, true));
       barWrap.appendChild(mk('sce-copy', I.copy, 'Copy link', 'Copy this track’s link', copyTrackLink, true));
+      barWrap.appendChild(sep());
       barWrap.appendChild(mk('sce-gear', I.gear, 'Settings', 'Open / close all settings (Tweaks)', () => { try { if (SUITE.toggleTweaks) SUITE.toggleTweaks(); else openSettings(); } catch (e) {} }, true));
       const ab = barWrap.querySelector('.sce-ab');
       if (ab) ab.addEventListener('contextmenu', (e) => { e.preventDefault(); abClear(); });
       host.appendChild(barWrap);
+      try { if (SUITE.lyricsOpen && SUITE.lyricsOpen()) barWrap.querySelector('.sce-hub').classList.add('on'); } catch (e) {}   // built while the hub is already open
       try { if (window.__scsI18n) window.__scsI18n.watch(barWrap); } catch (e) {}
       // the pill now owns Suite + Shuffle, so clear out the old standalone
       // shuffle bolt + lyrics button if they slipped in before us

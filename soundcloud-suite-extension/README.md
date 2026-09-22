@@ -117,6 +117,15 @@ never plays.
   the size (S–XL), left or centred lines, the cover on or off and an artwork
   or plain-dark backdrop, and remembers (`sl:stage`). Esc or F leaves. On the
   other tabs immersive mode is the roomy panel it was.
+- **A wrapped line fills row by row** — the karaoke wipe paints the line's
+  inline text span, so a two-row line fills its first row before its second
+  starts (the block used to light every row from the left at once). Panel,
+  stage and floating window alike.
+- **A cleaner pill in the player bar** — one capsule tinted from the bar,
+  round 26 px buttons, a hairline between the suite's buttons and the track
+  tools, a floating label on hover, a focus ring, the hub button lit while the
+  hub is open. Below SoundCloud's 960 px floor the bar and the title badge
+  shrink so the pill never runs past the window edge.
 - **The vocals decide how a sheet is read** — a sheet from a master of another
   length has two readings: as written, with a lag, or stretched by the ratio.
   It starts as written unless the upload says sped-up or slowed (the same
