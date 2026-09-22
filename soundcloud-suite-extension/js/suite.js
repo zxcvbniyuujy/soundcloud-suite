@@ -470,7 +470,8 @@
         playingStarted: false, beganPlayback: false, beginP: null, earlyBegun: false, seeded: false, jumping: false,
         auth: null, clientId: null, tpl: null,
         pageUserId: '',   // the profile a GenericLikes run resolved, so the feed answers only that profile's pagination
-        listSeen: null,   // { page, path, ids } — the likes this page's list has loaded from the API (they head the queue)
+        meId: '',   // the signed-in account's id from /me, when the token's shape does not carry it
+        listSeen: new Map(),   // page path → { path, ids }: the likes each page's list has loaded from the API (they head its queue)
         reloading: false,   // a reshuffle reload is under way: the auto-run flag belongs to the next page
         apiFails: 0, apiNoticeShown: false,   // R23: api-v2 degradation watchdog (see ApiHealth)
         fetchAbort: null,
@@ -553,6 +554,8 @@
         if (LIBMAP) return LIBMAP;
         const c = LS.get('bh_sc_lib', null);
         if (!c || !c.items) return null;
+        // written by another account on this browser: not this listener's library (a blob from before the tag is kept)
+        try { const me = userTag(); if (c.acct && me && c.acct !== me) return null; } catch (e) {}
         const m = new Map();
         for (const it of c.items) m.set(it[1], it);
         m.__items = c.items;
@@ -739,8 +742,8 @@
         try {
             const a = S.auth || cookieAuth() || '';
             const m = String(a).match(/OAuth\s+\d+-\d+-(\d+)-/);
-            return m ? m[1] : '';
-        } catch (e) { return ''; }
+            return m ? m[1] : (S.meId || '');
+        } catch (e) { return S.meId || ''; }
     }
     function ownLibKey() { const t = userTag(); return 'Likes:you' + (t ? '@' + t : ''); }
 
@@ -773,8 +776,22 @@
         try {
             const p = new URL(url, location.href).pathname;
             if (!LIKES_PATH.test(p) || !json || !Array.isArray(json.collection)) return;
-            if (!S.listSeen || S.listSeen.path !== p || S.listSeen.page !== location.pathname) S.listSeen = { page: location.pathname, path: p, ids: new Set() };
-            for (const it of json.collection) if (it && it.track && it.track.id) S.listSeen.ids.add(it.track.id);
+            // one capture per page: SoundCloud keeps each page's collection for the life of the tab, so a page
+            // rendered again from that cache (no request) still has its capture
+            const page = location.pathname;
+            let cap = S.listSeen.get(page);
+            if (!cap || cap.path !== p) {
+                cap = { path: p, ids: new Set() };
+                S.listSeen.delete(page); S.listSeen.set(page, cap);
+                while (S.listSeen.size > 8) S.listSeen.delete(S.listSeen.keys().next().value);
+            }
+            for (const it of json.collection) {
+                if (!it) continue;
+                if (it.track && it.track.id) cap.ids.add(it.track.id);
+                // a liked playlist expands into its tracks ahead of the pool, and those are held once too
+                const tr = it.playlist && Array.isArray(it.playlist.tracks) ? it.playlist.tracks : null;
+                if (tr) for (const t of tr) if (t && t.id) cap.ids.add(t.id);
+            }
         } catch (e) {}
     }
 
@@ -1769,6 +1786,23 @@
     }
 
     /* ═══════════════════ LIKES ENGINE: FETCH EVERYTHING ═══════════════════ */
+    // The token's shape ("2-app-USERID-…") is SoundCloud's to change: when a token is there but does not parse, ask
+    // the API once who it belongs to, so the own-likes run can still key its cache per account instead of refusing
+    let meResolving = null;
+    function resolveMe() {
+        if (S.meId) return Promise.resolve(S.meId);
+        if (meResolving) return meResolving;
+        const auth = S.auth || cookieAuth();
+        if (!auth || !S.clientId) return Promise.resolve('');
+        const url = `https://api-v2.soundcloud.com/me?client_id=${S.clientId}`;
+        try { assertScApi(url); } catch (e) { return Promise.resolve(''); }
+        meResolving = origFetch(url, { credentials: 'include', headers: { Authorization: auth } })
+            .then(r => (r.ok ? r.json() : null))
+            .then(j => { if (j && j.id) S.meId = String(j.id); return S.meId || ''; })
+            .catch(() => '')
+            .then(v => { meResolving = null; return v; });
+        return meResolving;
+    }
     async function buildFirstPageUrl(pageType, limit) {
         // a template is only replayed when it targets THIS page's likes: the queue
         // of another profile keeps paginating after navigation and would otherwise
@@ -1887,7 +1921,8 @@
                 ((it.track.user && it.track.user.username) || '').slice(0, 40),
                 (it.track.title || '').slice(0, 80),
             ]);
-            let ok = LS.set('bh_sc_lib', { t: Date.now(), items });
+            const acct = userTag();
+            let ok = LS.set('bh_sc_lib', { t: Date.now(), acct, items });
             if (!ok) {
                 // localStorage is full: a big library shares 5 MB with SoundCloud itself and the lyric hub's cached page
                 // bodies. Those bodies are re-fetchable — shed them; then the titles (every reader tolerates a blank one)
@@ -1896,8 +1931,8 @@
                     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf('scssgm:pb:') === 0) dead.push(k); }
                     dead.forEach((k) => localStorage.removeItem(k));
                 } catch (e) {}
-                ok = LS.set('bh_sc_lib', { t: Date.now(), items });
-                if (!ok) ok = LS.set('bh_sc_lib', { t: Date.now(), items: items.map((r) => [r[0], r[1], r[2], r[3], r[4], '']) });
+                ok = LS.set('bh_sc_lib', { t: Date.now(), acct, items });
+                if (!ok) ok = LS.set('bh_sc_lib', { t: Date.now(), acct, items: items.map((r) => [r[0], r[1], r[2], r[3], r[4], '']) });
                 if (!ok) {
                     try { Log.err('shuffle/compactCache', 'localStorage full: ' + items.length + ' likes'); } catch (e) {}
                     if (!S.quotaNoticeShown) { S.quotaNoticeShown = true; showToast('Your library is too big for the browser’s storage', 'Stats, the blocklist and lyric matching may miss some of your likes'); }
@@ -2479,6 +2514,8 @@
             // a second later when the sniffer has caught up.
             await waitFor(() => userTag(), 1500, 100);
             acct = userTag();
+            if (!acct && (S.auth || cookieAuth())) { await resolveMe(); acct = userTag(); }   // a token that does not parse
+            if (S.cancelled) return;
             if (!acct) {
                 // unwind every UI lock that run() set up so the button isn't stuck
                 // in busy state until the next successful shuffle
@@ -2515,14 +2552,9 @@
             setBtn('Opening cache…');
             let hit = await idbLoadLib(libKey);
             if (!hit && acct) {
-                // one-time claim of the pre-account-keying cache, then delete it
-                // so a second account can never inherit the first one's library
-                const legacy = await idbLoadLib(legacyKey);
-                if (legacy && legacy.items) {
-                    hit = legacy;
-                    idbSaveLib(libKey, legacy.items, legacy.t);
-                    LibCache.del(legacyKey).catch(e => swallow(e, 'legacy del'));
-                }
+                // a cache from before account keying is nobody's in particular: dropped rather than handed to
+                // whichever account shuffles first (the library is fetched fresh once)
+                LibCache.del(legacyKey).catch(e => swallow(e, 'legacy del'));
             }
             if (hit && hit.items.length >= 3 && !S.cancelled) {
                 const cacheAge = Date.now() - (hit.t || 0);
@@ -2582,7 +2614,7 @@
         // and the Up-next list say what will actually play. Only a capture made on THIS page counts (a profile
         // SoundCloud renders from its cached collection makes no request, and the previous page's capture would
         // otherwise pass); on a cache hit it also names the profile whose pagination the feed may answer
-        const cap = S.listSeen && S.listSeen.page === location.pathname ? S.listSeen : null;
+        const cap = S.listSeen.get(location.pathname) || null;
         if (cap && pageType === 'GenericLikes' && !S.pageUserId) { const m = LIKES_PATH.exec(cap.path); if (m && m[1]) S.pageUserId = m[1]; }
         const seen = cap && feedOwnerOk(cap.path) ? cap.ids : null;
         if (seen && seen.size) {
@@ -3920,8 +3952,17 @@
     }
 
     /* ───────────────────── SHUFFLE PLAY BUTTON (per page) ───────────────────── */
+    // the collection header is SoundCloud's to rename; the likes list is what the run needs, so the button can sit
+    // just above it when the header is not found (the user-profile mount was verified live, this one cannot be here)
+    function likesMountFallback() {
+        const l = q('likesList');
+        if (!l || !l.parentElement) return null;
+        let h = l.parentElement.querySelector(':scope > .bhx-mounthost');
+        if (!h) { h = el('div', 'bhx-mounthost'); h.style.cssText = 'display:flex;align-items:center;padding:6px 0'; l.parentElement.insertBefore(h, l); }
+        return h;
+    }
     const PAGES = [
-        { type: 'Likes',        test: () => /^\/you\/likes\/?$/.test(location.pathname),                                   mount: () => q('collectionTop') },
+        { type: 'Likes',        test: () => /^\/you\/likes\/?$/.test(location.pathname),                                   mount: () => q('collectionTop') || likesMountFallback() },
         { type: 'GenericLikes', test: () => /^\/[^/]+\/likes\/?$/.test(location.pathname) && !/^\/you\//.test(location.pathname), mount: () => q('userTabs') },
         { type: 'Discover',     test: () => /^\/discover\/sets\//.test(location.pathname),                                 mount: () => q('discoverControls') },
         { type: 'Playlist',     test: () => !!q('playlistList'),                                                           mount: () => q('soundActions') },
@@ -3934,7 +3975,9 @@
         let btnEl = document.querySelector('.bhx-shufbtn');
         if (btnEl && (!page || btnEl.dataset.pageType !== page.type)) {
             const w = btnEl.closest('.bhx-mountwrap');
+            const h = w && w.parentElement && w.parentElement.classList.contains('bhx-mounthost') ? w.parentElement : null;
             if (w) w.remove(); else btnEl.remove();
+            if (h) h.remove();
             btnEl = null;
         }
         if (!page) return;
@@ -9658,6 +9701,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🪪', 'Your own likes, on paper and in practice', 'The one flow that cannot be exercised from here is the signed-in Likes page, so a reviewer read it against what today’s SoundCloud does. Six things changed: the account id no longer depends on the shape of the sign-in token alone (the suite asks SoundCloud once when the token does not say), a liked playlist’s tracks count as already on the page, each page keeps its own record of what its list loaded, a library cached before accounts were kept apart is dropped rather than handed to whichever account shuffles first, the compact library used by stats and search is tagged with its account, and the Shuffle Play button on your Likes page finds a home above the list if SoundCloud renames its header. The compatibility engine was verified live on a public playlist.'],
           ['🔎', 'A third review, six fixes', 'The likes engine’s new code, read by an independent reviewer. The list of likes captured on one profile could be applied to the next profile’s pool when SoundCloud rendered that page from its cache; the capture now belongs to its page, and a cached library still learns the profile whose pagination the feed may answer. The queue-panel jump only trusted itself when it found the row: the loader’s scrolling no longer fights it, it extends SoundCloud’s rendered window itself when the first pool track sits past it (a profile whose liked playlists expand ahead of the pool), and a landing on the seed no longer counts. A run cancelled mid-start can no longer skip, unpause or wrap up the run that replaced it, a refused reload leaves nothing armed, and the “Queue almost done” toast reshuffles the page you are on.'],
           ['🔀', 'Shuffle Play on today’s SoundCloud', 'The likes engine had gone quiet: SoundCloud now pages a likes list through a mixed tracks-and-playlists endpoint the feed never answered, a signed-out listener’s first play click opens a sign-in nudge instead of playing, and the queue keeps the page of likes the list had loaded ahead of the shuffle. The feed answers that endpoint, the nudge our click raised is closed and the click repeated, playback starts on the pool’s first track through the queue panel rather than a skip off the seed, likes already on the page leave the pool so the count says what will play, and a second shuffle on the same page reloads it for a fresh queue and starts on arrival from the cache.'],
           ['🌐', 'Every label in your language', 'A live collection of everything the English hub shows, checked against all eleven dictionaries, found labels no dictionary had at all — tab and segment names, audio terms, the hotkey legend, the engine footnote, tint styles — and each language got its own: 42 in German, 52 in Dutch, 277 in all. The Audio tab’s jump chips are now named after their sections, so nothing reads as a spacebar.'],

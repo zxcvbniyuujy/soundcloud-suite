@@ -130,6 +130,20 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **Your own likes, on paper and in practice** — the signed-in Likes page is
+  the one flow that cannot be exercised from this environment, so a reviewer
+  read it against today's SoundCloud. Six changes: the account id that keys
+  the cached library no longer depends on the sign-in token's shape alone
+  (when the token does not carry it, the suite asks `/me` once); a liked
+  playlist's tracks count as already on the page, since SoundCloud expands
+  them ahead of the pool and holds each track once; each page keeps its own
+  record of what its list loaded, so a visit to another likes page cannot
+  erase it; a library cached before accounts were kept apart is dropped rather
+  than claimed by whichever account shuffles first; the compact library behind
+  stats, search and hide-liked is tagged with its account and not read by
+  another; and the Shuffle Play button on your Likes page mounts above the
+  list when SoundCloud's collection header is not found. The compatibility
+  engine (playlist pages) was verified live on a public 50-track playlist.
 - **A third review, six fixes** — an independent read of the 4.78.0 likes
   engine: the likes captured from one profile's list could be applied to the
   next profile's pool when SoundCloud rendered that page from its cache (the
