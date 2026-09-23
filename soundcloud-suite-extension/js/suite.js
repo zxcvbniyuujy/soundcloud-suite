@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Suite — Lyrics + Shuffle
 // @namespace    sc-supersuite
-// @version      4.87.0
+// @version      4.88.0
 // @description  All-in-one SoundCloud enhancer: themes & declutter, player upgrades (speed, loop, volume memory), Genius-first lyrics hub (six sources, true sync + tap-along calibration, .lrc import/publish), and full-library crypto shuffle (cache, filters, goals, scrobbling) — one script, cross-wired.
 // @author       you + bhackel
 // @match        https://soundcloud.com/*
@@ -117,7 +117,7 @@
     // header banner / "what's new" / diagnostics strings (which had silently
     // diverged to v4.23). Userscript managers fill GM_info from @version; the
     // extension's gm-shim injects it from the manifest. Fallback only if absent.
-    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.87.0';
+    const VER = (() => { try { return (GM_info && GM_info.script && GM_info.script.version) || ''; } catch (e) { return ''; } })() || '4.88.0';
 
     // lightweight error ring — most catch blocks swallow silently, which made
     // user-reported "it's broken" bugs un-diagnosable. Route key catches through
@@ -9726,6 +9726,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
         wrap.appendChild(head);
         // curated highlights (newest first) — clean cards, not a wall of text
         const FEATS = [
+          ['🎛️', 'Two switches that stepped on each other', 'Two notes from the last review, made precise. “Cap content width” and “Wider main column” contradict each other; with both on, the wider column used to win only by coming later in the stylesheet. Now the cap simply stands down while the wider column is on, in the code rather than by accident. And “Track tags” had begun hiding the genre pill too, which has its own switch (“Genre labels”); each now hides only its own. Measured on the final build: no long tasks during playback, and the suite’s observers, timers and listeners stay constant across thirty track skips and five in-app navigations.'],
           ['🌒', 'Dark themes, scanned for light patches', 'Nine public SoundCloud pages were rendered in the dark theme and every large element still carrying a light, opaque background was listed. Two were the theme’s to fix: the search page’s selected filter (Everything, Tracks, People…) was a white block whose label had gone invisible under the theme’s light link colour, and a profile without a banner showed a light grey header. Both take the theme’s own surfaces now. What remains light is SoundCloud’s own “Create a SoundCloud account” button, which is meant to stand out.'],
           ['🔎', 'A review of the last three releases, two fixes', 'An independent reader went through everything since 4.82.0 with the pages open. Two findings held up. The repaired “Wider main column” kept the track page’s main column at its fixed 864 px, so on a window narrower than about 1290 px the sidebar ran over its right edge; the column is fluid now and stops 16 px short of the sidebar at every width (checked at 1600, 1280, 1200 and 1100). And a hub that left fullscreen kept the size it had before entering, so a window shrunk meanwhile could push its header off the top; leaving fullscreen fits it again. The lyrics one-to-one check is now a tool in the repository, and the debug readout says which highlight lead is in force.'],
           ['🧹', 'Every Hide tweak, checked against today’s pages', 'All 92 rows of the Tweaks table were tested against twelve public SoundCloud pages: does anything the row names still exist? Eight “Hide” tweaks had lost their target to a renamed class and now find it again: track tags (the # pill in the hero), the “In playlists” sidebar module, the trending-tracks module on the landing page, Follow buttons in follower lists, playlist track counts, the hero’s artwork-derived background, the header’s ⋯ menu and the “Report” link. Four rows hid things SoundCloud no longer draws at all (breadcrumbs, a waveform timeline that is canvas now, partner offers, a trending-tags bar) and are gone rather than left as switches that do nothing. The rest match, or wait for a signed-in page or a hover to have something to hide.'],
@@ -13654,7 +13655,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
   const MORE = [
     // ── Declutter ──
     ['mhFooter', 'Hide more', 'Page footer', 'hide', '#app__footer,.l-footer,.footer__inner,footer.l-container'],
-    ['mhTags', 'Hide more', 'Track tags', 'hide', '.sc-tagList,.tagList,.soundBadge__tagList,.tagContent,.sc-tag'],
+    ['mhTags', 'Hide more', 'Track tags', 'hide', '.sc-tagList,.tagList,.soundBadge__tagList,.tagContent,.sc-tag:not(.genre):not(.soundTitle__additionalContainer *)'],   // a row's single pill is its genre and stays the "Genre labels" switch's own
     ['mhDesc', 'Hide more', 'Track descriptions', 'hide', '.soundDescription,.truncatedAudioInfo,.sound__description,.audibleTitle'],
     ['mhShare', 'Hide more', 'Share buttons', 'hide', '.sc-button-share,.shareButton'],
     ['mhBuy', 'Hide more', 'Buy / purchase links', 'hide', '.buyLink,.soundActions__purchase,[class*="purchase" i],a.sc-buylink'],
@@ -14102,7 +14103,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; color: inh
     // with the sidebar gone the track page's main column must give up its fixed 864 px (and the row wrappers their
     // sidebar reserve) to take the whole container; otherwise focus mode leaves a blank 360 px strip on the right
     if (CFG.focusMode) css += '.l-sidebar-right,.sidebar,.l-fluid-fixed .l-sidebar-right{display:none !important}.l-main .l-fluid-fixed .l-middle-fixed,.l-main{max-width:100% !important}';
-    if (CFG.maxWidth) css += '.l-container.l-fluid,.l-container{max-width:1100px !important;margin:0 auto !important}';
+    // the cap and "Wider main column" contradict each other; the wide column wins outright rather than by coming
+    // later in the sheet, so the cap's rule is not even written while it is on
+    if (CFG.maxWidth && !CFG.mlWideMain) css += '.l-container.l-fluid,.l-container{max-width:1100px !important;margin:0 auto !important}';
     if (CFG.hideReposts) css += '.soundList__item .sound.streamContext-repost,.repostItem,[class*="repost" i].streamContext{display:none !important}';
     if (CFG.hidePlaylistsFeed) css += '.soundList__item:has(.playlist),.soundList__item:has(.systemPlaylistBadge),.stream__list .playlist{display:none !important}';
     if (CFG.compactFeed) css += '.soundList__item{padding-top:7px !important;padding-bottom:7px !important}.sound__body,.soundContext{padding-top:4px !important;padding-bottom:4px !important}';

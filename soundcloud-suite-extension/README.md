@@ -130,6 +130,15 @@ never plays.
   comments are scanned for one: a long multi-line comment that reads like
   lyrics, or a run of timestamped one-line comments by one listener (the
   artist first of all), delivered as text for the aligner to time.
+- **Two switches that stepped on each other** — two notes from the last
+  review, made precise. "Cap content width" and "Wider main column"
+  contradict each other; with both on, the wider column used to win only by
+  coming later in the stylesheet. Now the cap stands down while the wider
+  column is on, in the code rather than by accident. And "Track tags" had
+  begun hiding the genre pill too, which has its own switch ("Genre labels");
+  each now hides only its own. Measured on the final build: no long tasks
+  during playback, and the suite's observers, timers and listeners stay
+  constant across thirty track skips and five in-app navigations.
 - **Dark themes, scanned for light patches** — nine public SoundCloud pages
   were rendered in the dark theme and every large element still carrying a
   light, opaque background was listed. Two were the theme's to fix: the
